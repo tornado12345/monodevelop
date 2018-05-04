@@ -495,7 +495,7 @@ namespace MonoDevelop.Components.MainToolbar
 					if ((e.Event.State & Gdk.ModifierType.Mod2Mask) != 0)
 						m |= Xwt.ModifierKeys.Command;
 
-					Clicked (o, new StatusBarIconClickedEventArgs {
+					Clicked?.Invoke (o, new StatusBarIconClickedEventArgs {
 						Button = (Xwt.PointerButton)e.Event.Button,
 						Modifiers = m,
 					});
@@ -539,7 +539,7 @@ namespace MonoDevelop.Components.MainToolbar
 
 				if (!string.IsNullOrEmpty (tip)) {
 					HideTooltip ();
-					tooltipWindow = new TooltipPopoverWindow ();
+					tooltipWindow = TooltipPopoverWindow.Create ();
 					tooltipWindow.ShowArrow = true;
 					tooltipWindow.Text = tip;
 					tooltipWindow.ShowPopup (box, PopupPosition.Top);
@@ -582,6 +582,16 @@ namespace MonoDevelop.Components.MainToolbar
 					} else if (!string.IsNullOrEmpty (tip) && mouseOver)
 						ShowTooltip ();
 				}
+			}
+
+			public string Title {
+				get;
+				set;
+			}
+
+			public string Help {
+				get;
+				set;
 			}
 
 			public EventBox EventBox {

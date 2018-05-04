@@ -148,15 +148,22 @@ namespace MonoDevelop.Ide.Commands
 	// MonoDevelop.Ide.Commands.FileCommands.CloseAllFiles
 	public class CloseAllFilesHandler : CommandHandler
 	{
-		protected override void Run ()
+		static bool isRunning;
+
+		protected override async void Run ()
 		{
-			IdeApp.Workbench.CloseAllDocuments (false);
+			try {
+				isRunning = true;
+				await IdeApp.Workbench.CloseAllDocumentsAsync (false);
+			} finally {
+				isRunning = false;
+			}
 		}
 
 		protected override void Update (CommandInfo info)
 		{
 			// No point in closing all when there are no documents open
-			info.Enabled = IdeApp.Workbench.Documents.Count != 0;
+			info.Enabled = !isRunning && IdeApp.Workbench.Documents.Count != 0;
 		}
 	}
 
@@ -166,7 +173,7 @@ namespace MonoDevelop.Ide.Commands
 		protected override void Run ()
 		{
 			if (IdeApp.Workbench.ActiveDocument != null)
-				IdeApp.Workbench.ActiveDocument.Close ();
+				IdeApp.Workbench.ActiveDocument.Close ().Ignore();
 		}
 
 		protected override void Update (CommandInfo info)
@@ -181,7 +188,7 @@ namespace MonoDevelop.Ide.Commands
 	{
 		protected override void Run ()
 		{
-			IdeApp.Workspace.Close ();
+			IdeApp.Workspace.Close ().Ignore();
 		}
 
 		protected override void Update (CommandInfo info)
@@ -417,7 +424,7 @@ namespace MonoDevelop.Ide.Commands
 	{
 		protected override void Run ()
 		{
-			IdeApp.Exit ();
+			IdeApp.Exit ().Ignore();
 		}
 	}
 	// MonoDevelop.Ide.Commands.FileTabCommands.CloseAllButThis    Implemented in FileTabCommands.cs

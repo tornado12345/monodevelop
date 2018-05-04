@@ -1,12 +1,13 @@
 include $(top_srcdir)/xbuild.include
 
-SUBDIRS=UnitTests MacPlatform.Tests UserInterfaceTests TestRunner Ide.Tests MonoDevelop.CSharpBinding.Tests
+SUBDIRS=UnitTests MacPlatform.Tests UserInterfaceTests TestRunner Ide.Tests MonoDevelop.CSharpBinding.Tests WindowsPlatform.Tests MonoDevelop.Core.Tests MonoDevelop.Core.Tests.Addin MonoDevelop.Refactoring.Tests
 
 MONO=mono$(SGEN_SUFFIX)
 RUN_TEST=$(MDTOOL_RUN) run-md-tests
 TEST_DIR=$(top_builddir)/build/tests
 EXTERNAL=$(top_builddir)/external
 MACOS_10_10=$(shell (test `sw_vers -productVersion | cut -f1 -d.` = 10 && test `sw_vers -productVersion | cut -f2 -d.` -ge 10) && echo yes)
+TEST_DEPLOY_DIR=$(top_builddir)/build/test-deploy
 
 TEST_PROJECTS_MAC = \
 	MacPlatform.Tests/MacPlatform.Tests.csproj
@@ -23,16 +24,20 @@ TEST_ASSEMBLIES_WINDOWS = \
 	$(TEST_DIR)/VersionControl.Subversion.Win32.Tests.dll
 
 TEST_ASSEMBLIES_COMMON = \
-	$(TEST_DIR)/Ide.Tests.dll \
+    $(TEST_DIR)/MonoDevelop.Core.Tests.dll \
+	$(TEST_DIR)/MonoDevelop.Ide.Tests.dll \
 	$(TEST_DIR)/MonoDevelop.VersionControl.Git.Tests.dll \
-	$(TEST_DIR)/UnitTests.dll \
 	$(TEST_DIR)/MonoDevelop.Debugger.Tests.dll \
 	$(TEST_DIR)/Mono.TextTemplating.Tests.dll \
 	$(TEST_DIR)/MonoDevelop.PackageManagement.Tests.dll \
+	$(TEST_DIR)/MonoDevelop.Packaging.Tests.dll \
 	$(TEST_DIR)/MonoDevelop.TextEditor.Tests.dll \
 	$(TEST_DIR)/MonoDevelop.Xml.Tests.dll \
 	$(TEST_DIR)/MonoDevelop.AspNet.Tests.dll \
-	$(TEST_DIR)/MonoDevelop.CSharpBinding.Tests.dll
+	$(TEST_DIR)/MonoDevelop.CSharpBinding.Tests.dll \
+	$(TEST_DIR)/MonoDevelop.DotNetCore.Tests.dll \
+	$(TEST_DIR)/MonoDevelop.UnitTesting.Tests.dll \
+	$(TEST_DIR)/MonoDevelop.Refactoring.Tests.dll
 
 if RELEASE_BUILDS
 TEST_ASSEMBLIES_COMMON += $(EXTERNAL)/nrefactory/bin/Release/ICSharpCode.NRefactory.Tests.dll
@@ -100,6 +105,17 @@ uitest:
 		exit 1; \
 	fi
 
+profile:
+	@if test -n "$(assembly)"; then \
+		for asm in $(TEST_ASSEMBLIES); do \
+			if test `basename $$asm` = $(assembly); then \
+				echo Generating profiling for `basename $$asm`...; \
+				($(MD_LAUNCH_SETUP) exec -a "mdtool" $(RUNTIME) --debug --profile=log:heapshot,alloc,calls,calldepth=100,zip,sample=cycles/1000,counters,output=ProfileResult_`basename $$asm`.mlpd "$(MD_BIN_PATH)/mdtool.exe" run-md-tests $$asm); \
+				mprof-report ProfileResult_`basename $$asm`.mlpd > ProfileAnalysis_`basename $$asm`.txt ; \
+			fi; \
+		done; \
+	fi
+
 coverage:
 	if ! test -n "$(assembly)"; then \
 		for asm in $(TEST_ASSEMBLIES); do \
@@ -108,6 +124,16 @@ coverage:
 			mprof-report --coverage-out=CoverageResult_`basename $$asm`.xml CoverageResult_`basename $$asm`.mlpd > /dev/null; \
 		done; \
 	fi
+
+deploy-tests:
+	mkdir -p "$(TEST_DEPLOY_DIR)/tests/test-projects"
+	cp -r $(TEST_DIR)/ "$(TEST_DEPLOY_DIR)/tests"; \
+	cp -r $(top_srcdir)/tests/test-projects "$(TEST_DEPLOY_DIR)/tests"; \
+	for asm in $(TEST_ASSEMBLIES); do \
+		if ! [ -e $(TEST_DIR)/`basename $$asm` ]; then \
+			cp -r `dirname $$asm`/* "$(TEST_DEPLOY_DIR)/tests"; \
+		fi \
+	done;
 
 include $(top_srcdir)/Makefile.include
 
@@ -167,4 +193,4 @@ EXTRA_DIST = \
 	test-projects/console-project/ConsoleProject/Properties/AssemblyInfo.cs \
 	test-projects/console-project/ConsoleProject/Program.cs \
 	test-projects/console-project/ConsoleProject.sln
-
+    

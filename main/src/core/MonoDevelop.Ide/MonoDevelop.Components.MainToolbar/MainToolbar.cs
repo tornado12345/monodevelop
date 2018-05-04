@@ -518,9 +518,6 @@ namespace MonoDevelop.Components.MainToolbar
 				runtimeModel = value;
 				runtimeStore.Clear ();
 				foreach (var item in value) {
-					if (item.HasParent)
-						continue;
-
 					var iter = runtimeStore.AppendValues (item);
 					foreach (var subitem in item.Children)
 						runtimeStore.AppendValues (iter, subitem);
@@ -581,17 +578,20 @@ namespace MonoDevelop.Components.MainToolbar
 			set { matchEntry.EmptyMessage = value; }
 		}
 
-		public void RebuildToolbar (IEnumerable<IButtonBarButton> buttons)
+		public void RebuildToolbar (IEnumerable<ButtonBarGroup> groups)
 		{
-			if (!buttons.Any ()) {
+			if (!groups.Any ()) {
 				buttonBarBox.Hide ();
 				return;
 			}
 
 			buttonBarBox.Show ();
 			buttonBar.ShowAll ();
-			buttonBar.Buttons = buttons;
+			buttonBar.Groups = groups;
 		}
+
+		public void Focus (){}
+		public void Focus (System.Action exitAction) {}
 
 		public bool ButtonBarSensitivity {
 			set { buttonBar.Sensitive = value; }

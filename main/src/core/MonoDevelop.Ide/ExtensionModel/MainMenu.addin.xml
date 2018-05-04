@@ -95,6 +95,7 @@
 		<SeparatorItem id = "Separator5" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowCompletionWindow" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowParameterCompletionWindow" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.TextEditorCommands.ToggleCompletionSuggestionMode" />
 		<SeparatorItem id = "optionssep5" />
 		<Condition id="Platform" value="linux">
 			<CommandItem id = "MonoDevelop.Ide.Commands.EditCommands.MonodevelopPreferences" />
@@ -111,7 +112,7 @@
 		<CommandItem id = "MonoDevelop.Ide.Commands.ViewCommands.NewLayout" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.ViewCommands.DeleteCurrentLayout" />
 		<SeparatorItem id = "ViewSeparator3" />
-		<ItemSet id = "Editor Columns">
+		<ItemSet id = "Editor Columns" _label = "Editor Columns">
 			<CommandItem id = "MonoDevelop.Ide.Commands.ViewCommands.SingleMode" />
 			<CommandItem id = "MonoDevelop.Ide.Commands.ViewCommands.SideBySideMode" />
 		</ItemSet>
@@ -153,7 +154,7 @@
 		<CommandItem id = "MonoDevelop.Ide.Commands.SearchCommands.ReplaceInFiles" />
 		
 		<SeparatorItem id = "SearchInFilesSeparator" />
-		<ItemSet id = "Bookmarks" >
+		<ItemSet id = "Bookmarks" _label = "Bookmarks">
 			<CommandItem id = "MonoDevelop.Ide.Commands.SearchCommands.ToggleBookmark" />
 			<SeparatorItem id = "BookmarksNavigationSeparator" />
 			<CommandItem id = "MonoDevelop.Ide.Commands.SearchCommands.PrevBookmark" />
@@ -161,7 +162,7 @@
 			<SeparatorItem id = "BookmarksClearSeparator" />
 			<CommandItem id = "MonoDevelop.Ide.Commands.SearchCommands.ClearBookmarks" />
 		</ItemSet>
-		<ItemSet id = "Go To" >
+		<ItemSet id = "Go To"  _label = "Go To">
 			<CommandItem id = "MonoDevelop.Ide.Commands.SearchCommands.GotoFile" />
 			<CommandItem id = "MonoDevelop.Ide.Commands.SearchCommands.GotoType" />
 			<CommandItem id = "MonoDevelop.Ide.Commands.SearchCommands.GotoLineNumber" />
@@ -263,6 +264,15 @@
 		<SeparatorItem id = "contentSep" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenWindowList" />
 		<SeparatorItem id = "windowDocSep" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument1" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument2" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument3" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument4" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument5" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument6" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument7" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument8" />
+		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument9" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocumentList" />
 		<SeparatorItem id = "welcomePageSep" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.ViewCommands.ShowWelcomePage" />
@@ -278,10 +288,18 @@
 			<LinkItem id = "Mono" _label = "Mono Project" description = "A free .NET implementation effort, worth visiting" link = "http://www.mono-project.com" />
 		</Condition>
 		<SeparatorItem id = "Separator3" />
-		<LinkItem id = "ReportBug" _label = "Report Problem..." link = "http://xamar.in/r/file_studio_bug" />
+		<Condition id = "Branding" value = "MonoDevelop">
+			<LinkItem id = "ReportBug" _label = "Report Problem..." link = "http://xamar.in/r/file_studio_bug" />
+		</Condition>
 		<SeparatorItem id = "DiagnosticToolsSeparator" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.HelpCommands.OpenLogDirectory" />
 		<CommandItem id = "MonoDevelop.Ide.Commands.ToolCommands.InstrumentationViewer" />
+		<ItemSet id="Diagnostics" _label="_Diagnostics">
+			<CommandItem id = "MonoDevelop.Ide.Commands.HelpCommands.DumpUITree" />
+			<CommandItem id = "MonoDevelop.Ide.Commands.HelpCommands.DumpA11yTree" />
+			<CommandItem id = "MonoDevelop.Ide.Commands.HelpCommands.DumpA11yTreeDelayed" />
+			<CommandItem id = "MonoDevelop.Ide.Commands.HelpCommands.MarkLog" />
+		</ItemSet>
 		<Condition id = "Platform" value = "!mac">
 			<SeparatorItem id = "SeparatorAbout" />
 			<CommandItem id = "MonoDevelop.Ide.Updater.UpdateCommands.CheckForUpdates" />
@@ -306,4 +324,5 @@
 <Extension path="/MonoDevelop/Ide/TargetSelectorCommands">
 </Extension>
 
+	
 </ExtensionModel>

@@ -105,6 +105,8 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			Solution solution = (Solution) dataObject;
 			solution.NameChanged += OnCombineRenamed;
 			solution.StartupItemChanged += OnStartupChanged;
+			solution.RunConfigurationsChanged += OnStartupChanged;
+			solution.StartupConfigurationChanged += OnStartupChanged;
 			solution.RootFolder.ItemAdded += OnEntryAdded;
 			solution.RootFolder.ItemRemoved += OnEntryRemoved;
 			solution.RootFolder.SolutionItemFileAdded += OnFileAdded;
@@ -116,6 +118,8 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			Solution solution = (Solution) dataObject;
 			solution.NameChanged -= OnCombineRenamed;
 			solution.StartupItemChanged -= OnStartupChanged;
+			solution.RunConfigurationsChanged -= OnStartupChanged;
+			solution.StartupConfigurationChanged -= OnStartupChanged;
 			solution.RootFolder.ItemAdded -= OnEntryAdded;
 			solution.RootFolder.ItemRemoved -= OnEntryRemoved;
 			solution.RootFolder.SolutionItemFileAdded -= OnFileAdded;
@@ -367,7 +371,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		{
 			foreach (ITreeNavigator node in CurrentNodes) {
 				Solution solution = (Solution) node.DataItem;
-				IdeApp.Workspace.CloseWorkspaceItem (solution);
+				IdeApp.Workspace.CloseWorkspaceItem (solution).Ignore();
 			}
 		}
 		

@@ -28,10 +28,12 @@
 
 using System;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Projects;
 using MonoDevelop.Ide.Gui.Dialogs;
 using System.Collections.Generic;
 using System.Linq;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.CSharp.Project
 {
@@ -39,7 +41,9 @@ namespace MonoDevelop.CSharp.Project
 	{
 		const int DEBUG_FULL = 0;
 		const int DEBUG_PDB_ONLY = 1;
-		const int DEBUG_NONE = 2;
+		const int DEBUG_PDB_PORTABLE = 2;
+		const int DEBUG_PDB_EMBEDDED = 3;
+		const int DEBUG_NONE = 4;
 
 		DotNetProjectConfiguration configuration;
 		CSharpCompilerParameters compilerParameters = null;
@@ -48,6 +52,41 @@ namespace MonoDevelop.CSharp.Project
 		{
 			Build ();
 			xmlDocsEntry.DisplayAsRelativePath = true;
+
+			SetupAccessibility ();
+		}
+
+		void SetupAccessibility ()
+		{
+			label81.Accessible.Role = Atk.Role.Filler;
+			label73.Accessible.Role = Atk.Role.Filler;
+			generateOverflowChecksCheckButton.SetCommonAccessibilityAttributes ("CompilerOptions.OverflowChecks", "", 
+			                                                                    GettextCatalog.GetString ("Check this to enable overflow checking"));
+			enableOptimizationCheckButton.SetCommonAccessibilityAttributes ("CompilerOptions.Optimizations", "",
+			                                                                GettextCatalog.GetString ("Check this to enable optimizations"));
+			generateXmlOutputCheckButton.SetCommonAccessibilityAttributes ("CompilerOptions.XmlDoc", "",
+			                                                               GettextCatalog.GetString ("Check this to generate XML documentation"));
+			xmlDocsEntry.EntryAccessible.Name = "CompilerOptions.XmlEntry";
+			xmlDocsEntry.EntryAccessible.SetLabel (GettextCatalog.GetString ("XML Filename"));
+			xmlDocsEntry.EntryAccessible.Description = GettextCatalog.GetString ("Enter the filename for the generated XML documentation");
+
+			comboDebug.SetCommonAccessibilityAttributes ("CompilerOptions.DebugCombo", label2,
+			                                             GettextCatalog.GetString ("Select the level of debugging information to be generated"));
+
+			symbolsEntry.SetCommonAccessibilityAttributes ("CompilerOptions.SymbolsEntry", label87,
+			                                               GettextCatalog.GetString ("Enter the symbols the compiler should define"));
+
+			comboPlatforms.SetCommonAccessibilityAttributes ("CompilerOptions.Platforms", label1,
+			                                                 GettextCatalog.GetString ("Select the platform to target"));
+
+			warningLevelSpinButton.SetCommonAccessibilityAttributes ("CompilerOptions.WarningsLevel", label85,
+			                                                         GettextCatalog.GetString ("Select the warning level to use"));
+
+			ignoreWarningsEntry.SetCommonAccessibilityAttributes ("CompilerOptions.IgnoreWarnings", label86,
+			                                                      GettextCatalog.GetString ("Enter the warning numbers separated by a comma that the compile should ignore"));
+
+			warningsAsErrorsCheckButton.SetCommonAccessibilityAttributes ("CompilerOptions.WarningsAsErrors", "",
+			                                                              GettextCatalog.GetString ("Check to treat warnings as errors"));
 		}
 
 		//doing just original.Split(whitespaces).Distinct().Join(";") would make modifications to .csproj with " "(space) seperator
@@ -107,6 +146,10 @@ namespace MonoDevelop.CSharp.Project
 				comboDebug.Active = DEBUG_NONE;
 			} else if (string.Equals ("pdbonly", configuration.DebugType, StringComparison.OrdinalIgnoreCase)) {
 				comboDebug.Active = DEBUG_PDB_ONLY;
+			} else if (string.Equals ("portable", configuration.DebugType, StringComparison.OrdinalIgnoreCase)) {
+				comboDebug.Active = DEBUG_PDB_PORTABLE;
+			} else if (string.Equals ("embedded", configuration.DebugType, StringComparison.OrdinalIgnoreCase)) {
+				comboDebug.Active = DEBUG_PDB_EMBEDDED;
 			} else {
 				comboDebug.Active = DEBUG_FULL;
 			}
@@ -136,12 +179,26 @@ namespace MonoDevelop.CSharp.Project
 			case DEBUG_FULL:
 				configuration.DebugSymbols = true;
 				if (!string.Equals (configuration.DebugType, "full", StringComparison.OrdinalIgnoreCase)) {
-					configuration.DebugType = "";
+					configuration.DebugType = "full";
 				}
 				break;
 			case DEBUG_PDB_ONLY:
 				configuration.DebugSymbols = true;
-				configuration.DebugType = "pdbonly";
+				if (!string.Equals (configuration.DebugType, "pdbonly", StringComparison.OrdinalIgnoreCase)) {
+					configuration.DebugType = "pdbonly";
+				}
+				break;
+			case DEBUG_PDB_PORTABLE:
+				configuration.DebugSymbols = true;
+				if (!string.Equals (configuration.DebugType, "portable", StringComparison.OrdinalIgnoreCase)) {
+					configuration.DebugType = "portable";
+				}
+				break;
+			case DEBUG_PDB_EMBEDDED:
+				configuration.DebugSymbols = true;
+				if (!string.Equals (configuration.DebugType, "embedded", StringComparison.OrdinalIgnoreCase)) {
+					configuration.DebugType = "embedded";
+				}
 				break;
 			case DEBUG_NONE:
 				configuration.DebugSymbols = false;

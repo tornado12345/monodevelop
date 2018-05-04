@@ -27,6 +27,7 @@
 using System;
 #if MAC
 using AppKit;
+using CoreGraphics;
 using Foundation;
 using MonoDevelop.Ide;
 #endif
@@ -43,7 +44,7 @@ namespace MonoDevelop.Components
 			if (menu == null)
 				throw new ArgumentNullException ("menu");
 
-			var nsMenu = FromMenu (menu, closeHandler);
+			var nsMenu = FromMenu (menu, closeHandler, null);
 			ShowContextMenu (parent, evt, nsMenu);
 		}
 
@@ -54,7 +55,7 @@ namespace MonoDevelop.Components
 
 		public static void ShowContextMenu (Gtk.Widget parent, int x, int y, ContextMenu menu, Action closeHandler, bool selectFirstItem = false)
 		{
-			var nsMenu = FromMenu (menu, closeHandler);
+			var nsMenu = FromMenu (menu, closeHandler, null);
 			ShowContextMenu (parent, x, y, nsMenu, selectFirstItem);
 		}
 
@@ -64,7 +65,6 @@ namespace MonoDevelop.Components
 		}
 
 
-		static CoreGraphics.CGPoint lastOpenPositon;
 		public static void ShowContextMenu (Gtk.Widget parent, int x, int y, NSMenu menu, bool selectFirstItem = false)
 		{
 			if (parent == null)
@@ -74,7 +74,7 @@ namespace MonoDevelop.Components
 
 			parent.GrabFocus ();
 
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				// Explicitly release the grab because the menu is shown on the mouse position, and the widget doesn't get the mouse release event
 				Gdk.Pointer.Ungrab (Gtk.Global.CurrentEventTime);
 				var nsview = MonoDevelop.Components.Mac.GtkMacInterop.GetNSView (parent);
@@ -92,13 +92,13 @@ namespace MonoDevelop.Components
 					titleBarOffset = MonoDevelop.Components.Mac.GtkMacInterop.GetTitleBarHeight () + 12;
 				}
 
+				parent.TranslateCoordinates (parent.Toplevel, x, y, out x, out y);
+
 				if (selectFirstItem) {
 					var pt = new CoreGraphics.CGPoint (x, y);
-					lastOpenPositon = pt;
 					menu.PopUpMenu (menu.ItemAt (0), pt, nsview);
 				} else {
 					var pt = new CoreGraphics.CGPoint (x, nswindow.Frame.Height - y - titleBarOffset);
-					lastOpenPositon = pt;
 					var tmp_event = NSEvent.MouseEvent (NSEventType.LeftMouseDown,
 					                                pt,
 					                                0, 0,
@@ -111,20 +111,24 @@ namespace MonoDevelop.Components
 
 		public static void ShowContextMenu (Gtk.Widget parent, Gdk.EventButton evt, NSMenu menu)
 		{
-			int x, y;
+			int x = 0, y = 0;
 
-			parent.TranslateCoordinates (parent.Toplevel, (int)evt.X, (int)evt.Y, out x, out y);
+			if (evt != null) {
+				x = (int)evt.X;
+				y = (int)evt.Y;
+			}
 
 			ShowContextMenu (parent, x, y, menu);
 		}
 
-		static NSMenuItem CreateMenuItem (ContextMenuItem item)
+		static void AddMenuItem (NSLocationAwareMenu menu, ContextMenuItem item)
 		{
 			if (item.IsSeparator) {
-				return NSMenuItem.SeparatorItem;
+				menu.AddItem (NSMenuItem.SeparatorItem);
+				return;
 			}
 
-			var menuItem = new NSMenuItem (item.Label.Replace ("_",""), (s, e) => item.Click ());
+			var menuItem = new NSContextMenuItem (item.Label.Replace ("_",""), item);
 
 			menuItem.Hidden = !item.Visible;
 			menuItem.Enabled = item.Sensitive;
@@ -139,60 +143,39 @@ namespace MonoDevelop.Components
 			} 
 
 			if (item.SubMenu != null && item.SubMenu.Items.Count > 0) {
-				menuItem.Submenu = FromMenu (item.SubMenu, null);
+				var subMenu = FromMenu (item.SubMenu, null, menu);
+				menuItem.Submenu = subMenu;
 			}
 
-			return menuItem;
+			menu.AddItem (menuItem);
 		}
 
-		class ContextMenuDelegate : NSObject
+		class NSContextMenuItem : NSMenuItem
 		{
-			ContextMenu menu;
-			ContextMenuItem oldItem;
-			public ContextMenuDelegate (ContextMenu menu)
+			readonly WeakReference<ContextMenuItem> contextMenu;
+
+			public NSContextMenuItem (string label, ContextMenuItem item) : base (label)
 			{
-				this.menu = menu;
+				contextMenu = new WeakReference<ContextMenuItem> (item);
+				if (item.SubMenu == null || item.SubMenu.Items.Count == 0) 
+					this.Activated += OnActivated;
 			}
 
-			public Action CloseHandler { get; set; }
-
-			[Export ("menuDidClose:")]
-			void MenuDidClose (NSMenu menu)
+			static void OnActivated (object sender, EventArgs args)
 			{
-				if (menu.Supermenu != null)
-					return;
-				if (CloseHandler != null) {
-					CloseHandler ();
-				}
-				this.menu.FireClosedEvent ();
-			}
+				var obj = (NSContextMenuItem)sender;
 
-			[Export ("menu:willHighlightItem:")]
-			void MenuWillHighlightItem (NSMenu menu, NSMenuItem willHighlightItem)
-			{
-				if (oldItem != null) {
-					oldItem.FireDeselectedEvent ();
-					oldItem = null;
-				}
-				if (willHighlightItem == null)
-					return;
-				int index = (int)menu.IndexOf (willHighlightItem);
-				if (index < 0)
-					return;
-				oldItem = this.menu.Items [index];
-
-				oldItem.FireSelectedEvent (new Xwt.Rectangle (lastOpenPositon.X, lastOpenPositon.Y, menu.Size.Width, menu.Size.Height));
+				if (obj.contextMenu.TryGetTarget (out var contextMenuItem))
+					contextMenuItem.Click ();
 			}
 		}
 
-		static NSMenu FromMenu (ContextMenu menu, Action closeHandler)
+		static NSLocationAwareMenu FromMenu (ContextMenu menu, Action closeHandler, NSLocationAwareMenu parent)
 		{
-			var result = new NSMenu () { AutoEnablesItems = false };
-			result.WeakDelegate = new ContextMenuDelegate (menu) { CloseHandler = closeHandler };
+			var result = new NSLocationAwareMenu (menu, closeHandler, parent) { AutoEnablesItems = false };
 
 			foreach (var menuItem in menu.Items) {
-				var item = CreateMenuItem (menuItem);
-				result.AddItem (item);
+				AddMenuItem (result, menuItem);
 			}
 
 			return result;
@@ -203,6 +186,79 @@ namespace MonoDevelop.Components
 		public static NSImage ToNSImage (this Xwt.Drawing.Image image)
 		{
 			return (NSImage)macToolkit.GetNativeImage (image);
+		}
+
+		class NSLocationAwareMenu : NSMenu
+		{
+			public CGPoint Location { get; private set; }
+			readonly WeakReference<NSLocationAwareMenu> Parent;
+
+			public NSLocationAwareMenu (ContextMenu menu, Action closeHandler, NSLocationAwareMenu parent)
+			{
+				WeakDelegate = new ContextMenuDelegate (menu) { CloseHandler = closeHandler };
+
+				Parent = parent != null ? new WeakReference<NSLocationAwareMenu> (parent) : null;
+			}
+
+			public override bool PopUpMenu (NSMenuItem item, CGPoint location, NSView view)
+			{
+				Location = location;
+				var parentMenu = item?.ParentItem?.Menu as NSLocationAwareMenu;
+				if (parentMenu != null) {
+					Location = new CGPoint (
+						Location.X + parentMenu.Location.X,
+						Location.Y + parentMenu.Location.Y);
+				}
+				return base.PopUpMenu (item, location, view);
+			}
+
+			class ContextMenuDelegate : NSObject
+			{
+				ContextMenu menu;
+				ContextMenuItem oldItem;
+				public ContextMenuDelegate (ContextMenu menu)
+				{
+					this.menu = menu;
+				}
+
+				public Action CloseHandler { get; set; }
+
+				[Export ("menuDidClose:")]
+				void MenuDidClose (NSMenu menu)
+				{
+					if (menu.Supermenu != null)
+						return;
+					if (CloseHandler != null) {
+						CloseHandler ();
+					}
+					this.menu.FireClosedEvent ();
+				}
+
+				[Export ("menu:willHighlightItem:")]
+				void MenuWillHighlightItem (NSMenu menu, NSMenuItem willHighlightItem)
+				{
+					if (oldItem != null) {
+						oldItem.FireDeselectedEvent ();
+						oldItem = null;
+					}
+					if (willHighlightItem == null)
+						return;
+					int index = (int)menu.IndexOf (willHighlightItem);
+					if (index < 0)
+						return;
+					oldItem = this.menu.Items [index];
+					nfloat x = 0, y = 0;
+					var locationAwareMenu = menu as NSLocationAwareMenu;
+					if (locationAwareMenu != null) {
+						while (locationAwareMenu.Parent != null && locationAwareMenu.Parent.TryGetTarget (out var other))
+							locationAwareMenu = other;
+						x = locationAwareMenu.Location.X;
+						y = locationAwareMenu.Location.Y;
+						menu = locationAwareMenu;
+					}
+					oldItem.FireSelectedEvent (new Xwt.Rectangle (x, y, menu.Size.Width, menu.Size.Height));
+				}
+			}
 		}
 	}
 	#endif

@@ -31,6 +31,7 @@ using System.Reflection;
 using System.Linq;
 using System.Collections.ObjectModel;
 using MonoDevelop.Components.AutoTest.Results;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Components.AutoTest
 {
@@ -109,6 +110,12 @@ namespace MonoDevelop.Components.AutoTest
 
 		public void SetProperty (object o, string propertyName, object value)
 		{
+			var splitProperties = propertyName.Split(new[] { '.' });
+			propertyName = splitProperties.Last();
+			var exceptLast = splitProperties.Except(new List<string> { propertyName });
+			if (exceptLast.Any ())
+				o = GetRecursiveObjectProperty (string.Join (".", exceptLast), o);
+
 			// Find the property for the name
 			PropertyInfo propertyInfo = o.GetType().GetProperty(propertyName,
 				BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic);
@@ -134,9 +141,15 @@ namespace MonoDevelop.Components.AutoTest
 
 		protected object GetPropertyValue (string propertyName, object requestedObject)
 		{
+			if (requestedObject == null) {
+				LoggingService.LogError ("GetPropertyValue : requestedObject == null property requested : " + propertyName);
+				return null;
+			}
 			return AutoTestService.CurrentSession.UnsafeSync (delegate {
 				PropertyInfo propertyInfo = requestedObject.GetType().GetProperty(propertyName,
 					BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic);
+				if (propertyInfo == null)
+					LoggingService.LogError ($"GetPropertyValue : propertyName {propertyName} not found on object {requestedObject}.");
 				if (propertyInfo != null && propertyInfo.CanRead && !propertyInfo.GetIndexParameters ().Any ()) {
 					var propertyValue = propertyInfo.GetValue (requestedObject);
 					if (propertyValue != null) {
@@ -178,7 +191,7 @@ namespace MonoDevelop.Components.AutoTest
 							result = new ObjectResult (value);
 						propertiesObject.Add (property.Name, result, property);
 					} catch (Exception e) {
-						MonoDevelop.Core.LoggingService.LogInfo ("Failed to fetch property '{0}' on '{1}' with Exception: {2}", property, resultObject, e);
+						MonoDevelop.Core.LoggingService.LogInfo ("Failed to fetch property '{0}' on '{1}' with Exception: {2}", property, resultObject, e.Message);
 					}
 				}
 			}
@@ -188,14 +201,24 @@ namespace MonoDevelop.Components.AutoTest
 
 		protected AppResult MatchProperty (string propertyName, object objectToCompare, object value)
 		{
-			foreach (var singleProperty in propertyName.Split (new [] { '.' })) {
-				objectToCompare = GetPropertyValue (singleProperty, objectToCompare);
-			}
+			objectToCompare = GetRecursiveObjectProperty(propertyName, objectToCompare);
 			if (objectToCompare != null && value != null &&
-				CheckForText (objectToCompare.ToString (), value.ToString (), false)) {
+				CheckForText(objectToCompare.ToString(), value.ToString(), false)) {
 				return this;
 			}
 			return null;
+		}
+
+		protected object GetRecursiveObjectProperty (string propertyName, object obj)
+		{
+			if (propertyName != null && !string.IsNullOrEmpty (propertyName.Trim()))
+			{
+				foreach (var singleProperty in propertyName.Split (new[] { '.' }))
+				{
+					obj = GetPropertyValue (singleProperty, obj);
+				}
+			}
+			return obj;
 		}
 
 		protected bool CheckForText (string haystack, string needle, bool exact)
@@ -203,7 +226,7 @@ namespace MonoDevelop.Components.AutoTest
 			if (exact) {
 				return haystack == needle;
 			} else {
-				return (haystack.IndexOf (needle, StringComparison.Ordinal) > -1);
+				return haystack != null && (haystack.IndexOf (needle, StringComparison.Ordinal) > -1);
 			}
 		}
 	}

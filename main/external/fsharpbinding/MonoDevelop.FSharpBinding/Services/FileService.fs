@@ -2,11 +2,9 @@
 namespace MonoDevelop.FSharp
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 open System.IO
-open System.Threading
 open MonoDevelop.Ide
 open MonoDevelop.Ide.Gui
 open MonoDevelop.Core
-open MonoDevelop.Ide.TypeSystem
 open ExtCore.Control
 type Version = int
 
@@ -61,10 +59,11 @@ type FileSystem (defaultFileSystem : IFileSystem, openDocuments: unit -> Documen
         member x.FileDelete fileName = defaultFileSystem.FileDelete fileName
         member x.AssemblyLoadFrom fileName = defaultFileSystem.AssemblyLoadFrom fileName
         member x.AssemblyLoad(assemblyName) = defaultFileSystem.AssemblyLoad assemblyName
+        member x.IsStableFileHeuristic fileName = true
 
 module FileService =
     let supportedFileExtensions =
-        [".fsscript"; ".fs"; ".fsx"; ".fsi"; ".sketchfs"]
+        set [".fsscript"; ".fs"; ".fsx"; ".fsi"; ".sketchfs"]
     
     /// Is the specified extension supported F# file?
     let supportedFileName fileName =
@@ -73,7 +72,7 @@ module FileService =
         else
             let ext = Path.GetExtension(fileName).ToLower()
             supportedFileExtensions
-            |> List.exists ((=) ext)
+            |> Set.contains ext
     
     let isInsideFSharpFile () =
         if IdeApp.Workbench.ActiveDocument = null ||
@@ -83,5 +82,5 @@ module FileService =
             supportedFileName (file)
     
     let supportedFilePath (filePath:FilePath) =
-        supportedFileName (filePath.ToString())
+        supportedFileName (string filePath)
 

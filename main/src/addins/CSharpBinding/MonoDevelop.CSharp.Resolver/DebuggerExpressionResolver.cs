@@ -35,6 +35,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using ICSharpCode.NRefactory6.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.CSharp.Extensions;
+using Microsoft.CodeAnalysis.Shared.Extensions;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Debugger;
 using MonoDevelop.Ide.TypeSystem;
@@ -53,10 +55,7 @@ namespace MonoDevelop.CSharp.Resolver
 				result = GetInfo (compilationUnit, null, offset, default(CancellationToken));
 			} else {
 				compilationUnit = await analysisDocument.GetCSharpSyntaxRootAsync (cancellationToken).ConfigureAwait (false);
-				var semantic = document.ParsedDocument?.GetAst<SemanticModel> ();
-				if (semantic == null) {
-					semantic = await analysisDocument.GetSemanticModelAsync (cancellationToken).ConfigureAwait (false);
-				}
+				var semantic = await analysisDocument.GetSemanticModelAsync (cancellationToken);
 				result = GetInfo (compilationUnit, semantic, offset, default(CancellationToken));
 			}
 			if (result.IsDefault || !result.Span.Contains(offset)) {

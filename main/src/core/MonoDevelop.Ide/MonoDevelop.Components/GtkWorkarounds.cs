@@ -1,4 +1,4 @@
-//
+﻿//
 // GtkWorkarounds.cs
 //
 // Authors: Jeffrey Stedfast <jeff@xamarin.com>
@@ -83,6 +83,9 @@ namespace MonoDevelop.Components
 		[DllImport (LIBOBJC, EntryPoint = "objc_msgSend_stret")]
 		static extern void objc_msgSend_CGRect64 (out CGRect64 rect, IntPtr klass, IntPtr selector);
 
+		[DllImport (LIBOBJC, EntryPoint = "objc_msgSend")]
+		static extern void objc_msgSend_NSInt64_NSInt32 (IntPtr klass, IntPtr selector, int arg);
+
 		[DllImport (PangoUtil.LIBQUARTZ)]
 		static extern IntPtr gdk_quartz_window_get_nswindow (IntPtr window);
 
@@ -106,7 +109,7 @@ namespace MonoDevelop.Components
 
 		static IntPtr cls_NSScreen;
 		static IntPtr sel_screens, sel_objectEnumerator, sel_nextObject, sel_frame, sel_visibleFrame,
-		sel_requestUserAttention, sel_setHasShadow, sel_invalidateShadow;
+		sel_requestUserAttention, sel_setHasShadow, sel_invalidateShadow, sel_terminate;
 		static IntPtr sharedApp;
 		static IntPtr cls_NSEvent;
 		static IntPtr sel_modifierFlags;
@@ -171,7 +174,19 @@ namespace MonoDevelop.Components
 			sel_modifierFlags = sel_registerName ("modifierFlags");
 			sel_setHasShadow = sel_registerName ("setHasShadow:");
 			sel_invalidateShadow = sel_registerName ("invalidateShadow");
+			sel_terminate = sel_registerName ("terminate:");
 			sharedApp = objc_msgSend_IntPtr (objc_getClass ("NSApplication"), sel_registerName ("sharedApplication"));
+		}
+
+		static void MacTerminate ()
+		{
+			objc_msgSend_NSInt64_NSInt32 (sharedApp, sel_terminate, 0);
+		}
+
+		public static void Terminate ()
+		{
+			if (Platform.IsMac)
+				MacTerminate ();
 		}
 
 		static Gdk.Rectangle MacGetUsableMonitorGeometry (Gdk.Screen screen, int monitor)
@@ -588,11 +603,11 @@ namespace MonoDevelop.Components
 
 		//introduced in GTK 2.20
 		[DllImport (PangoUtil.LIBGDK, CallingConvention = CallingConvention.Cdecl)]
-		extern static bool gdk_keymap_add_virtual_modifiers (IntPtr keymap, ref Gdk.ModifierType state);
+		extern static void gdk_keymap_add_virtual_modifiers (IntPtr keymap, ref Gdk.ModifierType state);
 
 		//Custom patch in Mono Mac w/GTK+ 2.24.8+
 		[DllImport (PangoUtil.LIBGDK, CallingConvention = CallingConvention.Cdecl)]
-		extern static bool gdk_quartz_set_fix_modifiers (bool fix);
+		extern static void gdk_quartz_set_fix_modifiers (bool fix);
 
 		static Gdk.Keymap keymap = Gdk.Keymap.Default;
 		static Dictionary<ulong,MappedKeys> mappedKeys = new Dictionary<ulong,MappedKeys> ();
@@ -1096,6 +1111,12 @@ namespace MonoDevelop.Components
 
 		public static void SetOverlayScrollbarPolicy (Gtk.ScrolledWindow sw, Gtk.PolicyType hpolicy, Gtk.PolicyType vpolicy)
 		{
+			// we know the .dll isn't there on Windows, so don't even try (avoids a first-chance DllNotFoundException)
+			if (Platform.IsWindows) {
+				canSetOverlayScrollbarPolicy = false;
+				return;
+			}
+
 			if (!canSetOverlayScrollbarPolicy) {
 				return;
 			}
@@ -1105,6 +1126,7 @@ namespace MonoDevelop.Components
 			} catch (DllNotFoundException) {
 			} catch (EntryPointNotFoundException) {
 			}
+			canSetOverlayScrollbarPolicy = false;
 		}
 
 		public static void GetOverlayScrollbarPolicy (Gtk.ScrolledWindow sw, out Gtk.PolicyType hpolicy, out Gtk.PolicyType vpolicy)
@@ -1158,8 +1180,21 @@ namespace MonoDevelop.Components
 		[DllImport (PangoUtil.LIBGOBJECT, CallingConvention = CallingConvention.Cdecl)]
 		static extern IntPtr g_object_get_data (IntPtr source, string name);
 
+		[DllImport (PangoUtil.LIBGOBJECT, CallingConvention = CallingConvention.Cdecl)]
+		static extern void g_object_set_data (IntPtr source, string name, IntPtr dataHandle);
+
 		[DllImport (PangoUtil.LIBGTK, CallingConvention = CallingConvention.Cdecl)]
 		static extern IntPtr gtk_icon_set_render_icon_scaled (IntPtr handle, IntPtr style, int direction, int state, int size, IntPtr widget, IntPtr intPtr, ref double scale);
+
+		public static IntPtr GetData (GLib.Object o, string name)
+		{
+			return g_object_get_data (o.Handle, name);
+		}
+
+		public static void SetData (GLib.Object o, string name, IntPtr dataHandle)
+		{
+			g_object_set_data (o.Handle, name, dataHandle);
+		}
 
 		public static bool SetSourceScale (Gtk.IconSource source, double scale)
 		{
@@ -1301,6 +1336,9 @@ namespace MonoDevelop.Components
 				buffer.Clear ();
 				var mark = buffer.CreateMark (null, iter, false);
 				var attrIter = attrList.Iterator;
+				//HACK: the parsed attribute indexes are byte based and need to be converted
+				//      to char indexes. Otherwise they won't match multibyte characters.
+				var indexer = new TextIndexer (text);
 
 				do {
 					int start, end;
@@ -1308,14 +1346,19 @@ namespace MonoDevelop.Components
 					attrIter.Range (out start, out end);
 
 					if (end == int.MaxValue) // last chunk
-						end = text.Length - 1;
+						end = indexer.IndexToByteIndex (text.Length - 1);
 					if (end <= start)
 						break;
 
+					start = indexer.ByteIndexToIndex (start);
+					end = indexer.ByteIndexToIndex (end);
+
 					TextTag tag;
 					if (attrIter.GetTagForAttributes (null, out tag)) {
-						buffer.TagTable.Add (tag);
-						buffer.InsertWithTags (ref iter, text.Substring (start, end - start), tag);
+						using (tag) {
+							buffer.TagTable.Add (tag);
+							buffer.InsertWithTags (ref iter, text.Substring (start, end - start), tag);
+						}
 					} else
 						buffer.Insert (ref iter, text.Substring (start, end - start));
 
@@ -1466,6 +1509,24 @@ namespace MonoDevelop.Components
 			}
 
 			window.Mapped += OnMappedDisableButtons;
+#endif
+		}
+
+
+		public static void EmitAddSignal(Container container, Widget child)
+		{
+#if MAC
+			// On Mac if we add a widget to a parent by hand, we need to inform the accessibility system of the fact
+			// If this is called from Linux or Windows custom Gtk then it will trigger warnings because we've protected
+			// for the situation in the Mac version of Gtk
+			GLib.Signal.Emit(container, "add", child);
+#endif
+		}
+
+		public static void EmitRemoveSignal(Container container, Widget child)
+		{
+#if MAC
+			GLib.Signal.Emit(container, "remove", child);
 #endif
 		}
 	}

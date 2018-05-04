@@ -49,7 +49,7 @@ module Refactoring =
                             :> Change) |]
 
             return results :> IList<Change>
-        } |> Async.StartAsTask)
+        } |> StartAsyncAsTask System.Threading.CancellationToken.None)
 
     let getDocumentationId (symbol:FSharpSymbol) =
         match symbol with
@@ -101,7 +101,7 @@ module Refactoring =
         match symbolUse.Symbol with
         | :? FSharpMemberOrFunctionOrValue as mfv when mfv.IsDispatchSlot ->
             maybe {
-                let! ent =  mfv.EnclosingEntitySafe
+                let! ent =  mfv.DeclaringEntity
                 let! bt = ent.BaseType
                 if bt.HasTypeDefinition then
                     let baseDefs = bt.TypeDefinition.MembersFunctionsAndValues
@@ -123,15 +123,19 @@ module Refactoring =
 
     let getSymbolAndLineInfoAtCaret (ast: ParseAndCheckResults) (editor:TextEditor) =
         let lineInfo = editor.GetLineInfoByCaretOffset ()
+        // Note: this use of RunSynchronously is basically benign because GetSymbolAtLocation is "nearly always"
+        // an operation that completes quickly.  Ideally it should not be asynchronous at all. This is an FCS issue.
         let symbol = ast.GetSymbolAtLocation lineInfo |> Async.RunSynchronously
         lineInfo, symbol
 
-    let rename (editor:TextEditor, ctx:DocumentContext, lastIdent, symbol:FSharpSymbolUse) =
+    /// Perform the renaming of a symbol
+    let renameSymbol (editor:TextEditor, ctx:DocumentContext, lastIdent, symbol:FSharpSymbolUse) =
+        // Collect the uses of the symbol across the solution.  The use of RunSynchronously  makes this a blocking UI 
+        // action and will presumably cause the operation to fail with a timeout exception if it takes too long.
         let symbols =
             let activeDocFileName = editor.FileName.ToString ()
-            Async.RunSynchronously
-                (languageService.GetUsesOfSymbolInProject (ctx.Project.FileName.ToString(), activeDocFileName, editor.Text, symbol.Symbol),
-                ServiceSettings.maximumTimeout)
+            languageService.GetUsesOfSymbolInProject (ctx.Project.FileName.ToString(), activeDocFileName, editor.Text, symbol.Symbol)
+            |> (fun p -> Async.RunSynchronously(p, timeout=ServiceSettings.maximumTimeout))
 
         let locations =
             symbols |> Array.map (Symbols.getTextSpanTrimmed lastIdent)
@@ -172,7 +176,6 @@ module Refactoring =
         async {
             do! Async.SwitchToContext(Runtime.MainSynchronizationContext)
             let! jumped = RefactoringService.TryJumpToDeclarationAsync(symbol.XmlDocSig, ctx.Project)
-                          |> Async.AwaitTask
 
             if not jumped then
                 match symbol.Assembly.FileName with
@@ -388,7 +391,7 @@ module Refactoring =
             match symbolUse.Symbol with
             | :? FSharpMemberOrFunctionOrValue as mfv when mfv.IsDispatchSlot ->
                 maybe {
-                    let! ent =  mfv.EnclosingEntitySafe
+                    let! ent =  mfv.DeclaringEntity
                     let! bt = ent.BaseType
                     return bt.HasTypeDefinition } |> Option.getOrElse (fun () -> false)
 
@@ -443,7 +446,7 @@ type CurrentRefactoringOperationsHandler() =
         match tryGetValidDoc() with
         | None -> ()
         | Some doc ->
-            if not (FileService.supportedFileName (doc.FileName.ToString())) then ()
+            if not (FileService.supportedFilePath doc.FileName) then ()
             else
                 match doc.TryGetAst () with
                 | None -> ()
@@ -460,7 +463,7 @@ type CurrentRefactoringOperationsHandler() =
                         if canRename then
                             let commandInfo = IdeApp.CommandService.GetCommandInfo (Commands.EditCommands.Rename)
                             commandInfo.Enabled <- true
-                            ciset.CommandInfos.Add (commandInfo, Action(fun _ -> (Refactoring.rename (doc.Editor, doc, lastIdent, symbolUse))))
+                            ciset.CommandInfos.Add (commandInfo, Action(fun _ -> (Refactoring.renameSymbol (doc.Editor, doc, lastIdent, symbolUse))))
 
                         // goto to declaration
                         if Refactoring.Operations.canJump symbolUse doc.Editor.FileName doc.Project.ParentSolution then
@@ -497,7 +500,7 @@ type CurrentRefactoringOperationsHandler() =
                                         | :? FSharpEntity ->
                                             GettextCatalog.GetString ("Go to _Base Type")
                                         | :? FSharpMemberOrFunctionOrValue as mfv ->
-                                            match mfv.EnclosingEntitySafe with
+                                            match mfv.DeclaringEntity with
                                             | Some ent when ent.IsInterface ->
                                                 if mfv.IsProperty then GettextCatalog.GetString ("Go to _Interface Property")
                                                 elif mfv.IsEvent then GettextCatalog.GetString ("Go to _Interface Event")
@@ -541,7 +544,7 @@ type CurrentRefactoringOperationsHandler() =
                                 | :? FSharpEntity as fse when fse.IsInterface -> GettextCatalog.GetString ("Find Implementing Types")
                                 | :? FSharpEntity -> GettextCatalog.GetString ("Find Derived Types")
                                 | :? FSharpMemberOrFunctionOrValue as mfv ->
-                                    match mfv.EnclosingEntitySafe with
+                                    match mfv.DeclaringEntity with
                                     | Some ent when ent.IsInterface ->
                                         GettextCatalog.GetString ("Find Implementing Symbols")
                                     | _ -> GettextCatalog.GetString ("Find overriden Symbols")
@@ -615,9 +618,9 @@ type RenameHandler() =
                 //Is this a double check, i.e. isnt update checking can rename?
                 | (_line, col, lineTxt), Some sym when Refactoring.Operations.canRename sym editor.FileName ctx.Project.ParentSolution ->
                     let lastIdent = Symbols.lastIdent col lineTxt
-                    Refactoring.rename (editor, ctx, lastIdent, sym)
+                    Refactoring.renameSymbol (editor, ctx, lastIdent, sym)
                 | _ -> ()
-            | _ -> ()
+            | None -> ()
 
 open ExtCore
 type GotoDeclarationHandler() =
@@ -649,7 +652,7 @@ type GotoDeclarationHandler() =
             x.Run(doc.Editor, doc)
 
     member x.Run(editor, context:DocumentContext) =
-        if FileService.supportedFileName (editor.FileName.ToString()) then
+        if FileService.supportedFilePath editor.FileName then
             match context.TryGetAst() with
             | Some ast ->
                 match Refactoring.getSymbolAndLineInfoAtCaret ast editor with
@@ -662,23 +665,22 @@ type FSharpJumpToDeclarationHandler () =
     inherit JumpToDeclarationHandler ()
 
     override x.TryJumpToDeclarationAsync(documentationIdString, _hintProject, token) =
-        let computation = 
-            async {
+        async {
                 // We only need to run this when the editor isn't F#
                 match IdeApp.Workbench.ActiveDocument with
                 | null -> return false
-                | doc when FileService.supportedFileName (doc.FileName.ToString()) -> return false
+                | doc when FileService.supportedFilePath doc.FileName -> return false
                 | _doc -> return! Refactoring.jumpToDocIdInFSharp documentationIdString
 
-            }
-        Async.StartAsTask(computation = computation, cancellationToken = token)
+        }
+        |> StartAsyncAsTask token
 
 type FSharpFindReferencesProvider () =
     inherit FindReferencesProvider ()
 
-    override x.FindReferences(documentationCommentId, _hintProject, token) =
-        let computation = async {
-            return
+    override x.FindReferences(documentationCommentId, _hintProject, monitor) =
+        async {
+            monitor.ReportResults(
                 Search.getAllSymbolsInAllProjects()
                 |> AsyncSeq.toSeq
                 |> Seq.toArray
@@ -686,14 +688,13 @@ type FSharpFindReferencesProvider () =
                 |> Array.filter (fun symbol -> symbol.Symbol.XmlDocSig = documentationCommentId)
                 |> Array.map (fun symbol -> let (filename, startOffset, endOffset) = Symbols.getOffsetsTrimmed symbol.Symbol.DisplayName symbol
                                             SearchResult (FileProvider (filename), startOffset, endOffset-startOffset))
-                |> Array.toSeq
+                |> Array.toSeq)
         }
+        |> StartAsyncAsTask monitor.CancellationToken :> Task
 
-        Async.StartAsTask(computation = computation, cancellationToken = token)
-
-    override x.FindAllReferences(_documentationCommentId, _hintProject, _token) =
+    override x.FindAllReferences(_documentationCommentId, _hintProject, monitor) =
         //TODO:
-        Task.FromResult Seq.empty
+        Task.CompletedTask
 
 type FSharpCommandsTextEditorExtension () =
     inherit Editor.Extension.TextEditorExtension ()

@@ -159,18 +159,21 @@ namespace MonoDevelop.Platform
 			IShellItemArray resultsArray;
 			uint count;
 
-			try {
-				nativeDialog.GetSelectedItems (out resultsArray);
-			} catch (COMException ex) {
+			var hr = nativeDialog.GetSelectedItems(out resultsArray);
+			if (hr != 0) {
+				var e = Marshal.GetExceptionForHR(hr);
+
 				//we get E_FAIL when there is no selection
-				if (ex != null && ex.ErrorCode == -2147467259)
+				if (hr == -2147467259) {
 					return filenames;
-				throw;
-			} catch (FileNotFoundException) {
-				return filenames;
+				} else if (e is FileNotFoundException) {
+					return filenames;
+				}
+
+				throw e;
 			}
 
-			var hr = (int)resultsArray.GetCount (out count);
+			hr = (int)resultsArray.GetCount (out count);
 			if (hr != 0)
 				throw Marshal.GetExceptionForHR (hr);
 
@@ -196,7 +199,7 @@ namespace MonoDevelop.Platform
 
 			foreach (var e in TextEncoding.ConversionEncodings) {
 				combo.Items.Add (new EncodingComboItem (Encoding.GetEncoding (e.CodePage), string.Format ("{0} ({1})", e.Name, e.Id)));
-				if (selectedEncoding != null && e.CodePage == selectedEncoding.WindowsCodePage)
+				if (selectedEncoding != null && e.CodePage == selectedEncoding.CodePage)
 					combo.SelectedIndex = i;
 				i++;
 			}

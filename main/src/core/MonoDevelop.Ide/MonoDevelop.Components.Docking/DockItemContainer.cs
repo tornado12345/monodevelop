@@ -31,6 +31,9 @@
 using System;
 using Gtk;
 
+using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
+
 namespace MonoDevelop.Components.Docking
 {
 	class DockItemContainer: EventBox
@@ -44,22 +47,27 @@ namespace MonoDevelop.Components.Docking
 		public DockItemContainer (DockFrame frame, DockItem item)
 		{
 			this.item = item;
+			item.LabelChanged += UpdateAccessibilityLabel;
 
 			mainBox = new VBox ();
+			mainBox.Accessible.SetShouldIgnore (false);
+			UpdateAccessibilityLabel (null, null);
 			Add (mainBox);
 
 			mainBox.ResizeMode = Gtk.ResizeMode.Queue;
 			mainBox.Spacing = 0;
 			
 			ShowAll ();
-			
+
 			mainBox.PackStart (item.GetToolbar (DockPositionType.Top).Container, false, false, 0);
 			
 			HBox hbox = new HBox ();
+			hbox.Accessible.SetTitle ("Hbox");
 			hbox.Show ();
 			hbox.PackStart (item.GetToolbar (DockPositionType.Left).Container, false, false, 0);
 			
 			contentBox = new HBox ();
+			hbox.Accessible.SetTitle ("Content");
 			contentBox.Show ();
 			hbox.PackStart (contentBox, true, true, 0);
 			
@@ -68,6 +76,11 @@ namespace MonoDevelop.Components.Docking
 			mainBox.PackStart (hbox, true, true, 0);
 			
 			mainBox.PackStart (item.GetToolbar (DockPositionType.Bottom).Container, false, false, 0);
+		}
+
+		void UpdateAccessibilityLabel (object sender, EventArgs args)
+		{
+			mainBox.Accessible.SetTitle (Core.GettextCatalog.GetString ("{0} Pad", item.Label));
 		}
 
 		DockVisualStyle visualStyle;
@@ -85,7 +98,13 @@ namespace MonoDevelop.Components.Docking
 				item.Status = DockItemStatus.AutoHide;
 		}
 
-		public void UpdateContent ()
+        protected override void OnDestroyed()
+        {
+			item.LabelChanged -= UpdateAccessibilityLabel;
+			base.OnDestroyed();
+        }
+
+        public void UpdateContent ()
 		{
 			if (widget != null)
 				((Gtk.Container)widget.Parent).Remove (widget);

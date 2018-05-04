@@ -34,6 +34,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
+using Microsoft.VisualStudio.Platform;
+using Microsoft.VisualStudio.Utilities;
+
 using Mono.Addins;
 using MonoDevelop.Core;
 using Mono.Unix;
@@ -41,7 +44,7 @@ using MonoDevelop.Ide.Extensions;
 using MonoDevelop.Core.Execution;
 using MonoDevelop.Components;
 using MonoDevelop.Components.MainToolbar;
-
+using MonoDevelop.Ide.Composition;
 
 namespace MonoDevelop.Ide.Desktop
 {
@@ -109,7 +112,18 @@ namespace MonoDevelop.Ide.Desktop
 				if (mt != null)
 					return mt.Id;
 			}
-			return OnGetMimeTypeForUri (uri) ?? "application/octet-stream";
+			var mime = OnGetMimeTypeForUri (uri);
+			if (mime != null) {
+				return mime;
+			}
+
+			try {
+				if (Path.IsPathRooted (uri) && File.Exists (uri) && !Core.Text.TextFileUtility.IsBinary (uri)) {
+					return "text/plain";
+				}
+			} catch (IOException) {}
+
+			return "application/octet-stream";
 		}
 
 		public string GetMimeTypeDescription (string mimeType)
@@ -156,6 +170,15 @@ namespace MonoDevelop.Ide.Desktop
 				}
 				yield return mimeType;
 			}
+		}
+
+		public string GetMimeTypeForRoslynLanguage (string language)
+		{
+			foreach (MimeTypeNode mt in mimeTypeNodes) {
+				if (mt.RoslynName == language)
+					return mt.Id;
+			}
+			return null;
 		}
 		
 		public Xwt.Drawing.Image GetIconForFile (string filename)
@@ -274,8 +297,24 @@ namespace MonoDevelop.Ide.Desktop
 			}
 		}
 
+		static Lazy<IFilePathRegistryService> filePathRegistryService = new Lazy<IFilePathRegistryService> (() => CompositionManager.GetExportedValue<IFilePathRegistryService> ());
 		MimeTypeNode FindMimeTypeForFile (string fileName)
 		{
+			try {
+				IContentType contentType = filePathRegistryService.Value.GetContentTypeForPath (fileName);
+				if (contentType != PlatformCatalog.Instance.ContentTypeRegistryService.UnknownContentType) {
+					string mimeType = PlatformCatalog.Instance.MimeToContentTypeRegistryService.GetMimeType (contentType);
+					if (mimeType != null) {
+						MimeTypeNode mt = FindMimeType (mimeType);
+						if (mt != null) {
+							return mt;
+						}
+					}
+				}
+			} catch (Exception ex) {
+				LoggingService.LogError ("IFilePathRegistryService query failed", ex);
+			}
+
 			foreach (MimeTypeNode mt in mimeTypeNodes) {
 				if (mt.SupportsFile (fileName))
 					return mt;
@@ -538,5 +577,13 @@ namespace MonoDevelop.Ide.Desktop
 			proc.StartInfo = psi;
 			proc.Start ();
 		}
+
+		public static bool AccessibilityInUse { get; protected set; }
+
+		internal virtual string GetNativeRuntimeDescription ()
+		{
+			return null;
+		}
 	}
+
 }

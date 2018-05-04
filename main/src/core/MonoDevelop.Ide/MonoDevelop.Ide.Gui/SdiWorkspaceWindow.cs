@@ -33,11 +33,13 @@ using Gtk;
 using Mono.Addins;
 using MonoDevelop.Core;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Ide.Commands;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide.Extensions;
 using MonoDevelop.Ide.Gui.Content;
 using MonoDevelop.Components.DockNotebook;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.Ide.Gui
 {
@@ -67,8 +69,6 @@ namespace MonoDevelop.Ide.Gui
 		MonoDevelop.Ide.Gui.Content.IPathedDocument pathDoc;
 		
 		bool show_notification = false;
-
-		uint present_timeout = 0;
 
 		ViewCommandHandlers commandHandler;
 
@@ -100,6 +100,7 @@ namespace MonoDevelop.Ide.Gui
 			extensionContext.RegisterCondition ("FileType", fileTypeCondition);
 			
 			box = new VBox ();
+			box.Accessible.SetShouldIgnore (true);
 
 			viewContents.Add (content);
 
@@ -267,13 +268,19 @@ namespace MonoDevelop.Ide.Gui
 		{
 			var window = tabControl.Toplevel as Gtk.Window;
 			if (window != null) {
-				if (window is DockWindow)
+				if (window is DockWindow) {
 					DesktopService.GrabDesktopFocus (window);
+				}
+
+				// Focusing the main window so hide all the autohide pads
+				workbench.DockFrame.MinimizeAllAutohidden ();
 
 				#if MAC
 				AppKit.NSWindow nswindow = MonoDevelop.Components.Mac.GtkMacInterop.GetNSWindow (window);
-				if (nswindow != null)
+				if (nswindow != null) {
 					nswindow.MakeFirstResponder (nswindow.ContentView);
+					nswindow.MakeKeyAndOrderFront (nswindow);
+				}
 				#endif
 			}	
 
@@ -282,7 +289,7 @@ namespace MonoDevelop.Ide.Gui
 			tabControl.CurrentTabIndex = tab.Index;
 
 			// Focus the tab in the next iteration since presenting the window may take some time
-			Application.Invoke (delegate {
+			Application.Invoke ((o, args) => {
 				DockNotebook.ActiveNotebook = tabControl;
 				DeepGrabFocus (this.ActiveViewContent.Control);
 			});
@@ -339,9 +346,11 @@ namespace MonoDevelop.Ide.Gui
 		static void DeepGrabFocus (Gtk.Widget widget)
 		{
 			Widget first = null;
+
 			foreach (var f in GetFocussableWidgets (widget)) {
 				if (f.HasFocus)
 					return;
+				
 				if (first == null)
 					first = f;
 			}
@@ -353,11 +362,42 @@ namespace MonoDevelop.Ide.Gui
 		static IEnumerable<Gtk.Widget> GetFocussableWidgets (Gtk.Widget widget)
 		{
 			var c = widget as Container;
-			if (widget.CanFocus)
+
+			if (widget.CanFocus) {
 				yield return widget;
+			}
+
 			if (c != null) {
-				foreach (var f in c.FocusChain.SelectMany (GetFocussableWidgets).Where (y => y != null))
+				foreach (var f in c.FocusChain.SelectMany (GetFocussableWidgets).Where (y => y != null)) {
 					yield return f;
+				}
+			}
+
+			if (c?.Children?.Length != 0) {
+				foreach (var f in c.Children) {
+					var container = f as Container;
+					if (container != null) {
+						foreach (var child in GetFocussableChildren (container)) {
+							yield return child;
+						}
+					}
+				}
+			}
+		}
+
+		static IEnumerable<Gtk.Widget> GetFocussableChildren (Gtk.Container container)
+		{
+			if (container.CanFocus) {
+				yield return container;
+			}
+
+			foreach (var f in container.Children) {
+				var c = f as Container;
+				if (c != null) {
+					foreach (var child in GetFocussableChildren (c)) {
+						yield return child;
+					}
+				}
 			}
 		}
 
@@ -443,17 +483,17 @@ namespace MonoDevelop.Ide.Gui
 			}
 		}
 		
-		public bool CloseWindow (bool force)
+		public Task<bool> CloseWindow (bool force)
 		{
 			return CloseWindow (force, false);
 		}
 
-		public bool CloseWindow (bool force, bool animate)
+		public async Task<bool> CloseWindow (bool force, bool animate)
 		{
 			bool wasActive = workbench.ActiveWorkbenchWindow == this;
 			WorkbenchWindowEventArgs args = new WorkbenchWindowEventArgs (force, wasActive);
 			args.Cancel = false;
-			OnClosing (args);
+			await OnClosing (args);
 			if (args.Cancel)
 				return false;
 			
@@ -477,10 +517,6 @@ namespace MonoDevelop.Ide.Gui
 
 		protected override void OnDestroyed ()
 		{
-			if (present_timeout != 0) {
-				GLib.Source.Remove (present_timeout);
-			}
-
 			if (viewContents != null) {
 				foreach (BaseViewContent sv in SubViewContents) {
 					sv.Dispose ();
@@ -620,6 +656,9 @@ namespace MonoDevelop.Ide.Gui
 			var tab = new Tab (subViewToolbar, label) {
 				Tag = viewContent
 			};
+			if (tab.Accessible != null) {
+				tab.Accessible.Help = viewContent.TabAccessibilityDescription;
+			}
 			
 			// If this is the current displayed document we need to add the control immediately as the tab is already active.
 			if (addedContent) {
@@ -808,10 +847,14 @@ namespace MonoDevelop.Ide.Gui
 			}
 		}
 
-		protected virtual void OnClosing (WorkbenchWindowEventArgs e)
+		protected virtual async Task OnClosing (WorkbenchWindowEventArgs e)
 		{
 			if (Closing != null) {
-				Closing (this, e);
+				foreach (var handler in Closing.GetInvocationList ().Cast<WorkbenchWindowAsyncEventHandler> ()) {
+					await handler (this, e);
+					if (e.Cancel)
+						break;
+				}
 			}
 		}
 
@@ -830,7 +873,7 @@ namespace MonoDevelop.Ide.Gui
 
 		public event EventHandler TitleChanged;
 		public event WorkbenchWindowEventHandler Closed;
-		public event WorkbenchWindowEventHandler Closing;
+		public event WorkbenchWindowAsyncEventHandler Closing;
 		public event ActiveViewContentEventHandler ActiveViewContentChanged;
 	}
 }

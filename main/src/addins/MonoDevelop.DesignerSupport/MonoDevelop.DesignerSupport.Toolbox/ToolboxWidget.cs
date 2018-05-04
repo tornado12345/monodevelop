@@ -34,6 +34,7 @@ using Pango;
 using Gdk;
 using MonoDevelop.Ide;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 
 namespace MonoDevelop.DesignerSupport.Toolbox
 {
@@ -150,6 +151,9 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 			discloseDown = ImageService.GetIcon ("md-disclose-arrow-down", Gtk.IconSize.Menu);
 			discloseUp = ImageService.GetIcon ("md-disclose-arrow-up", Gtk.IconSize.Menu);
 			handCursor = new Cursor (CursorType.Hand1);
+
+			var actionHandler = new ActionDelegate (this);
+			actionHandler.PerformShowMenu += PerformShowMenu;
 		}
 
 		protected override void OnStyleSet (Gtk.Style previous_style)
@@ -278,6 +282,11 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 					return true;
 
 				var icon = item.Icon;
+				if (!icon.HasFixedSize) {
+					var maxIconSize = Math.Min (itemDimension.Width, itemDimension.Height);
+					var fittingIconSize = maxIconSize > 32 ? Xwt.IconSize.Large : maxIconSize > 16 ? Xwt.IconSize.Medium : Xwt.IconSize.Small;
+					icon = item.Icon.WithSize (fittingIconSize);
+				}
 				if (item == SelectedItem) {
 					icon = icon.WithStyles ("sel");
 					cr.SetSourceColor (Style.Base (StateType.Selected).ToCairoColor ());
@@ -477,6 +486,11 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 				return true;
 			}
 			return base.OnButtonPressEvent (e);
+		}
+
+		void PerformShowMenu (object sender, EventArgs args)
+		{
+			DoPopupMenu?.Invoke (null);
 		}
 
 		void SetCategoryExpanded (Category cat, bool expanded)
@@ -1112,9 +1126,7 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 		
 		public Xwt.Drawing.Image Icon {
 			get {
-				if (node != null)
-					return node.Icon;
-				return icon ?? DefaultIcon;
+				return node?.Icon ?? icon ?? DefaultIcon;
 			}
 		}
 
@@ -1129,10 +1141,10 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 		public string Text {
 			get {
 				if (node != null) {
-					var t = GLib.Markup.EscapeText (node.Name);
+					var t = MonoDevelop.Ide.TypeSystem.Ambience.EscapeText (node.Name);
 					if (!string.IsNullOrEmpty (node.Source)) {
-						var c = MonoDevelop.Ide.Gui.Styles.DimTextColor.ToHexString ().Substring (0, 7);
-						t += string.Format (" <span size=\"smaller\" color=\"{1}\">{0}</span>", node.Source, c);
+						var c = MonoDevelop.Ide.Gui.Styles.SecondaryTextColorHexString;
+						t = string.Format ("{2} <span size=\"smaller\" color=\"{1}\">{0}</span>", node.Source, c, t);
 					}
 					return t;
 				}
@@ -1182,7 +1194,7 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 		public Item (Xwt.Drawing.Image icon, string text, string tooltip, object tag)
 		{
 			this.icon    = icon;
-			this.text    = GLib.Markup.EscapeText (text);
+			this.text    = MonoDevelop.Ide.TypeSystem.Ambience.EscapeText (text);
 			this.tooltip = tooltip;
 			this.tag     = tag;
 		}

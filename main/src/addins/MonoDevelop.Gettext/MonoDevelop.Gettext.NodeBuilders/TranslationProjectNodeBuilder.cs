@@ -162,8 +162,8 @@ namespace MonoDevelop.Gettext.NodeBuilders
 			void UpdateTranslationsAsync (ProgressMonitor monitor, TranslationProject project)
 			{
 				try {
-					project.UpdateTranslations (monitor);
-					Gtk.Application.Invoke (delegate {
+					project.UpdateTranslations (monitor, false);
+					Gtk.Application.Invoke ((o, args) => {
 						POEditorWidget.ReloadWidgets ();
 					});
 				} catch (Exception ex) {

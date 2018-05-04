@@ -696,8 +696,8 @@
 	<Command id = "MonoDevelop.Ide.Commands.ToolCommands.AddinManager"
 			defaultHandler = "MonoDevelop.Ide.Commands.AddinManagerHandler"
 			icon = "gtk-plugin"
-			_description = "Manage add-ins"
-			_label = "_Add-ins..." />
+			_description = "Manage extensions"
+			_label = "_Extensions..." />
 	<Command id = "MonoDevelop.Ide.Commands.ToolCommands.ToolList"
 			defaultHandler = "MonoDevelop.Ide.Commands.ToolListHandler"
 			type="array"
@@ -737,14 +737,71 @@
 			_description = "Show previous document"
 			shortcut = "Control|Page_Up"
 			macShortcut = "Meta|{ Shift+Meta+F6" />
-	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocumentList"
-			defaultHandler = "MonoDevelop.Ide.Commands.OpenDocumentListHandler"
-			type="radio|array"
-			_label = "Document List" />
 	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenWindowList"
 			defaultHandler = "MonoDevelop.Ide.Commands.OpenWindowListHandler"
 			type="radio|array"
 			_label = "Window List" />
+
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument1"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument1"
+			 shortcut = "Alt|1"
+			 macShortcut = "Meta|1"
+			 _label = "Activate 1"
+			 _description = "Activate document 1" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument2"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument2"
+			 shortcut = "Alt|2"
+			 macShortcut = "Meta|2"
+			 _label = "Activate 2"
+			 _description = "Activate document 2" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument3"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument3"
+			 shortcut = "Alt|3"
+			 macShortcut = "Meta|3"
+			 _label = "Activate 3"
+			 _description = "Activate document 3" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument4"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument4"
+			 shortcut = "Alt|4"
+			 macShortcut = "Meta|4"
+			 _label = "Activate 4"
+			 _description = "Activate document 4" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument5"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument5"
+			 shortcut = "Alt|5"
+			 macShortcut = "Meta|5"
+			 _label = "Activate 5"
+			 _description = "Activate document 5" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument6"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument6"
+			 shortcut = "Alt|6"
+			 macShortcut = "Meta|6"
+			 _label = "Activate 6"
+			 _description = "Activate document 6" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument7"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument7"
+			 shortcut = "Alt|7"
+			 macShortcut = "Meta|7"
+			 _label = "Activate 7"
+			 _description = "Activate document 7" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument8"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument8"
+			 shortcut = "Alt|8"
+			 macShortcut = "Meta|8"
+			 _label = "Activate 8"
+			 _description = "Activate document 8" />
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocument9"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocument9"
+			 shortcut = "Alt|9"
+			 macShortcut = "Meta|9"
+			 _label = "Activate 9"
+			 _description = "Activate document 9" />
+
+	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.OpenDocumentList"
+			 defaultHandler = "MonoDevelop.Ide.Commands.OpenDocumentListHandler"
+			 type="radio|array"
+			 _label = "Document List" />
+
 			<!--
 	<Command id = "MonoDevelop.Ide.Commands.WindowCommands.SplitWindowVertically"
 			defaultHandler = "MonoDevelop.Ide.Commands.SplitWindowVertically"
@@ -819,6 +876,18 @@
 			_label = "Send Feedback"
 			icon = "md-feedback"
 			_description = "Send feedback to the MonoDevelop development team" />
+	<Command id = "MonoDevelop.Ide.Commands.HelpCommands.DumpUITree"
+			 defaultHandler = "MonoDevelop.Ide.Commands.DumpUITreeHandler"
+			 _label = "Dump UI Tree" />
+	<Command id = "MonoDevelop.Ide.Commands.HelpCommands.DumpA11yTree"
+			 defaultHandler = "MonoDevelop.Ide.Commands.DumpA11yTreeHandler"
+			 _label = "Dump Accessibility Tree" />
+	<Command id = "MonoDevelop.Ide.Commands.HelpCommands.DumpA11yTreeDelayed"
+			 defaultHandler = "MonoDevelop.Ide.Commands.DumpA11yTreeDelayedHandler"
+			 _label = "Dump Accessibility Tree (10s)" />
+	<Command id = "MonoDevelop.Ide.Commands.HelpCommands.MarkLog"
+			 defaultHandler = "MonoDevelop.Ide.Commands.MarkLogHandler"
+			 _label = "Mark Log" />
 	</Category>
 
 	<!-- SearchCommands -->
@@ -883,6 +952,13 @@
 			macShortcut = "Alt|Meta|Shift|F"
 			_description = "Search for and replace text in all files of a directory" />
 
+	<Command id = "MonoDevelop.Ide.Commands.SearchCommands.RunCommand"
+			defaultHandler = "MonoDevelop.Components.MainToolbar.RunCommandHandler"
+			_label = "_Command..."
+			shortcut = "Control|Shift|P"
+			macShortcut = "Meta|Shift|P"
+			_description = "Find and run a specific command." />
+
 	<Command id = "MonoDevelop.Ide.Commands.SearchCommands.GotoType"
 			defaultHandler = "MonoDevelop.Components.MainToolbar.GotoTypeHandler"
 	         _label = "_Type..."
@@ -946,18 +1022,19 @@
 	<Category _name = "Text Editor" id = "TextEditor">
 
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowCompletionWindow"
-			_label = "Show Code Completion"
+			_label = "Complete Word"
 			macShortcut="Control|space"
 			shortcut = "Control|space" />
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ToggleCompletionSuggestionMode"
 			defaultHandler = "MonoDevelop.Ide.Commands.ToggleCompletionSuggestionModeHandler"
-			_label = "Toggle Completion Suggestion Mode" />
+			_label = "Switch Completion/Suggestion Mode"
+			_displayName = "Switch Completion/Suggestion Mode" />
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowCodeTemplateWindow"
-			_description="Inserts a template"
-			_label = "_Template..."
-			_displayName = "Insert Template..."/>
+			_description="Inserts a snippet"
+			_label = "_Snippet..."
+			_displayName = "Insert Snippet..."/>
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowCodeSurroundingsWindow"
-			_description="Surrounds selection with a template when something is selected"
+			_description="Surrounds selection with a snippet when something is selected"
 			_label = "_Surround With..."
 			_displayName = "Surround Selection With..."/>
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.LineEnd"
@@ -991,9 +1068,9 @@
 			_label = "Scroll line down"
 			shortcut = "Control|Down" />
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ScrollPageUp"
-			_label = "Scroll page up" macShortcut="Page_Up" />
+			_label = "Scroll page up" />
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ScrollPageDown"
-			_label = "Scroll page down" macShortcut="Page_Down"/>
+			_label = "Scroll page down" />
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ScrollTop"
 			_label = "Scroll to top"/>
 	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ScrollBottom"
@@ -1119,7 +1196,12 @@
 			_description = "Animates the text editor caret to help find it"
 			shortcut = "Ctrl||"
 			macShortcut = "Meta||" />
-			
+	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowQuickInfo"
+			_label = "Show quick info"
+			_description = "Shows the tooltip at editor positon"
+			shortcut = "Ctrl|F1"
+			macShortcut = "Meta|F1" />
+
 	<Command id = "MonoDevelop.Ide.Editor.MessageBubbleCommands.Toggle"
 			disabledVisible = "false"
 			_label = "Hide Current Message"
@@ -1135,6 +1217,11 @@
 			defaultHandler = "MonoDevelop.Ide.Editor.ToggleIssuesHandler"
 			_label = "Toggle Issues"
 			type="radio|array"/>
+	<Command id = "MonoDevelop.Ide.Commands.TextEditorCommands.ShowTextMateScopesHandler"
+			defaultHandler = "MonoDevelop.Ide.Editor.TextMate.ShowTextMateScopesHandler"
+			_label = "Show Scopes"
+			macShortcut = "Meta|Alt|Shift|p"
+			shortcut = "Ctrl|Alt|Shift|p"/>
 	</Category>
 </Extension>
 </ExtensionModel>

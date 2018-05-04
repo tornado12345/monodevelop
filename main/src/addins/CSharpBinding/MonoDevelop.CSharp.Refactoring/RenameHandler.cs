@@ -39,6 +39,7 @@ using MonoDevelop.Refactoring.Rename;
 using MonoDevelop.Ide.TypeSystem;
 using System.Threading.Tasks;
 using System.Threading;
+using Microsoft.CodeAnalysis.Rename;
 
 namespace MonoDevelop.CSharp.Refactoring
 {
@@ -49,7 +50,7 @@ namespace MonoDevelop.CSharp.Refactoring
 			var doc = IdeApp.Workbench.ActiveDocument;
 			if (doc == null || doc.FileName == FilePath.Null)
 				return;
-			ci.Enabled = doc.ParsedDocument != null && doc.ParsedDocument.GetAst<SemanticModel> () != null;
+			ci.Enabled = doc.AnalysisDocument != null;
 		}
 
 		internal static bool CanRename (ISymbol symbol)
@@ -84,10 +85,10 @@ namespace MonoDevelop.CSharp.Refactoring
 		internal async Task Run (TextEditor editor, DocumentContext ctx)
 		{
 			var cts = new CancellationTokenSource ();
-			var getSymbolTask = RefactoringSymbolInfo.GetSymbolInfoAsync (ctx, editor, cts.Token);
+			var getSymbolTask = RenameLocations.ReferenceProcessing.GetRenamableSymbolAsync (ctx.AnalysisDocument, editor.CaretOffset, cts.Token);
 			var message = GettextCatalog.GetString ("Resolving symbol…");
 			var info = await MessageService.ExecuteTaskAndShowWaitDialog (getSymbolTask, message, cts);
-			var sym = info.DeclaredSymbol ?? info.Symbol;
+			var sym = info.Symbol;
 			if (!CanRename (sym))
 				return;
 			await new RenameRefactoring ().Rename (sym);

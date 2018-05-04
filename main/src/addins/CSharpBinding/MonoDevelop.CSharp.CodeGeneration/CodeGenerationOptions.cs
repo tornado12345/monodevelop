@@ -23,25 +23,24 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-using System.Linq;
-using MonoDevelop.Ide.Gui;
-using MonoDevelop.Ide;
-using MonoDevelop.Ide.TypeSystem;
-using MonoDevelop.Core;
-using System;
 using System.Threading;
+using System.Threading.Tasks;
+using ICSharpCode.NRefactory6.CSharp;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using System.Threading.Tasks;
-using Microsoft.CodeAnalysis.Text;
-using Microsoft.CodeAnalysis.Simplification;
-using MonoDevelop.Ide.Editor;
-using Microsoft.CodeAnalysis.Options;
-using MonoDevelop.Ide.Gui.Content;
 using Microsoft.CodeAnalysis.Formatting;
-using System.Diagnostics;
-using ICSharpCode.NRefactory6.CSharp;
+using Microsoft.CodeAnalysis.Options;
+using Microsoft.CodeAnalysis.Simplification;
+using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.CSharp.Extensions;
+using MonoDevelop.Core;
 using MonoDevelop.CSharp.Completion;
+using MonoDevelop.Ide;
+using MonoDevelop.Ide.Editor;
+using MonoDevelop.Ide.Gui.Content;
+using MonoDevelop.Ide.TypeSystem;
+using System;
+using MonoDevelop.CSharp;
 
 namespace MonoDevelop.CodeGeneration
 {
@@ -93,19 +92,6 @@ namespace MonoDevelop.CodeGeneration
 			}
 		}
 
-		public OptionSet FormattingOptions
-		{
-			get
-			{
-				var doc = DocumentContext;
-				var policyParent = doc.Project != null ? doc.Project.Policies : null;
-				var types = DesktopService.GetMimeTypeInheritanceChain (Editor.MimeType);
-				var codePolicy = policyParent != null ? policyParent.Get<MonoDevelop.CSharp.Formatting.CSharpFormattingPolicy> (types) : MonoDevelop.Projects.Policies.PolicyService.GetDefaultPolicy<MonoDevelop.CSharp.Formatting.CSharpFormattingPolicy> (types);
-				var textPolicy = policyParent != null ? policyParent.Get<TextStylePolicy> (types) : MonoDevelop.Projects.Policies.PolicyService.GetDefaultPolicy<TextStylePolicy> (types);
-				return codePolicy.CreateOptions (textPolicy);
-			}
-		}
-
 		public SemanticModel CurrentState
 		{
 			get;
@@ -116,8 +102,8 @@ namespace MonoDevelop.CodeGeneration
 		{
 			Editor = editor;
 			DocumentContext = ctx;
-			if (ctx.ParsedDocument != null)
-				CurrentState = ctx.ParsedDocument.GetAst<SemanticModel> ();
+			if (ctx.AnalysisDocument != null)
+				CurrentState = ctx.AnalysisDocument.GetSemanticModelAsync ().WaitAndGetResult ();
 			offset = editor.CaretOffset;
 			var tree = CurrentState.SyntaxTree;
 			EnclosingPart = tree.GetContainingTypeDeclaration (offset, default(CancellationToken));
@@ -138,7 +124,7 @@ namespace MonoDevelop.CodeGeneration
 
 		public string CreateShortType (ITypeSymbol fullType)
 		{
-			return RoslynCompletionData.SafeMinimalDisplayString (fullType, CurrentState, offset);
+			return CSharp.CSharpAmbience.SafeMinimalDisplayString (fullType, CurrentState, offset);
 		}
 
 		public static CodeGenerationOptions CreateCodeGenerationOptions (TextEditor document, DocumentContext ctx)
@@ -148,7 +134,8 @@ namespace MonoDevelop.CodeGeneration
 
 		public async Task<string> OutputNode (SyntaxNode node, CancellationToken cancellationToken = default(CancellationToken))
 		{
-			node = Formatter.Format (node, TypeSystemService.Workspace, FormattingOptions, cancellationToken);
+			var options = await DocumentContext.GetOptionsAsync (cancellationToken);
+			node = Formatter.Format (node, TypeSystemService.Workspace, options, cancellationToken);
 
 			var text = Editor.Text;
 			string nodeText = node.ToString ();

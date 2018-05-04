@@ -72,9 +72,8 @@ namespace MonoDevelop.Xml.Editor
 			XmlSchemaManager.UserSchemaAdded += UserSchemaAdded;
 			XmlSchemaManager.UserSchemaRemoved += UserSchemaRemoved;
 			SetDefaultSchema ();
-			
-			//var view = Document.GetContent<MonoDevelop.SourceEditor.SourceEditorView> ();
-			if (string.IsNullOrEmpty (Editor.MimeType) || Editor.MimeType == "text/plain") {
+
+			if (string.IsNullOrEmpty (Editor.MimeType) || Editor.MimeType == "text/plain" || Editor.MimeType == "application/octet-stream") {
 				Editor.MimeType = ApplicationXmlMimeType;
 				DocumentContext.ReparseDocument ();
 			}
@@ -125,7 +124,7 @@ namespace MonoDevelop.Xml.Editor
 		
 		protected override async Task<CompletionDataList> GetElementCompletions (CancellationToken token)
 		{
-			var list = new CompletionDataList ();
+			CompletionDataList list = null;
 			var path = GetElementPath ();
 
 			if (path.Elements.Count > 0) {
@@ -137,14 +136,17 @@ namespace MonoDevelop.Xml.Editor
 
 					var completionData = await schema.GetChildElementCompletionData (path, token);
 					if (completionData != null)
-						list.AddRange (completionData);
+						list = completionData;
 				}
 
 			} else if (defaultSchemaCompletionData != null) {
-				list.AddRange (await defaultSchemaCompletionData.GetElementCompletionData (defaultNamespacePrefix, token));
+				list = await defaultSchemaCompletionData.GetElementCompletionData (defaultNamespacePrefix, token);
 
 			} else if (inferredCompletionData != null) {
-				list.AddRange (await inferredCompletionData.GetElementCompletionData (token));
+				list = await inferredCompletionData.GetElementCompletionData (token);
+			}
+			if (list == null) {
+				list = new CompletionDataList ();
 			}
 			AddMiscBeginTags (list);
 			return list;
@@ -199,11 +201,8 @@ namespace MonoDevelop.Xml.Editor
 		}
 		
 		/// <summary>
-
 		/// Finds the schema given the xml element path.
-
 		/// </summary>
-
 		public XmlSchemaCompletionData FindSchema (IXmlSchemaCompletionDataCollection schemaCompletionDataItems, XmlElementPath path)
 
 		{
@@ -253,14 +252,10 @@ namespace MonoDevelop.Xml.Editor
 		#region Schema resolution
 		
 		/// <summary>
-
 		/// Gets the XmlSchemaObject that defines the currently selected xml element or attribute.
-
 		/// </summary>
-
 		/// <param name="currentSchemaCompletionData">This is the schema completion data for the schema currently being 
 		/// displayed. This can be null if the document is not a schema.</param>
-
 		public XmlSchemaObject GetSchemaObjectSelected (XmlSchemaCompletionData currentSchemaCompletionData)
 
 		{
@@ -323,29 +318,17 @@ namespace MonoDevelop.Xml.Editor
 		}
 		
 		/// <summary>
-
 		/// If the attribute value found references another item in the schema
-
 		/// return this instead of the attribute schema object. For example, if the
-
 		/// user can select the attribute value and the code will work out the schema object pointed to by the ref
-
 		/// or type attribute:
-
 		///
-
 		/// xs:element ref="ref-name"
-
 		/// xs:attribute type="type-name"
-
 		/// </summary>
-
 		/// <returns>
-
 		/// The <paramref name="attribute"/> if no schema object was referenced.
-
 		/// </returns>
-
 		XmlSchemaObject GetSchemaObjectReferenced (XmlSchemaCompletionData currentSchemaCompletionData, XmlSchemaElement element, XmlSchemaAttribute attribute)
 
 		{
@@ -392,11 +375,8 @@ namespace MonoDevelop.Xml.Editor
 		}
 		
 		/// <summary>
-
 		/// Checks whether the element belongs to the XSD namespace.
-
 		/// </summary>
-
 		static bool IsXmlSchemaNamespace (XmlSchemaElement element)
 
 		{
@@ -414,23 +394,14 @@ namespace MonoDevelop.Xml.Editor
 		}
 		
 		/// <summary>
-
 		/// Attempts to locate the reference name in the specified schema.
-
 		/// </summary>
-
 		/// <param name="name">The reference to look up.</param>
-
 		/// <param name="schemaCompletionData">The schema completion data to use to
-
 		/// find the reference.</param>
-
 		/// <param name="elementName">The element to determine what sort of reference it is
-
 		/// (e.g. group, attribute, element).</param>
-
 		/// <returns><see langword="null"/> if no match can be found.</returns>
-
 		XmlSchemaObject FindSchemaObjectReference(string name, XmlSchemaCompletionData schemaCompletionData, string elementName)
 
 		{
@@ -469,26 +440,15 @@ namespace MonoDevelop.Xml.Editor
 
 		}
 
-		
-
 		/// <summary>
-
 		/// Attempts to locate the type name in the specified schema.
-
 		/// </summary>
-
 		/// <param name="name">The type to look up.</param>
-
 		/// <param name="schemaCompletionData">The schema completion data to use to
-
 		/// find the type.</param>
-
 		/// <param name="elementName">The element to determine what sort of type it is
-
 		/// (e.g. group, attribute, element).</param>
-
 		/// <returns><see langword="null"/> if no match can be found.</returns>
-
 		XmlSchemaObject FindSchemaObjectType(string name, XmlSchemaCompletionData schemaCompletionData, string elementName)
 
 		{
@@ -543,8 +503,7 @@ namespace MonoDevelop.Xml.Editor
 
 		
 
-		/// Updates the default schema association since the schema may have been added.
-
+		// Updates the default schema association since the schema may have been added.
 		void UserSchemaAdded (object source, EventArgs e)
 
 		{	
@@ -554,7 +513,6 @@ namespace MonoDevelop.Xml.Editor
 		
 
 		// Updates the default schema association since the schema may have been removed.
-
 		void UserSchemaRemoved (object source, EventArgs e)
 
 		{
@@ -568,11 +526,8 @@ namespace MonoDevelop.Xml.Editor
 		#region Stylesheet handling
 		
 		/// <summary>
-
 		/// Gets or sets the stylesheet associated with this xml file.
-
 		/// </summary>
-
 		public string StylesheetFileName {
 
 			get { return stylesheetFileName; }

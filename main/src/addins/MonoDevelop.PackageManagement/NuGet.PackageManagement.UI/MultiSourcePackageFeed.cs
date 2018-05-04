@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NuGet.Common;
 using NuGet.Indexing;
+using NuGet.Packaging;
 using NuGet.Protocol.Core.Types;
 
 namespace NuGet.PackageManagement.UI
@@ -156,6 +157,11 @@ namespace NuGet.PackageManagement.UI
 				              .ToDictionary(kv => kv.Key, kv => GetLoadingStatus(kv.Value.Status)));
 			}
 
+			// Observe the aggregate task exception to prevent an unhandled exception.
+			// The individual task exceptions are logged in LogError and will be reported
+			// in the Add Packages dialog.
+			var ex = aggregatedTask.Exception;
+
 			return aggregated;
 		}
 
@@ -199,7 +205,7 @@ namespace NuGet.PackageManagement.UI
 				var items = nonEmptyResults.Select(r => r.Items).ToArray();
 
 				var indexer = new RelevanceSearchResultsIndexer();
-				var aggregator = new SearchResultsAggregator(indexer);
+				var aggregator = new SearchResultsAggregator(indexer, new PackageSearchMetadataSplicer());
 				var aggregatedItems = await aggregator.AggregateAsync(
 					searchText, items);
 

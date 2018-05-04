@@ -15,7 +15,7 @@ namespace MonoDevelop.ConnectedServices
 	/// <summary>
 	/// Defines a set of constants for the Connected Services addin
 	/// </summary>
-	static class ConnectedServices
+	public static class ConnectedServices
 	{
 		/// <summary>
 		/// The extension point for service providers
@@ -25,13 +25,13 @@ namespace MonoDevelop.ConnectedServices
 		/// <summary>
 		/// The name of the node to display in the solution tree
 		/// </summary>
-		internal const string SolutionTreeNodeName = "Service Capabilities";
+		internal static string SolutionTreeNodeName = GettextCatalog.GetString ("Connected Services");
 
 		/// <summary>
 		/// The name of the folder that is used to store state about each connected service
 		/// that has been added to the project
 		/// </summary>
-		internal const string ProjectStateFolderName = "Service Capabilities";
+		internal const string ProjectStateFolderName = "Connected Services";
 
 		/// <summary>
 		/// The name of the .json file that is stored in the ProjectStateFolderName/&lt;ServiceId&gt; folder.
@@ -41,7 +41,7 @@ namespace MonoDevelop.ConnectedServices
 		/// <summary>
 		/// The name of the Getting Started section that is displayed to the user
 		/// </summary>
-		internal const string GettingStartedSectionDisplayName = "Getting Started";
+		internal static string GettingStartedSectionDisplayName = GettextCatalog.GetString ("Getting Started");
 
 		/// <summary>
 		/// Gets the list of IConnectedService instances that support project
@@ -64,8 +64,11 @@ namespace MonoDevelop.ConnectedServices
 		/// <summary>
 		/// Displays the service details tab for the given service in the given project
 		/// </summary>
-		public static void OpenServicesTab(DotNetProject project, string serviceId = null)
+		internal static void OpenServicesTab(DotNetProject project, string serviceId)
 		{
+			if (project == null)
+				project = IdeApp.ProjectOperations.CurrentSelectedProject as DotNetProject;
+
 			ConnectedServicesViewContent servicesView = null;
 
 			foreach (var view in IdeApp.Workbench.Documents) {
@@ -80,6 +83,28 @@ namespace MonoDevelop.ConnectedServices
 			servicesView = new ConnectedServicesViewContent (project);
 			servicesView.UpdateContent (serviceId);
 			IdeApp.Workbench.OpenDocument (servicesView, true);
+		}
+
+		/// <summary>
+		/// Displays the service details tab for the given service
+		/// </summary>
+		public static Task OpenServicesTab (this IConnectedService service)
+		{
+			if (service == null)
+				throw new ArgumentNullException (nameof (service));
+
+			return Runtime.RunInMainThread (() => OpenServicesTab (service.Project, service.Id));
+		}
+
+		/// <summary>
+		/// Displays the services gallery tab for the given project
+		/// </summary>
+		public static Task OpenServicesTab (this DotNetProject project)
+		{
+			if (project == null)
+				throw new ArgumentNullException (nameof (project));
+
+			return Runtime.RunInMainThread (() => OpenServicesTab (project, null));
 		}
 
 		/// <summary>
@@ -175,7 +200,7 @@ namespace MonoDevelop.ConnectedServices
 					if (service.Dependencies [i].Category == ConnectedServiceDependency.PackageDependencyCategory) {
 						if (i > 0)
 							sb.AppendLine ();
-						sb.Append ("   • " + service.Dependencies [i].DisplayName);
+						sb.Append ("   • ").Append (service.Dependencies [i].DisplayName);
 					}
 				}
 				sb.Append ("\n\n");

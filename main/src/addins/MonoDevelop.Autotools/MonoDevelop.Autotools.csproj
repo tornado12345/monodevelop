@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <Import Project="..\..\..\MonoDevelop.props" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -9,7 +10,7 @@
     <OutputType>Library</OutputType>
     <AssemblyName>MonoDevelop.Autotools</AssemblyName>
     <RootNamespace>MonoDevelop.Autotools</RootNamespace>
-    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>True</DebugSymbols>
@@ -70,22 +71,16 @@
   <ItemGroup>
     <Reference Include="Mono.Posix" />
     <Reference Include="System" />
-    <Reference Include="pango-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
-    <Reference Include="atk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
-    <Reference Include="gdk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
-    <Reference Include="gtk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
-    <Reference Include="glib-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
+    <Reference Include="pango-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
+    <Reference Include="atk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
+    <Reference Include="gdk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
+    <Reference Include="gtk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
+    <Reference Include="glib-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
     <Reference Include="System.Xml" />
+    <Reference Include="System.Collections.Immutable">
+      <HintPath>..\..\..\build\bin\System.Collections.Immutable.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.cs" />
@@ -101,7 +96,6 @@
     <Compile Include="SolutionDeployer.cs" />
     <Compile Include="SolutionMakefileHandler.cs" />
     <Compile Include="TemplateEngine.cs" />
-    <Compile Include="gtk-gui\generated.cs" />
     <Compile Include="CustomMakefile.cs" />
     <Compile Include="MakefileGeneratorTool.cs" />
     <Compile Include="MakefileOptionPanelWidget.cs" />
@@ -114,18 +108,18 @@
     <Compile Include="FileNodeBuilderExtension.cs" />
     <Compile Include="TarballBuilderEditorWidget.cs" />
     <Compile Include="MakefileIntegrationFeatureWidget.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Autotools.MakefileOptionPanelWidget.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Autotools.TarballBuilderEditorWidget.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Autotools.MakefileIntegrationFeatureWidget.cs" />
     <Compile Include="PropertyProvider.cs" />
     <Compile Include="GenerateMakefilesDialog.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Autotools.GenerateMakefilesDialog.cs" />
     <Compile Include="MakefileSwitchEditorWidget.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Autotools.MakefileSwitchEditorWidget.cs" />
     <Compile Include="MakefileSwitchEditor.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Autotools.MakefileSwitchEditor.cs" />
     <Compile Include="Switch.cs" />
     <Compile Include="AddinInfo.cs" />
+    <Compile Include="Gui\MonoDevelop.Autotools.GenerateMakefilesDialog.cs" />
+    <Compile Include="Gui\MonoDevelop.Autotools.MakefileIntegrationFeatureWidget.cs" />
+    <Compile Include="Gui\MonoDevelop.Autotools.MakefileOptionPanelWidget.cs" />
+    <Compile Include="Gui\MonoDevelop.Autotools.MakefileSwitchEditor.cs" />
+    <Compile Include="Gui\MonoDevelop.Autotools.MakefileSwitchEditorWidget.cs" />
+    <Compile Include="Gui\MonoDevelop.Autotools.TarballBuilderEditorWidget.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Makefile.am" />
@@ -169,12 +163,12 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="gtk-gui\gui.stetic">
-      <LogicalName>gui.stetic</LogicalName>
-    </EmbeddedResource>
     <EmbeddedResource Include="MonoDevelop.Autotools.addin.xml">
       <LogicalName>MonoDevelop.Autotools.addin.xml</LogicalName>
     </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Gui\" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
 </Project>

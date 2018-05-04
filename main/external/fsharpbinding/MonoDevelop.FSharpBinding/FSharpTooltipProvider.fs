@@ -9,6 +9,7 @@ open System.Threading.Tasks
 open MonoDevelop
 open MonoDevelop.Core
 open MonoDevelop.Components
+open MonoDevelop.FSharp.Shared
 open MonoDevelop.Ide
 open MonoDevelop.Ide.CodeCompletion
 open MonoDevelop.Ide.Editor
@@ -46,9 +47,9 @@ type FSharpTooltipProvider() =
             let doc = IdeApp.Workbench.ActiveDocument
             if doc = null then noTooltip else
 
-            let file = doc.FileName.FullPath.ToString()
+            let file = doc.FileName.FullPath
 
-            if not (FileService.supportedFileName file) then noTooltip else
+            if not (FileService.supportedFilePath file) then noTooltip else
 
             let source = editor.Text
             if source = null || offset >= source.Length || offset < 0 then noTooltip else
@@ -61,22 +62,24 @@ type FSharpTooltipProvider() =
                 asyncChoice {
                     try
                         LoggingService.LogDebug "TooltipProvider: Getting tool tip"
-                        let projectFile = context.Project |> function null -> file | project -> project.FileName.ToString()
-                        let! parseAndCheckResults =
-                            languageService.GetTypedParseResultIfAvailable (projectFile, file, source, AllowStaleResults.MatchingSource)
-                            |> Choice.ofOptionWith "TooltipProvider: ParseAndCheckResults not found"
-                        let! symbol = parseAndCheckResults.GetSymbolAtLocation(line, col, lineStr) |> AsyncChoice.ofOptionWith "TooltipProvider: ParseAndCheckResults not found"
-                        let! signature, xmldoc, footer = 
-                            SymbolTooltips.getTooltipFromSymbolUse symbol
-                            |> Choice.ofOptionWith (sprintf "TooltipProvider: TootipText not returned\n   %s\n   %s" lineStr (String.replicate col "-" + "^"))
-                        
-                        let highlightedTip = syntaxHighlight signature, xmldoc, footer
 
-                        //get the TextSegment the the symbols range occupies
-                        let textSeg = Symbols.getTextSegment editor symbol col lineStr
+                        let parseAndCheckResults = context.TryGetAst()
+                        match parseAndCheckResults with
+                        | Some ast ->
+                            let! symbol = ast.GetSymbolAtLocation(line, col, lineStr) |> AsyncChoice.ofOptionWith "TooltipProvider: ParseAndCheckResults not found"
+                            let! signature, xmldoc, footer =
+                                SymbolTooltips.getTooltipFromSymbolUse symbol
+                                |> Choice.ofOptionWith (sprintf "TooltipProvider: TootipText not returned\n   %s\n   %s" lineStr (String.replicate col "-" + "^"))
 
-                        let tooltipItem = TooltipItem(highlightedTip, textSeg)
-                        return tooltipItem
+                            let highlightedTip = syntaxHighlight signature, xmldoc, footer
+
+                            //get the TextSegment the the symbols range occupies
+                            let textSeg = Symbols.getTextSegment editor symbol col lineStr
+
+                            let tooltipItem = TooltipItem(highlightedTip, textSeg)
+                            return tooltipItem
+                        | None ->
+                            return! AsyncChoice.error "TooltipProvider: ParseAndCheckResults not found"
 
                     with
                     | :? TimeoutException -> return! AsyncChoice.error "TooltipProvider: timeout"
@@ -88,14 +91,16 @@ type FSharpTooltipProvider() =
                 Task.FromResult keywordTip
             | None ->
 
-            Async.StartAsTask(
-                async {
+            async {
 
                     let! tooltipResult = tooltipComputation
                     match tooltipResult with
                     | Success(tip) -> return tip
                     | Operators.Error(warning) -> LoggingService.LogWarning warning
-                                                  return Unchecked.defaultof<_> }, cancellationToken = cancellationToken)
+                                                  return Unchecked.defaultof<_> 
+            }
+            |> StartAsyncAsTask cancellationToken
+                                                  
 
         with exn ->
             LoggingService.LogError ("TooltipProvider: Error retrieving tooltip", exn)
@@ -112,7 +117,7 @@ type FSharpTooltipProvider() =
                 toolTipInfo.SummaryMarkup <- formattedSummary
             result.AddOverload(toolTipInfo)
             result.RepositionWindow ()
-            Control.op_Implicit result
+            Window.op_Implicit result
 
     interface IDisposable with
         member x.Dispose() = killTooltipWindow()

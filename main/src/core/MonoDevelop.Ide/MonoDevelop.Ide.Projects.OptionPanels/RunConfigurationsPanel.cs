@@ -35,7 +35,6 @@ using MonoDevelop.Core;
 using MonoDevelop.Projects.Policies;
 using MonoDevelop.Components;
 using System.Linq;
-using RefactoringEssentials.CSharp.Diagnostics;
 using Xwt.Backends;
 using Xwt;
 
@@ -164,7 +163,7 @@ namespace MonoDevelop.Ide.Projects.OptionPanels
 		{
 			this.RunConfiguration = configInfo.EditedConfig;
 			Label = configInfo.EditedConfig.Name;
-			HeaderLabel = GettextCatalog.GetString ("Run Configuration: " + configInfo.EditedConfig.Name);
+			HeaderLabel = GettextCatalog.GetString ("Run Configuration: {0}", configInfo.EditedConfig.Name);
 			Icon = "md-prefs-play";
 		}
 		

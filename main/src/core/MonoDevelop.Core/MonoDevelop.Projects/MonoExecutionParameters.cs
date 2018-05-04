@@ -131,6 +131,19 @@ namespace MonoDevelop.Projects
 			SGen
 		}
 
+		public enum RuntimeArchitecture
+		{
+			[MonoArg (null)]
+			[LocalizedDescription ("Default")]
+			Default,
+			[LocalizedDescription ("32-bit")]
+			[MonoArg ("32")]
+			b32,
+			[LocalizedDescription ("64-bit")]
+			[MonoArg ("64")]
+			b64
+		}
+
 		static Dictionary<PropertyInfo, ItemPropertyAttribute> itemPropertyAttributes = new Dictionary<PropertyInfo, ItemPropertyAttribute> ();
 		static Dictionary<PropertyInfo, MonoArgAttribute> monoArgAttributes = new Dictionary<PropertyInfo, MonoArgAttribute> ();
 		static Dictionary<PropertyInfo, EnvVarAttribute> envVarAttributes = new Dictionary<PropertyInfo, EnvVarAttribute> ();
@@ -159,6 +172,11 @@ namespace MonoDevelop.Projects
 
 		public MonoExecutionParameters ()
 		{
+			ResetProperties ();
+		}
+
+		public void ResetProperties ()
+		{
 			foreach (var kvp in itemPropertyAttributes) {
 				var prop = kvp.Key;
 				var propAttr = kvp.Value;
@@ -166,7 +184,7 @@ namespace MonoDevelop.Projects
 					prop.SetValue (this, propAttr.DefaultValue, null);
 			}
 		}
-		
+
 		public void GenerateOptions (IDictionary<string,string> envVars, out string options)
 		{
 			StringBuilder ops = new StringBuilder ();
@@ -202,6 +220,8 @@ namespace MonoDevelop.Projects
 				else if ((val is string) && !string.IsNullOrEmpty ((string)val))
 					ops.AppendFormat (argAttr.Name, val).Append (' ');
 			}
+			if (ops.Length > 0)
+				ops.Remove (ops.Length - 1, 1);
 
 			foreach (var kvp in envVarAttributes) {
 				var prop = kvp.Key;
@@ -213,7 +233,7 @@ namespace MonoDevelop.Projects
 				else if ((val is string) && !string.IsNullOrEmpty ((string)val))
 					envVars [envVar.Name] = val.ToString ();
 			}
-			options = ops.ToString ().Trim ();
+			options = ops.ToString ();
 		}
 		
 		object GetValue (object val)
@@ -222,7 +242,9 @@ namespace MonoDevelop.Projects
 			if (etype.IsEnum) {
 				long ival = Convert.ToInt64 (val);
 				bool isFlags = etype.IsDefined (typeof(FlagsAttribute), false);
-				string flags = "";
+				StringBuilder flags = null;
+				if (isFlags)
+					flags = new StringBuilder ();
 				IList names = Enum.GetNames (etype);
 				foreach (FieldInfo f in etype.GetFields ()) {
 					if (!names.Contains (f.Name))
@@ -235,19 +257,19 @@ namespace MonoDevelop.Projects
 					}
 					else if (isFlags && (v & ival) != 0) {
 						if (flags.Length > 0)
-							flags += ",";
-						flags += sval;
+							flags.Append (',');
+						flags.Append (sval);
 					}
 				}
 				if (isFlags)
-					return flags;
+					return flags.ToString ();
 			}
 			return val;
 		}
 
 		public string GenerateDescription ()
 		{
-			StringBuilder ops = new StringBuilder ();
+			StringBuilder ops = StringBuilderCache.Allocate ();
 
 			foreach (var kvp in itemPropertyAttributes) {
 				var prop = kvp.Key;
@@ -260,10 +282,11 @@ namespace MonoDevelop.Projects
 					ops.Append (", ");
 				var nameAttr = localizedDisplayNameAttributes [prop];
 				ops.Append (nameAttr.DisplayName);
-				if (!(pval is bool))
-					ops.Append (": " + GetValue (pval));
+				if (!(pval is bool)) {
+					ops.Append (": ").Append (GetValue (pval));
+				}
 			}
-			return ops.ToString ();
+			return StringBuilderCache.ReturnAndFree (ops);
 		}		
 		public MonoExecutionParameters Clone ()
 		{
@@ -329,14 +352,14 @@ namespace MonoDevelop.Projects
 		[LocalizedDisplayName ("Verify All")]
 		[LocalizedDescription ("Verifies mscorlib and assemblies in the global assembly cache " +
 		              "for valid IL, and all user code for IL verifiability.")]
-		[MonoArg ("--verifyAll")]
+		[MonoArg ("--verify-all")]
 		[ItemProperty (DefaultValue=false)]
 		public bool MonoVerifyAll { get; set; }
 		
 		[LocalizedCategory ("Tracing")]
 		[LocalizedDisplayName ("Trace Expression")]
 		[LocalizedDescription ("Comma separated list of expressions to trace. " +
-		              "'all' all assemlies, " +
+		              "'all' all assemblies, " +
 		              "'none' no assemblies, " +
 		              "'program' entry point assembly, " +
 		              "'assembly' specifies an assembly, " +
@@ -584,5 +607,27 @@ namespace MonoDevelop.Projects
 		[MonoArg ("{0}")]
 		[ItemProperty (DefaultValue="")]
 		public string MonoAdditionalOptions { get; set; }
+
+		[LocalizedCategory ("Runtime")]
+		[LocalizedDisplayName ("Architecture")]
+		[LocalizedDescription ("Selects the bitness of the Mono binary used, if available. If the binary used is already for the selected bitness, nothing changes. If not, the execution switches to a binary with the selected bitness suffix installed side by side (architecture=64 will switch to '/bin/mono64' if '/bin/mono' is a 32-bit build).")]
+		[MonoArg ("--arch={0}")]
+		[ItemProperty ("MonoArchitecture", DefaultValue = RuntimeArchitecture.Default)]
+		public RuntimeArchitecture Architecture { get; set; }
+
+		string legacyArchitecture;
+		[ItemProperty("Architecture", DefaultValue = null)]
+		internal string LegacyArchitecture {
+			get { return legacyArchitecture; }
+			set {
+				legacyArchitecture = value;
+
+				// The Architecture property is now serialized as "MonoArchitecture" to avoid conflicts with existing MSBuild properties.
+				// If the value being read from the "Architecture" property is a valid value for the Mono architecture, then let's assume
+				// that the property is actually the Mono architecture, and set it to the right property.
+				if (Enum.TryParse<RuntimeArchitecture>(value, out RuntimeArchitecture arch) && arch != RuntimeArchitecture.Default)
+					Architecture = arch;
+			}
+		}
 	}
 }

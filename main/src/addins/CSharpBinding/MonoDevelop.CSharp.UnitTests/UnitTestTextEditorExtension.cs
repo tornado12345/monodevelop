@@ -46,15 +46,28 @@ namespace MonoDevelop.CSharp
 	class UnitTestTextEditorExtension : AbstractUnitTestTextEditorExtension
 	{
 		static readonly IList<UnitTestLocation> emptyList = new UnitTestLocation[0];
-		public override Task<IList<UnitTestLocation>> GatherUnitTests (IUnitTestMarkers[] unitTestMarkers, CancellationToken token)
+
+		static bool HasMethodMarkerAttribute (SemanticModel model, IUnitTestMarkers[] markers)
 		{
-			var parsedDocument = DocumentContext.ParsedDocument;
-			if (parsedDocument == null)
-				return Task.FromResult (emptyList);
+			var compilation = model.Compilation;
+			foreach (var marker in markers)
+				if (compilation.GetTypeByMetadataName (marker.TestMethodAttributeMarker) != null)
+					return true;
+			return false;
+		}
+
+		public override async Task<IList<UnitTestLocation>> GatherUnitTests (IUnitTestMarkers[] unitTestMarkers, CancellationToken token)
+		{
+			var analysisDocument = DocumentContext.AnalysisDocument;
+			if (analysisDocument == null)
+				return emptyList;
 			
-			var semanticModel = parsedDocument.GetAst<SemanticModel> ();
+			var semanticModel = await analysisDocument.GetSemanticModelAsync (token);
 			if (semanticModel == null)
-				return Task.FromResult (emptyList);
+				return emptyList;
+
+			if (!HasMethodMarkerAttribute (semanticModel, unitTestMarkers))
+				return emptyList;
 
 			var visitor = new NUnitVisitor (semanticModel, unitTestMarkers, token);
 			try {
@@ -63,9 +76,9 @@ namespace MonoDevelop.CSharp
 				throw;
 			}catch (Exception ex) {
 				LoggingService.LogError ("Exception while analyzing ast for unit tests.", ex);
-				return Task.FromResult (emptyList);
+				return emptyList;
 			}
-			return Task.FromResult (visitor.FoundTests);
+			return visitor.FoundTests;
 		}
 
 		class NUnitVisitor : CSharpSyntaxWalker
@@ -123,7 +136,7 @@ namespace MonoDevelop.CSharp
 
 			static string BuildArguments (AttributeData attr)
 			{
-				var sb = new StringBuilder ();
+				var sb = StringBuilderCache.Allocate ();
 				ImmutableArray<TypedConstant> args;
 				if (attr.ConstructorArguments.Length == 1 && attr.ConstructorArguments [0].Kind == TypedConstantKind.Array)
 					args = attr.ConstructorArguments [0].Values;
@@ -137,7 +150,7 @@ namespace MonoDevelop.CSharp
 
 					AddArgument (args [i], sb);
 				}
-				return sb.ToString ();
+				return StringBuilderCache.ReturnAndFree (sb);
 			}
 
 			static void AddArgument(TypedConstant arg, StringBuilder sb)

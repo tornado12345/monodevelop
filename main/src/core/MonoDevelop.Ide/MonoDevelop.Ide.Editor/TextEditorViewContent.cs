@@ -48,6 +48,7 @@ using Microsoft.CodeAnalysis;
 using Gdk;
 using MonoDevelop.Ide.CodeFormatting;
 using System.Collections.Immutable;
+using Microsoft.VisualStudio.CodingConventions;
 
 namespace MonoDevelop.Ide.Editor
 {
@@ -73,8 +74,21 @@ namespace MonoDevelop.Ide.Editor
 			this.textEditor.MimeTypeChanged += UpdateTextEditorOptions;
 			DefaultSourceEditorOptions.Instance.Changed += UpdateTextEditorOptions;
 			textEditorImpl.ViewContent.ContentNameChanged += ViewContent_ContentNameChanged;
-			textEditorImpl.ViewContent.DirtyChanged += ViewContent_DirtyChanged; ;
+			textEditorImpl.ViewContent.DirtyChanged += ViewContent_DirtyChanged; 
 
+		}
+
+		protected override void OnContentNameChanged ()
+		{
+			base.OnContentNameChanged ();
+			if (ContentName != textEditorImpl.ContentName && !string.IsNullOrEmpty (textEditorImpl.ContentName))
+				AutoSave.RemoveAutoSaveFile (textEditorImpl.ContentName);
+			if (textEditorImpl.ContentName != null)
+				EditorConfigService.RemoveEditConfigContext (textEditorImpl.ContentName);
+			textEditorImpl.ContentName = this.ContentName;
+			if (this.WorkbenchWindow?.Document != null)
+				textEditor.InitializeExtensionChain (this.WorkbenchWindow.Document);
+			UpdateTextEditorOptions (null, null);
 		}
 
 		void ViewContent_ContentNameChanged (object sender, EventArgs e)
@@ -111,11 +125,11 @@ namespace MonoDevelop.Ide.Editor
 				return;
 			RemoveAutoSaveTimer ();
 			autoSaveTimer = GLib.Timeout.Add (500, delegate {
+				autoSaveTimer = 0;
 				if (autoSaveTask != null && !autoSaveTask.IsCompleted)
 					return false;
 
 				autoSaveTask = AutoSave.InformAutoSaveThread (textEditor.CreateSnapshot (), textEditor.FileName, IsDirty);
-				autoSaveTimer = 0;
 				return false;
 			});
 		}
@@ -135,7 +149,7 @@ namespace MonoDevelop.Ide.Editor
 				policyContainer.PolicyChanged -= HandlePolicyChanged;
 		}
 
-		void UpdateStyleParent (MonoDevelop.Projects.Project styleParent, string mimeType)
+		async Task UpdateStyleParent (MonoDevelop.Projects.Project styleParent, string mimeType)
 		{
 			RemovePolicyChangeHandler ();
 
@@ -151,7 +165,13 @@ namespace MonoDevelop.Ide.Editor
 			var currentPolicy = policyContainer.Get<TextStylePolicy> (mimeTypes);
 
 			policyContainer.PolicyChanged += HandlePolicyChanged;
-			textEditor.Options = DefaultSourceEditorOptions.Instance.WithTextStyle (currentPolicy);
+
+			var context = await EditorConfigService.GetEditorConfigContext (textEditor.FileName, default (CancellationToken));
+			if (context == null)
+				return;
+			var options = DefaultSourceEditorOptions.Instance.WithTextStyle (currentPolicy);
+			options.SetContext (context);
+			textEditor.Options = options;
 		}
 
 		void HandlePolicyChanged (object sender, MonoDevelop.Projects.Policies.PolicyChangedEventArgs args)
@@ -215,7 +235,6 @@ namespace MonoDevelop.Ide.Editor
 				var res = await TextFileUtility.GetTextAsync (content);
 				text = textEditor.Text = res.Text;
 				textEditor.Encoding = res.Encoding;
-				textEditor.UseBOM = res.HasBom;
 			}
 			await RunFirstTimeFoldUpdate (text);
 			textEditorImpl.InformLoadComplete ();
@@ -300,6 +319,12 @@ namespace MonoDevelop.Ide.Editor
 			}
 		}
 
+		public override string TabAccessibilityDescription {
+			get {
+				return textEditorImpl.ViewContent.TabAccessibilityDescription;
+			}
+		}
+
 		public override bool IsDirty {
 			get { return textEditorImpl.ViewContent.IsDirty; }
 			set {
@@ -321,6 +346,7 @@ namespace MonoDevelop.Ide.Editor
 			base.Dispose ();
 
 			isDisposed = true;
+			EditorConfigService.RemoveEditConfigContext (textEditor.FileName);
 			CancelDocumentParsedUpdate ();
 			textEditorImpl.ViewContent.DirtyChanged -= HandleDirtyChanged;
 			textEditor.MimeTypeChanged -= UpdateTextEditorOptions;
@@ -331,6 +357,7 @@ namespace MonoDevelop.Ide.Editor
 			DefaultSourceEditorOptions.Instance.Changed -= UpdateTextEditorOptions;
 			RemovePolicyChangeHandler ();
 			RemoveAutoSaveTimer ();
+			textEditor.Dispose ();
 		}
 
 		#endregion

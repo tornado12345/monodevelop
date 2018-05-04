@@ -23,22 +23,24 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
-using MonoDevelop.Ide.Gui.Dialogs;
-using Gtk;
-using MonoDevelop.Core;
-using System.Linq;
-using MonoDevelop.Refactoring;
 using System.Collections.Generic;
-using GLib;
-using MonoDevelop.Components;
+using System.Globalization;
+using System.Linq;
 using Gdk;
-using MonoDevelop.Ide.Editor;
-using MonoDevelop.CodeActions;
+using GLib;
+using Gtk;
 using Microsoft.CodeAnalysis;
-using MonoDevelop.SourceEditor.QuickTasks;
-using MonoDevelop.Ide.TypeSystem;
+using Microsoft.CodeAnalysis.Diagnostics;
+using MonoDevelop.AnalysisCore;
+using MonoDevelop.CodeActions;
+using MonoDevelop.Components;
+using MonoDevelop.Core;
 using MonoDevelop.Ide;
+using MonoDevelop.Ide.Gui.Dialogs;
+using MonoDevelop.Ide.TypeSystem;
+using MonoDevelop.SourceEditor.QuickTasks;
 
 namespace MonoDevelop.CodeIssues
 {
@@ -75,24 +77,36 @@ namespace MonoDevelop.CodeIssues
 	partial class CodeIssuePanelWidget : Bin
 	{
 		readonly string mimeType;
-		readonly TreeStore treeStore = new TreeStore (typeof(string), typeof(Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>), typeof (string));
+		readonly TreeStore treeStore = new TreeStore (typeof(string), typeof(Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>), typeof (string), typeof (string));
 		readonly Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, DiagnosticSeverity?> severities = new Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, DiagnosticSeverity?> ();
 		readonly Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, bool> enableState = new Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, bool> ();
 
+		static MonoDevelopWorkspaceDiagnosticAnalyzerProviderService.OptionsTable options =
+			((MonoDevelopWorkspaceDiagnosticAnalyzerProviderService)Ide.Composition.CompositionManager.GetExportedValue<IWorkspaceDiagnosticAnalyzerProviderService> ()).Options; 
+		
 		void GetAllSeverities ()
 		{
-			foreach (var node in BuiltInCodeDiagnosticProvider.GetBuiltInCodeDiagnosticDecsriptorsAsync (CodeRefactoringService.MimeTypeToLanguage (mimeType), true).Result) {
-				var root = new Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor> (node, null);
-				severities [root] = node.DiagnosticSeverity;
-				enableState [root] = node.IsEnabled;
-				if (node.GetProvider ().SupportedDiagnostics.Length > 1) {
-					foreach (var subIssue in node.GetProvider ().SupportedDiagnostics) {
-						var sub = new Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor> (node, subIssue);
-						severities [sub] = node.GetSeverity (subIssue);
-						enableState [sub] = node.GetIsEnabled (subIssue);
-					}
+			var language = CodeRefactoringService.MimeTypeToLanguage (mimeType);
+			foreach (var node in options.AllDiagnostics) {
+				if (!node.Languages.Contains (language))
+					continue;
+				
+				foreach (var subIssue in node.GetProvider ().SupportedDiagnostics.Where (IsConfigurable).ToList ()) {
+					var sub = new Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor> (node, subIssue);
+					severities [sub] = node.GetSeverity (subIssue);
+					enableState [sub] = node.GetIsEnabled (subIssue);
 				}
 			}
+		}
+
+		static bool IsConfigurable (DiagnosticDescriptor desc)
+		{
+			return !DescriptorHasTag (desc, WellKnownDiagnosticTags.NotConfigurable);
+		}
+
+		static bool DescriptorHasTag (DiagnosticDescriptor desc, string tag)
+		{
+			return desc.CustomTags.Any (c => CultureInfo.InvariantCulture.CompareInfo.Compare (c, tag) == 0);
 		}
 
 		public void SelectCodeIssue (string idString)
@@ -128,7 +142,7 @@ namespace MonoDevelop.CodeIssues
 		{
 			switch (severity) {
 			case DiagnosticSeverity.Hidden:
-				return GettextCatalog.GetString ("Do not show");
+				return GettextCatalog.GetString ("Hide");
 			case DiagnosticSeverity.Error:
 				return GettextCatalog.GetString ("Error");
 			case DiagnosticSeverity.Warning:
@@ -150,7 +164,7 @@ namespace MonoDevelop.CodeIssues
 			case DiagnosticSeverity.Info:
 				return QuickTaskOverviewMode.SuggestionImage;
 			default:
-				return QuickTaskOverviewMode.OkImage;
+				return QuickTaskOverviewMode.HideImage;
 			}
 		}
 
@@ -159,25 +173,26 @@ namespace MonoDevelop.CodeIssues
 			categories.Clear ();
 			treeStore.Clear ();
 			var grouped = severities.Keys
-				.Where (node => node.Item2 == null && (string.IsNullOrEmpty (filter) || node.Item1.Name.IndexOf (filter, StringComparison.OrdinalIgnoreCase) > 0))
-				.GroupBy (node => node.Item1.GetProvider ().SupportedDiagnostics.First ().Category)
+				.GroupBy (node => node.Item2.Category)
 				.OrderBy (g => g.Key, StringComparer.Ordinal);
 
 			foreach (var g in grouped) {
-				TreeIter categoryIter = treeStore.AppendValues ("<b>" + g.Key + "</b>", null, null);
-				categories [g.Key] = categoryIter;
-
-				foreach (var node in g.OrderBy (n => n.Item1.Name, StringComparer.Ordinal)) {
-					var title = node.Item1.Name;
-					MarkupSearchResult (filter, ref title);
-					var nodeIter = treeStore.AppendValues (categoryIter, title, node, Ambience.EscapeText (node.Item1.Name));
-					if (node.Item1.GetProvider ().SupportedDiagnostics.Length > 1) {
-						foreach (var subIssue in node.Item1.GetProvider ().SupportedDiagnostics) {
-							title = subIssue.Title.ToString ();
-							MarkupSearchResult (filter, ref title);
-							treeStore.AppendValues (nodeIter, title, new Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>(node.Item1, subIssue), Ambience.EscapeText (node.Item1.Name));
-						}
+				foreach (var node in g.OrderBy (n => n.Item2.Title.ToString(), StringComparer.CurrentCulture)) {
+					var title = GettextCatalog.GetString ("{0} ({1})", node.Item2.Title, node.Item2.Id);
+					if (!string.IsNullOrEmpty (filter) && title.IndexOf (filter, StringComparison.CurrentCultureIgnoreCase) < 0) {
+						continue;
 					}
+					TreeIter categoryIter;
+					if (!categories.TryGetValue (g.Key, out categoryIter)) {
+						categoryIter = treeStore.AppendValues ("<b>" + g.Key + "</b>", null, null, null);
+						categories [g.Key] = categoryIter;
+					}
+					var desc = node.Item2.Description.ToString ();
+					if (string.IsNullOrEmpty (desc)) {
+						desc = title;
+					}
+					MarkupSearchResult (filter, ref title);
+					var nodeIter = treeStore.AppendValues (categoryIter, title, node, Ambience.EscapeText (title), Ambience.EscapeText (desc));
 				}
 			}
 			treeviewInspections.ExpandAll ();
@@ -223,6 +238,11 @@ namespace MonoDevelop.CodeIssues
 			}
 		}
 
+		CellRendererToggle toggleRenderer = new CellRendererToggle ();
+		CustomCellRenderer comboRenderer = new CustomCellRenderer {
+			Alignment = Pango.Alignment.Center
+		};
+
 		public CodeIssuePanelWidget (string mimeType)
 		{
 			this.mimeType = mimeType;
@@ -237,17 +257,10 @@ namespace MonoDevelop.CodeIssues
 					treeviewInspections.ScrollToCell (path, treeviewInspections.Columns[0], false, 0f, 0f);
 				}
 			};
-			treeviewInspections.TooltipColumn = 2;
+			treeviewInspections.TooltipColumn = 3;
 			treeviewInspections.HasTooltip = true;
 
-			var toggleRenderer = new CellRendererToggle ();
-			toggleRenderer.Toggled += delegate(object o, ToggledArgs args) {
-				TreeIter iter;
-				if (treeStore.GetIterFromString (out iter, args.Path)) {
-					var provider = (Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>)treeStore.GetValue (iter, 1);
-					enableState[provider] = !enableState[provider];
-				}
-			};
+			toggleRenderer.Toggled += OnTitleToggled;
 
 			var titleCol = new TreeViewColumn ();
 			treeviewInspections.AppendColumn (titleCol);
@@ -271,9 +284,6 @@ namespace MonoDevelop.CodeIssues
 			searchentryFilter.Entry.Changed += ApplyFilter;
 
 
-			var comboRenderer = new CustomCellRenderer {
-				Alignment = Pango.Alignment.Center
-			};
 			var col = treeviewInspections.AppendColumn ("Severity", comboRenderer);
 			col.Sizing = TreeViewColumnSizing.GrowOnly;
 			col.MinWidth = 100;
@@ -290,31 +300,54 @@ namespace MonoDevelop.CodeIssues
 
 			comboRenderer.Editable = true;
 			comboRenderer.HasEntry = false;
-			
-			comboRenderer.Edited += delegate(object o, EditedArgs args) {
-				TreeIter iter;
-				if (!treeStore.GetIterFromString (out iter, args.Path))
-					return;
 
-				TreeIter storeIter;
-				if (!comboBoxStore.GetIterFirst (out storeIter))
-					return;
-				do {
-					if ((string)comboBoxStore.GetValue (storeIter, 0) == args.NewText) {
-						var provider = (Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>)treeStore.GetValue (iter, 1);
-						var severity = (DiagnosticSeverity)comboBoxStore.GetValue (storeIter, 1);
-						severities[provider] = severity;
-						return;
-					}
-				} while (comboBoxStore.IterNext (ref storeIter));
-			};
+			comboRenderer.Edited += OnComboEdited;
 			
 			col.SetCellDataFunc (comboRenderer, ComboDataFunc);
 			treeviewInspections.HeadersVisible = false;
+			treeviewInspections.RulesHint = true;
 			treeviewInspections.Model = treeStore;
 			treeviewInspections.SearchColumn = -1; // disable the interactive search
 			GetAllSeverities ();
 			FillInspectors (null);
+		}
+
+		void OnTitleToggled (object sender, ToggledArgs args)
+		{
+			TreeIter iter;
+			if (treeStore.GetIterFromString (out iter, args.Path)) {
+				var provider = (Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>)treeStore.GetValue (iter, 1);
+				enableState [provider] = !enableState [provider];
+			}
+		}
+
+		void OnComboEdited (object sender, EditedArgs args)
+		{
+			var renderer = (CustomCellRenderer)sender;
+			var comboBoxStore = renderer.Model;
+			TreeIter iter;
+			if (!treeStore.GetIterFromString (out iter, args.Path))
+				return;
+
+			TreeIter storeIter;
+			if (!comboBoxStore.GetIterFirst (out storeIter))
+				return;
+			do {
+				if ((string)comboBoxStore.GetValue (storeIter, 0) == args.NewText) {
+					var provider = (Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>)treeStore.GetValue (iter, 1);
+					var severity = (DiagnosticSeverity)comboBoxStore.GetValue (storeIter, 1);
+					severities [provider] = severity;
+					return;
+				}
+			} while (comboBoxStore.IterNext (ref storeIter));
+		}
+
+		protected override void OnDestroyed()
+		{
+			toggleRenderer.Toggled -= OnTitleToggled;
+			comboRenderer.Edited -= OnComboEdited;
+			
+			base.OnDestroyed();
 		}
 
 		// TODO: Make static.

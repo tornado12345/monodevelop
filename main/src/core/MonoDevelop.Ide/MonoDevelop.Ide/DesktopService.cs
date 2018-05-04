@@ -138,6 +138,20 @@ namespace MonoDevelop.Ide
 			PlatformService.OpenFolder (folderPath, selectFiles);
 		}
 
+		public static string GetMimeTypeForRoslynLanguage (string language)
+		{
+			return PlatformService.GetMimeTypeForRoslynLanguage (language);
+		}
+
+		public static IEnumerable<string> GetMimeTypeInheritanceChainForRoslynLanguage (string language)
+		{
+			var mime = GetMimeTypeForRoslynLanguage (language);
+			if (mime == null) {
+				return null;
+			}
+			return GetMimeTypeInheritanceChain (mime);
+		}
+
 		public static string GetMimeTypeForUri (string uri)
 		{
 			return PlatformService.GetMimeTypeForUri (uri);
@@ -380,5 +394,13 @@ namespace MonoDevelop.Ide
 		{
 			PlatformService.RestartIde (reopenWorkspace);
 		}
+
+		public static bool AccessibilityInUse {
+			get {
+				return PlatformService.AccessibilityInUse;
+			}
+		}
+
+		internal static string GetNativeRuntimeDescription () => PlatformService.GetNativeRuntimeDescription ();
 	}
 }

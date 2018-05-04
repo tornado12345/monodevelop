@@ -39,6 +39,7 @@ using System.Threading.Tasks;
 using System.Net;
 using Xwt.Backends;
 using Gtk;
+using Gdk;
 
 namespace MonoDevelop.Ide
 {
@@ -69,9 +70,6 @@ namespace MonoDevelop.Ide
 		static ImageService ()
 		{
 			iconFactory.AddDefault ();
-			IconId.IconNameRequestHandler = delegate (string stockId) {
-				EnsureStockIconIsLoaded (stockId);
-			};
 
 			AddinManager.AddExtensionNodeHandler (IconsExtensionPath, delegate (object sender, ExtensionNodeEventArgs args) {
 				StockIconCodon iconCodon = (StockIconCodon)args.ExtensionNode;
@@ -170,6 +168,21 @@ namespace MonoDevelop.Ide
 			name = GetStockIdForImageSpec (name, size);
 			return GetIcon (name).WithSize (size);
 		}
+
+		public static void AddIcon (string iconId, Xwt.Drawing.Image icon)
+		{
+			if (iconId == null)
+				throw new ArgumentNullException (nameof (iconId));
+			if (icon == null)
+				throw new ArgumentNullException (nameof (icon));
+			icons.Add (iconId, icon);
+		}
+
+		public static bool HasIcon (string iconId)
+		{
+			return icons.ContainsKey (iconId);
+		}
+
 
 		public static Xwt.Drawing.Image GetIcon (string name)
 		{
@@ -809,10 +822,10 @@ namespace MonoDevelop.Ide
 		{
 			var md5 = System.Security.Cryptography.MD5.Create ();
 			byte[] hash = md5.ComputeHash (Encoding.UTF8.GetBytes (email.Trim ().ToLower ()));
-			StringBuilder sb = new StringBuilder ();
+			StringBuilder sb = StringBuilderCache.Allocate ();
 			foreach (byte b in hash)
 				sb.Append (b.ToString ("x2"));
-			return sb.ToString ();
+			return StringBuilderCache.ReturnAndFree (sb);
 		}
 
 		public static void LoadUserIcon (this Gtk.Image image, string email, int size)
@@ -825,6 +838,41 @@ namespace MonoDevelop.Ide
 					image.Pixbuf = gravatar.Image.ToPixbuf ();
 			};
 		}
+
+		public static Pixbuf ColorShiftPixbuf (this Pixbuf src, byte shift = 120)
+		{
+			var dest = new Gdk.Pixbuf (src.Colorspace, src.HasAlpha, src.BitsPerSample, src.Width, src.Height);
+
+			unsafe
+			{
+
+				byte* src_pixels_orig = (byte*)src.Pixels;
+				byte* dest_pixels_orig = (byte*)dest.Pixels;
+
+				for (int i = 0; i < src.Height; i++) {
+					byte* src_pixels = src_pixels_orig + i * src.Rowstride;
+					byte* dest_pixels = dest_pixels_orig + i * dest.Rowstride;
+
+					for (int j = 0; j < src.Width; j++) {
+						*(dest_pixels++) = PixelClamp (*(src_pixels++) + shift);
+						*(dest_pixels++) = PixelClamp (*(src_pixels++) + shift);
+						*(dest_pixels++) = PixelClamp (*(src_pixels++) + shift);
+
+						if (src.HasAlpha) {
+							*(dest_pixels++) = *(src_pixels++);
+						}
+					}
+				}
+			}
+			return dest;
+		}
+
+		static byte PixelClamp (int val)
+		{
+			return (byte)System.Math.Max (0, System.Math.Min (255, val));
+		}
+
+
 	}
 
 	class CustomImageLoader : Xwt.Drawing.IImageLoader

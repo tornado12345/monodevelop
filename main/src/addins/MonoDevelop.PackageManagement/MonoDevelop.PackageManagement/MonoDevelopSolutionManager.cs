@@ -28,6 +28,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using MonoDevelop.Core;
 using MonoDevelop.Projects;
 using NuGet.Configuration;
@@ -96,6 +97,9 @@ namespace MonoDevelop.PackageManagement
 		public event EventHandler<NuGetProjectEventArgs> NuGetProjectAdded;
 		public event EventHandler<NuGetProjectEventArgs> NuGetProjectRemoved;
 		public event EventHandler<NuGetProjectEventArgs> NuGetProjectRenamed;
+		public event EventHandler<NuGetProjectEventArgs> AfterNuGetProjectRenamed;
+		public event EventHandler<NuGetProjectEventArgs> NuGetProjectUpdated;
+		public event EventHandler<NuGetEventArgs<string>> AfterNuGetCacheUpdated;
 		public event EventHandler SolutionClosed;
 		public event EventHandler SolutionClosing;
 		public event EventHandler SolutionOpened;
@@ -110,9 +114,7 @@ namespace MonoDevelop.PackageManagement
 		public IEnumerable<NuGetProject> GetNuGetProjects ()
 		{
 			if (projects == null) {
-				Runtime.RunInMainThread (() => {
-					projects = GetNuGetProjects (Solution, Settings).ToList ();
-				}).Wait ();
+				projects = GetNuGetProjects (Solution, Settings).ToList ();
 			}
 			return projects;
 		}
@@ -145,6 +147,18 @@ namespace MonoDevelop.PackageManagement
 			return SourceRepositoryProviderFactory.CreateSourceRepositoryProvider (Settings);
 		}
 
+		public void SaveProject (NuGetProject nuGetProject)
+		{
+			var hasProject = nuGetProject as IHasDotNetProject;
+
+			if (hasProject != null) {
+				hasProject.SaveProject ().Wait ();
+				return;
+			}
+
+			throw new ApplicationException (string.Format ("Unsupported NuGetProject type: {0}", nuGetProject.GetType ().FullName));
+		}
+
 		public void ReloadSettings ()
 		{
 			try {
@@ -163,6 +177,17 @@ namespace MonoDevelop.PackageManagement
 		public void ClearProjectCache ()
 		{
 			projects = null;
+		}
+
+		public bool IsSolutionDPLEnabled { get; private set; }
+
+		public void EnsureSolutionIsLoaded ()
+		{
+		}
+
+		public Task<NuGetProject> UpdateNuGetProjectToPackageRef (NuGetProject oldProject)
+		{
+			return Task.FromResult (oldProject);
 		}
 	}
 }

@@ -1,11 +1,8 @@
 ﻿namespace MonoDevelop.FSharp
 
-open System
 open Gtk
 open MonoDevelop.Core
-open MonoDevelop.Ide
 open MonoDevelop.Components.PropertyGrid
-open Mono.Unix
 
 // Handwritten GUI, feel free to edit
 
@@ -14,7 +11,8 @@ type FSharpFormattingPolicyPanelWidget() =
     inherit Gtk.Bin()
 
     let store = new ListStore (typedefof<string>, typedefof<FSharpFormattingSettings>)
-    let mutable policy = FSharpFormattingPolicy()
+
+    let mutable policy = DefaultFSharpFormatting.policy
     let mutable vbox2 : Gtk.VBox = null
     let mutable hbox1 : Gtk.HBox = null
     let mutable boxScopes : Gtk.VBox = null
@@ -67,9 +65,9 @@ type FSharpFormattingPolicyPanelWidget() =
             appendSettings s
 
     member private this.Build() =
-        Stetic.Gui.Initialize(this)
+        MonoDevelop.Components.Gui.Initialize(this)
         // Widget MonoDevelop.Xml.Formatting.XmlFormattingPolicyPanelWidget
-        Stetic.BinContainer.Attach (this) |> ignore
+        MonoDevelop.Components.BinContainer.Attach (this) |> ignore
         this.Name <- "MonoDevelop.FSharp.FSharpFormattingPolicyPanelWidget"
         // Container child MonoDevelop.Xml.Formatting.XmlFormattingPolicyPanelWidget.Gtk.Container+ContainerChild
         vbox2 <- new Gtk.VBox()

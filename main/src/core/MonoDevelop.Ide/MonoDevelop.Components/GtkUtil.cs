@@ -178,9 +178,10 @@ namespace MonoDevelop.Components
 
 		public static Xwt.Size GetSize (this IconSize size)
 		{
+			var displayScale = Platform.IsWindows ? GtkWorkarounds.GetScaleFactor () : 1.0;
 			int w, h;
 			size.GetSize (out w, out h);
-			return new Xwt.Size (w, h);
+			return new Xwt.Size ((double)w / displayScale, (double)h / displayScale);
 		}
 
 		public static void GetSize (this IconSize size, out int width, out int height)
@@ -228,6 +229,15 @@ namespace MonoDevelop.Components
 			screenPoint.X = (int)Math.Abs (macgeometry.X - screenPoint.X);
 			screenPoint.X += geometry.X;
 			return screenPoint;
+		}
+
+		public static Gdk.Rectangle GetSceenBounds (this AppKit.NSView widget)
+		{
+			var frame = widget.Frame;
+			var point = ConvertToGdkCoordinates (widget.Window?.Screen, new Gdk.Point ((int)frame.Location.X, (int)frame.Location.Y));
+			frame.X = point.X;
+			frame.Y = point.Y;
+			return new Gdk.Rectangle ((int)frame.X, (int)frame.Y, (int)frame.Width, (int)frame.Height);
 		}
 		#endif
 
@@ -595,15 +605,20 @@ namespace MonoDevelop.Components
 
 		public static Gdk.EventKey CreateKeyEvent (uint keyval, Gdk.ModifierType state, Gdk.EventType eventType, Gdk.Window win)
 		{
-			return CreateKeyEvent (keyval, -1, state, eventType, win);
+			return CreateKeyEvent (keyval, -1, state, eventType, win, null);
 		}
 
 		public static Gdk.EventKey CreateKeyEventFromKeyCode (ushort keyCode, Gdk.ModifierType state, Gdk.EventType eventType, Gdk.Window win)
 		{
-			return CreateKeyEvent (0, keyCode, state, eventType, win);
+			return CreateKeyEvent (0, keyCode, state, eventType, win, null);
 		}
 
-		static Gdk.EventKey CreateKeyEvent (uint keyval, int keyCode, Gdk.ModifierType state, Gdk.EventType eventType, Gdk.Window win)
+		public static Gdk.EventKey CreateKeyEventFromKeyCode (ushort keyCode, Gdk.ModifierType state, Gdk.EventType eventType, Gdk.Window win, uint time)
+		{
+			return CreateKeyEvent (0, keyCode, state, eventType, win, time);
+		}
+
+		static Gdk.EventKey CreateKeyEvent (uint keyval, int keyCode, Gdk.ModifierType state, Gdk.EventType eventType, Gdk.Window win, uint? time)
 		{
 			int effectiveGroup, level;
 			Gdk.ModifierType cmods;
@@ -623,7 +638,7 @@ namespace MonoDevelop.Components
 				group = (byte)keyms [0].Group,
 				hardware_keycode = keyCode == -1 ? (ushort)keyms [0].Keycode : (ushort)keyCode,
 				length = 0,
-				time = Gtk.Global.CurrentEventTime
+				time = time ?? Gtk.Global.CurrentEventTime
 			};
 
 			IntPtr ptr = GLib.Marshaller.StructureToPtrAlloc (nativeEvent); 
@@ -777,6 +792,32 @@ namespace MonoDevelop.Components
 				args.RetVal = true;
 			}
 		}
+
+		/// <summary>
+		/// Shows the context menu for a TreeView.
+		/// </summary>
+		/// <returns><c>true</c>, if context menu was shown, <c>false</c> otherwise.</returns>
+		/// <param name="tree">Gtk TreeView for which the context menu is shown</param>
+		/// <param name="evt">The current mouse event, or <c>null</c>.</param>
+		/// <param name="entrySet">Entry set with the command definitions</param>
+		/// <param name="initialCommandTarget">Initial command target.</param>
+		public static bool ShowContextMenu (this Gtk.TreeView tree, Gdk.EventButton evt, Commands.CommandEntrySet entrySet,
+			object initialCommandTarget = null)
+		{
+			if (evt == null) {
+				var paths = tree.Selection.GetSelectedRows ();
+				if (paths != null) {
+					var area = tree.GetCellArea (paths [0], tree.Columns [0]);
+					return Ide.IdeApp.CommandService.ShowContextMenu (tree, area.Left, area.Top, entrySet, initialCommandTarget);
+				} else
+					return Ide.IdeApp.CommandService.ShowContextMenu (tree, 0, 0, entrySet, initialCommandTarget);
+			} else {
+				int x = (int)evt.X, y = (int)evt.Y;
+				if (Platform.IsMac && tree.BinWindow == evt.Window)
+					tree.ConvertBinWindowToWidgetCoords (x, y, out x, out y);
+				return Ide.IdeApp.CommandService.ShowContextMenu (tree, x, y, entrySet, initialCommandTarget);
+			}
+		}
 	}
 
 	class EventKeyWrapper: Gdk.EventKey
@@ -885,7 +926,7 @@ namespace MonoDevelop.Components
 
 			// Delay the call to the leave handler since the pointer may be
 			// entering a child widget, in which case the event doesn't have to be fired
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o2, a2) => {
 				if (!Inside)
 					LeaveHandler ();
 			});
@@ -904,12 +945,16 @@ namespace MonoDevelop.Components
 	{
 		TreeViewColumn col;
 		TreeView tree;
+		TreePath path;
 		TreeIter iter;
+		TreeStore treeStore;
 
 		public CellTooltipWindow (TreeView tree, TreeViewColumn col, TreePath path)
 		{
 			this.tree = tree;
 			this.col = col;
+			this.treeStore = tree.Model as TreeStore;
+			this.path = path;
 			
 			NudgeHorizontal = true;
 			
@@ -950,6 +995,12 @@ namespace MonoDevelop.Components
 			bool hasFgColor = false;
 			int x = 1;
 
+			// Make sure that the row has not been removed inbetween.
+			// If the model is a TreeStore, it can do the validation for us, otherwise we need to validate the path.
+			if ((treeStore != null && treeStore.IterIsValid (iter) == false) || !tree.Model.GetIter (out iter, path)) {
+				GtkUtil.HideTooltip (tree);
+				return true;
+			}
 			col.CellSetCellData (tree.Model, iter, false, false);
 
 			foreach (CellRenderer cr in col.CellRenderers) {

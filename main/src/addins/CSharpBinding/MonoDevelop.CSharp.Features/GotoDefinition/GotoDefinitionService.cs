@@ -2,16 +2,13 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.FindSymbols;
-using Microsoft.CodeAnalysis.LanguageServices;
-using Microsoft.CodeAnalysis.Shared.Extensions;
-using Roslyn.Utilities;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.CSharp;
+using MonoDevelop.CSharp.Navigation;
 
 namespace ICSharpCode.NRefactory6.CSharp.Features.GotoDefinition
 {
@@ -55,41 +52,56 @@ namespace ICSharpCode.NRefactory6.CSharp.Features.GotoDefinition
 			return false;
 		};
 
-		static ISymbol FindRelatedExplicitlyDeclaredSymbol(ISymbol symbol, Compilation compilation)
+		static ISymbol FindRelatedExplicitlyDeclaredSymbol (ISymbol symbol, Compilation compilation)
 		{
 			return symbol;
 		}
 
-		public static async Task<ISymbol> FindSymbolAsync(Document document, int position, CancellationToken cancellationToken)
+		public static async Task<ISymbol> FindSymbolAsync (Document document, int position, CancellationToken cancellationToken)
 		{
+			if (document == null)
+				return null;
 			var workspace = document.Project.Solution.Workspace;
 
-			var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+			var semanticModel = await document.GetSemanticModelAsync (cancellationToken).ConfigureAwait (false);
 			//var symbol = SymbolFinder.FindSymbolAtPosition(semanticModel, position, workspace, bindLiteralsToUnderlyingType: true, cancellationToken: cancellationToken);
-			var symbol = SymbolFinder.FindSymbolAtPosition(semanticModel, position, workspace, cancellationToken: cancellationToken);
+			var symbol = await SymbolFinder.FindSymbolAtPositionAsync (semanticModel, position, workspace, cancellationToken: cancellationToken).ConfigureAwait (false);
 
-			return FindRelatedExplicitlyDeclaredSymbol(symbol, semanticModel.Compilation);
+			return FindRelatedExplicitlyDeclaredSymbol (symbol, semanticModel.Compilation);
 		}
 
-//		public async Task<IEnumerable<INavigableItem>> FindDefinitionsAsync(Document document, int position, CancellationToken cancellationToken)
-//		{
-//			var symbol = await FindSymbolAsync(document, position, cancellationToken).ConfigureAwait(false);
-//
-//			// realize the list here so that the consumer await'ing the result doesn't lazily cause
-//			// them to be created on an inappropriate thread.
-//			return NavigableItemFactory.GetItemsfromPreferredSourceLocations(document.Project.Solution, symbol).ToList();
-//		}
+		//		public async Task<IEnumerable<INavigableItem>> FindDefinitionsAsync(Document document, int position, CancellationToken cancellationToken)
+		//		{
+		//			var symbol = await FindSymbolAsync(document, position, cancellationToken).ConfigureAwait(false);
+		//
+		//			// realize the list here so that the consumer await'ing the result doesn't lazily cause
+		//			// them to be created on an inappropriate thread.
+		//			return NavigableItemFactory.GetItemsfromPreferredSourceLocations(document.Project.Solution, symbol).ToList();
+		//		}
 
-		public static bool TryGoToDefinition(Document document, int position, CancellationToken cancellationToken)
+		public static bool TryGoToDefinition (Document document, int position, CancellationToken cancellationToken)
 		{
-			var symbol = FindSymbolAsync(document, position, cancellationToken).Result;
+			var metadata = Counters.CreateNavigateToMetadata ("Declaration");
 
-			if (symbol != null)
-			{
-				var containingTypeSymbol = GetContainingTypeSymbol(position, document, cancellationToken);
+			using (var timer = Counters.NavigateTo.BeginTiming (metadata)) {
+				try {
+					bool result = TryGoToDefinitionInternal (document, position, cancellationToken);
+					Counters.UpdateNavigateResult (metadata, result);
+					return result;
+				} finally {
+					Counters.UpdateUserCancellation (metadata, cancellationToken);
+				}
+			}
+		}
 
-				if (GoToDefinitionHelpers.TryGoToDefinition(symbol, document.Project, containingTypeSymbol, throwOnHiddenDefinition: true, cancellationToken: cancellationToken))
-				{
+		static bool TryGoToDefinitionInternal (Document document, int position, CancellationToken cancellationToken)
+		{
+			var symbol = FindSymbolAsync (document, position, cancellationToken).Result;
+
+			if (symbol != null) {
+				var containingTypeSymbol = GetContainingTypeSymbol (position, document, cancellationToken);
+
+				if (GoToDefinitionHelpers.TryGoToDefinition (symbol, document.Project, containingTypeSymbol, throwOnHiddenDefinition: true, cancellationToken: cancellationToken)) {
 					return true;
 				}
 			}
@@ -97,15 +109,14 @@ namespace ICSharpCode.NRefactory6.CSharp.Features.GotoDefinition
 			return false;
 		}
 
-		private static ITypeSymbol GetContainingTypeSymbol(int caretPosition, Document document, CancellationToken cancellationToken)
+		private static ITypeSymbol GetContainingTypeSymbol (int caretPosition, Document document, CancellationToken cancellationToken)
 		{
-			var syntaxRoot = document.GetSyntaxRootAsync(cancellationToken).Result;
-			var containingTypeDeclaration = syntaxRoot.GetContainingTypeDeclaration(caretPosition);
+			var syntaxRoot = document.GetSyntaxRootAsync (cancellationToken).Result;
+			var containingTypeDeclaration = CSharpSyntaxFactsService.Instance.GetContainingTypeDeclaration (syntaxRoot, caretPosition);
 
-			if (containingTypeDeclaration != null)
-			{
-				var semanticModel = document.GetSemanticModelAsync(cancellationToken).Result;
-				return semanticModel.GetDeclaredSymbol(containingTypeDeclaration, cancellationToken) as ITypeSymbol;
+			if (containingTypeDeclaration != null) {
+				var semanticModel = document.GetSemanticModelAsync (cancellationToken).Result;
+				return semanticModel.GetDeclaredSymbol (containingTypeDeclaration, cancellationToken) as ITypeSymbol;
 			}
 
 			return null;

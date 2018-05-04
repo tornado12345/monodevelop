@@ -29,10 +29,7 @@ using System;
 using System.IO;
 using NUnit.Framework;
 using MonoDevelop.Core;
-using MonoDevelop.Ide;
 using MonoDevelop.Core.Assemblies;
-using MonoDevelop.Ide.TypeSystem;
-using System.Threading;
 
 namespace UnitTests
 {
@@ -49,6 +46,9 @@ namespace UnitTests
 		static string LocateTopLevel ()
 		{
 			var cwd = typeof (TestBase).Assembly.Location;
+			if (Path.GetDirectoryName (cwd) == Util.TestsRootDir)
+				return Util.TestsRootDir;
+			
 			while (!string.IsNullOrEmpty (cwd) && !File.Exists (Path.Combine (cwd, "top_level_monodevelop")))
 				cwd = Path.GetDirectoryName (cwd);
 			return cwd;
@@ -80,10 +80,6 @@ namespace UnitTests
 			Util.ClearTmpDir ();
 			Environment.SetEnvironmentVariable ("MONO_ADDINS_REGISTRY", rootDir);
 			Environment.SetEnvironmentVariable ("XDG_CONFIG_HOME", rootDir);
-			Runtime.Initialize (true);
-			Xwt.Application.Initialize (Xwt.ToolkitType.Gtk);
-			Gtk.Application.Init ();
-			DesktopService.Initialize ();
 			global::MonoDevelop.Projects.Services.ProjectService.DefaultTargetFramework
 				= Runtime.SystemAssemblyService.GetTargetFramework (TargetFrameworkMoniker.NET_4_0);
 		}
@@ -100,14 +96,6 @@ namespace UnitTests
 		public static string GetTempFile (string extension)
 		{
 			return Path.Combine (Path.GetTempPath (), "test-file-" + (pcount++) + extension);
-		}
-		
-		public static string GetMdb (string file)
-		{
-			if (Runtime.SystemAssemblyService.DefaultRuntime is MonoTargetRuntime)
-				return file + ".mdb";
-			else
-				return Path.ChangeExtension (file, ".pdb");
 		}
 	}
 }

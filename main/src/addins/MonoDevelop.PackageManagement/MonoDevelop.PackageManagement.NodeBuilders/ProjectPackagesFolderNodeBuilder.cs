@@ -28,6 +28,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using MonoDevelop.Ide.Gui.Components;
+using MonoDevelop.Ide.Gui.Pads.ProjectPad;
 using MonoDevelop.PackageManagement.Commands;
 using MonoDevelop.Projects;
 using NuGet.Packaging;
@@ -59,13 +60,9 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 			nodeInfo.ClosedIcon = Context.GetIcon (node.ClosedIcon);
 		}
 
-		public override int CompareObjects (ITreeNavigator thisNode, ITreeNavigator otherNode)
+		public override int GetSortIndex (ITreeNavigator node)
 		{
-			if (otherNode.DataItem is ProjectReferenceCollection)
-				return 1;
-			if (otherNode.DataItem is Ide.Gui.Pads.ProjectPad.GettingStartedNode)
-				return 1;
-			return -1;
+			return -500;
 		}
 
 		public override bool HasChildNodes (ITreeBuilder builder, object dataObject)
@@ -128,10 +125,10 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 			if (builder != null) {
 				builder.UpdateAll ();
 				builder.MoveToParent ();
-			}
 
-			if (builder.MoveToChild ("References", typeof (ProjectReferenceCollection))) {
-				builder.UpdateAll ();
+				if (builder.MoveToChild ("References", typeof (ProjectReferenceCollection))) {
+					builder.UpdateAll ();
+				}
 			}
 		}
 	}

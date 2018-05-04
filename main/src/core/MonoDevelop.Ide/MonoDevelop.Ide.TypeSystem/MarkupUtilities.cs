@@ -28,6 +28,7 @@
 
 using System;
 using System.Text;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Ide.TypeSystem
 {
@@ -67,6 +68,17 @@ namespace MonoDevelop.Ide.TypeSystem
 					break;
 				}
 			}
+		}
+
+		public static string UnescapeString (string text)
+		{
+			if (string.IsNullOrEmpty (text))
+				return text;
+			return text.Replace (EscapedLessThan, "<")
+				       .Replace (EscapedGreaterThan, ">")
+				       .Replace (EscapedAmpersand, "&")
+				       .Replace (EscapedApostrophe, "'")
+				       .Replace (EscapedQuote, "\"");
 		}
 	}
 }

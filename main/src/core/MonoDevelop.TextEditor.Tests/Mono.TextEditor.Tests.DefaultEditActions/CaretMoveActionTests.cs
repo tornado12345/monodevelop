@@ -25,12 +25,13 @@
 // THE SOFTWARE.
 
 using System;
+using MonoDevelop.Ide.Editor;
 using NUnit.Framework;
 
 namespace Mono.TextEditor.Tests.Actions
 {
 	[TestFixture()]
-	public class CaretMoveActionTests : TextEditorTestBase
+	class CaretMoveActionTests : TextEditorTestBase
 	{
 		[Test()]
 		public void TestCaretLeft ()
@@ -460,6 +461,44 @@ IEnumerable<string> GetFileExtensions (string filename)
 ");
 		}
 
+		[Test]
+		public void TestUTF32Chars_Right ()
+		{
+			var data = Create (@"$🚀");
+			CaretMoveActions.Right (data);
+			Check (data, @"🚀$");
+		}
 
+		[Test]
+		public void TestUTF32Chars_Left ()
+		{
+			var data = Create (@"🚀$");
+			CaretMoveActions.Left (data);
+			Check (data, @"$🚀");
+		}
+
+		[Test]
+		public void TestUTF32Chars_Up ()
+		{
+			var data = Create (@"12
+🚀
+1$2");
+			CaretMoveActions.Up (data);
+			Check (data, @"12
+🚀$
+12");
+		}
+
+		[Test]
+		public void TestUTF32Chars_Down ()
+		{
+			var data = Create (@"1$2
+🚀
+12");
+			CaretMoveActions.Down (data);
+			Check (data, @"12
+🚀$
+12");
+		}
 	}
 }

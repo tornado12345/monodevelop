@@ -141,10 +141,10 @@ namespace MonoDevelop.Ide.Commands
 		static LayoutListHandler ()
 		{
 			NameMapping = new Dictionary<string, string> ();
-			NameMapping ["Solution"] = "Code";
-			NameMapping ["Visual Design"] = "Design";
-			NameMapping ["Debug"] = "Debug";
-			NameMapping ["Unit Testing"] = "Test";
+			NameMapping ["Solution"] = GettextCatalog.GetString ("Code");
+			NameMapping ["Visual Design"] = GettextCatalog.GetString ("Design");
+			NameMapping ["Debug"] = GettextCatalog.GetString ("Debug");
+			NameMapping ["Unit Testing"] = GettextCatalog.GetString ("Test");
 		}
 
 		protected override void Update (CommandArrayInfo info)
@@ -153,7 +153,7 @@ namespace MonoDevelop.Ide.Commands
 			foreach (var name in IdeApp.Workbench.Layouts) {
 				if (!NameMapping.TryGetValue (name, out text))
 					text = name;
-				CommandInfo item = new CommandInfo(GettextCatalog.GetString (text));
+				CommandInfo item = new CommandInfo (text);
 				item.Checked = IdeApp.Workbench.CurrentLayout == name;
 				item.Description = GettextCatalog.GetString ("Switch to layout '{0}'", name);
 				info.Add (item, name);
@@ -336,6 +336,10 @@ namespace MonoDevelop.Ide.Commands
 
 		protected override void Run ()
 		{
+			// Already in 2-column mode?
+			if (DockNotebook.ActiveNotebook?.Container?.SplitCount > 0)
+				return;
+			
 			IdeApp.Workbench.LockActiveWindowChangeEvent ();
 			var container = DockNotebook.ActiveNotebook.Container;
 			var tab = DockNotebook.ActiveNotebook.CurrentTab;
@@ -422,6 +426,7 @@ namespace MonoDevelop.Ide.Commands
 
 		protected override void Run ()
 		{
+			IdeApp.Workbench.ActiveDocument.Select ();
 			IdeApp.Workbench.ActiveDocument.Editor.StartCaretPulseAnimation ();
 		}
 

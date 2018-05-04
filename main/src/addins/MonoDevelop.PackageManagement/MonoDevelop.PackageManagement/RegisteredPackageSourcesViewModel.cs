@@ -32,19 +32,19 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 
-using NuGet;
+using NuGet.Configuration;
 using NuGet.Protocol.Core.Types;
 
 namespace MonoDevelop.PackageManagement
 {
-	internal class RegisteredPackageSourcesViewModel : ViewModelBase<RegisteredPackageSourcesViewModel>, IDisposable, IPackageSourceProvider
+	internal class RegisteredPackageSourcesViewModel : ViewModelBase<RegisteredPackageSourcesViewModel>, IDisposable
 	{
 		ObservableCollection<PackageSourceViewModel> packageSourceViewModels = 
 			new ObservableCollection<PackageSourceViewModel>();
-		NuGet.Configuration.IPackageSourceProvider packageSourceProvider;
+		IPackageSourceProvider packageSourceProvider;
 
 		IFolderBrowser folderBrowser;
-		PackageSourceViewModelChecker packageSourceChecker = new PackageSourceViewModelChecker ();
+		PackageSourceViewModelChecker packageSourceChecker;
 		
 		DelegateCommand addPackageSourceCommmand;
 		DelegateCommand removePackageSourceCommand;
@@ -58,18 +58,26 @@ namespace MonoDevelop.PackageManagement
 		bool isEditingSelectedPackageSource;
 
 		public RegisteredPackageSourcesViewModel (ISourceRepositoryProvider sourceRepositoryProvider)
-			: this (sourceRepositoryProvider.PackageSourceProvider, new FolderBrowser ())
+			: this (
+				sourceRepositoryProvider.PackageSourceProvider,
+				new FolderBrowser (),
+				new PackageSourceViewModelChecker ())
 		{
 		}
 
 		public RegisteredPackageSourcesViewModel (
-			NuGet.Configuration.IPackageSourceProvider packageSourceProvider,
-			IFolderBrowser folderBrowser)
+			IPackageSourceProvider packageSourceProvider,
+			IFolderBrowser folderBrowser,
+			PackageSourceViewModelChecker packageSourceChecker)
 		{
 			this.packageSourceProvider = packageSourceProvider;
 			this.folderBrowser = folderBrowser;
+			this.packageSourceChecker = packageSourceChecker;
 
-			packageSourceChecker.PackageSourceChecked += PackageSourceChecked;
+			if (packageSourceChecker != null) {
+				packageSourceChecker.PackageSourceChecked += PackageSourceChecked;
+			}
+
 			CreateCommands ();
 		}
 
@@ -136,49 +144,34 @@ namespace MonoDevelop.PackageManagement
 		
 		public void Load()
 		{
-			ReplaceExistingPackageSourceCredentialProvider ();
-
-			foreach (NuGet.Configuration.PackageSource packageSource in GetPackageSourcesFromProvider ()) {
+			foreach (PackageSource packageSource in GetPackageSourcesFromProvider ()) {
 				AddPackageSourceToViewModel(packageSource);
 			}
 		}
 
-		IEnumerable<NuGet.Configuration.PackageSource> GetPackageSourcesFromProvider ()
+		IEnumerable<PackageSource> GetPackageSourcesFromProvider ()
 		{
 			return packageSourceProvider
 				.LoadPackageSources ()
 				.Where (packageSource => !packageSource.IsMachineWide);
 		}
-
-		/// <summary>
-		/// Use this class as the source of package source credentials and disable any
-		/// prompt for credentials.
-		/// </summary>
-		void ReplaceExistingPackageSourceCredentialProvider ()
-		{
-			HttpClient.DefaultCredentialProvider = new SettingsCredentialProvider (NullCredentialProvider.Instance, this);
-		}
 		
-		void AddPackageSourceToViewModel (NuGet.Configuration.PackageSource packageSource)
+		void AddPackageSourceToViewModel (PackageSource packageSource)
 		{
 			var packageSourceViewModel = new PackageSourceViewModel(packageSource);
 			packageSourceViewModels.Add(packageSourceViewModel);
 
-			packageSourceChecker.Check (packageSourceViewModel);
+			packageSourceChecker?.Check (packageSourceViewModel);
 		}
 
-		void AddPackageSourceToViewModel (NuGet.Configuration.PackageSource packageSource, string password)
+		void AddPackageSourceToViewModel (PackageSource packageSource, string password)
 		{
-			// HACK: Workaround NuGet 3.4.3 bug.
-			// Set the password text after the view model is created.
-			packageSource.PasswordText = null;
-
 			var packageSourceViewModel = new PackageSourceViewModel (packageSource);
 			packageSourceViewModel.Password = password;
 
 			packageSourceViewModels.Add(packageSourceViewModel);
 
-			packageSourceChecker.Check (packageSourceViewModel);
+			packageSourceChecker?.Check (packageSourceViewModel);
 		}
 		
 		public void Save()
@@ -189,7 +182,7 @@ namespace MonoDevelop.PackageManagement
 		public string NewPackageSourceName {
 			get { return newPackageSource.Name; }
 			set {
-				newPackageSource.Name = value;
+				newPackageSource.Name = value?.Trim ();
 				OnPropertyChanged(viewModel => viewModel.NewPackageSourceName);
 			}
 		}
@@ -197,7 +190,7 @@ namespace MonoDevelop.PackageManagement
 		public string NewPackageSourceUrl {
 			get { return newPackageSource.Source; }
 			set {
-				newPackageSource.Source = value;
+				newPackageSource.Source = value?.Trim ();
 				OnPropertyChanged(viewModel => viewModel.NewPackageSourceUrl);
 			}
 		}
@@ -395,7 +388,7 @@ namespace MonoDevelop.PackageManagement
 
 			OnPackageSourceChanged (selectedPackageSourceViewModel);
 
-			packageSourceChecker.Check (selectedPackageSourceViewModel);
+			packageSourceChecker?.Check (selectedPackageSourceViewModel);
 		}
 
 		public void Save (IEnumerable<PackageSourceViewModel> packageSourceViewModels)
@@ -416,33 +409,10 @@ namespace MonoDevelop.PackageManagement
 		public void Dispose ()
 		{
 			try {
-				packageSourceChecker.Dispose ();
+				packageSourceChecker?.Dispose ();
 			} finally {
 				PackageManagementServices.InitializeCredentialService ();
 			}
-		}
-
-		/// <summary>
-		/// This is called by NuGet's credential provider when a request needs 
-		/// a username and password. We return the current package sources
-		/// stored in Preferences with the latest usernames and passwords.
-		/// </summary>
-		IEnumerable<PackageSource> IPackageSourceProvider.LoadPackageSources ()
-		{
-			return packageSourceViewModels.Select (viewModel => viewModel.GetNuGet2PackageSource ());
-		}
-
-		void IPackageSourceProvider.SavePackageSources (IEnumerable<PackageSource> sources)
-		{
-		}
-
-		void IPackageSourceProvider.DisablePackageSource (PackageSource source)
-		{
-		}
-
-		bool IPackageSourceProvider.IsPackageSourceEnabled (PackageSource source)
-		{
-			return true;
 		}
 	}
 }

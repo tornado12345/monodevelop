@@ -41,7 +41,6 @@ namespace MonoDevelop.SourceEditor
 		internal static Xwt.Drawing.Image warningPixbuf = Xwt.Drawing.Image.FromResource ("gutter-warning-15.png");
 		
 		internal Dictionary<string, LayoutDescriptor> textWidthDictionary = new Dictionary<string, LayoutDescriptor> ();
-		internal Dictionary<DocumentLine, double> lineWidthDictionary = new Dictionary<DocumentLine, double> ();
 		
 		internal MonoTextEditor editor;
 
@@ -122,7 +121,7 @@ namespace MonoDevelop.SourceEditor
 					foreach (var msg in marker.Errors) {
 						if (marker.Layouts.Count == 1) 
 							drawingLayout.Width = maxTextWidth;
-						drawingLayout.SetText (GetFirstLine (msg));
+						drawingLayout.SetText (msg.FullErrorMessage);
 						int w;
 						int h;
 						drawingLayout.GetPixelSize (out w, out h);
@@ -146,7 +145,7 @@ namespace MonoDevelop.SourceEditor
 			protected override void OnDrawContent (Gdk.EventExpose evnt, Cairo.Context g)
 			{
 				g.Rectangle (0, 0, Allocation.Width, Allocation.Height);
-				g.SetSourceColor (marker.TooltipColor.Color);
+				g.SetSourceColor (marker.TooltipColor);
 				g.Fill ();
 
 				using (var drawingLayout = new Pango.Layout (this.PangoContext)) {
@@ -162,7 +161,7 @@ namespace MonoDevelop.SourceEditor
 						if (!showBulletedList)
 							drawingLayout.Width = maxTextWidth;
 
-						drawingLayout.SetText (GetFirstLine (msg));
+						drawingLayout.SetText (msg.FullErrorMessage);
 						drawingLayout.GetPixelSize (out w, out h);
 
 						if (showBulletedList) {
@@ -176,7 +175,7 @@ namespace MonoDevelop.SourceEditor
 						g.Save ();
 
 						g.Translate (showBulletedList ? textBorder + iconTextSpacing + icon.Width: textBorder, y + verticalTextSpace / 2);
-						g.SetSourceColor (marker.TagColor.SecondColor);
+						g.SetSourceColor (marker.TagColor2);
 						g.ShowLayout (drawingLayout);
 
 						g.Restore ();
@@ -201,8 +200,10 @@ namespace MonoDevelop.SourceEditor
 
 				DestroyPopoverWindow ();
 
-				if (marker.Layouts == null || marker.Layouts.Count < 2 && !isReduced)
+				hoverTimeout = 0;
+				if (marker.Layouts == null || marker.Layouts.Count < 2 && !isReduced) {
 					return false;
+				}
 
 				popoverWindow = new MessageBubblePopoverWindow (this, marker);
 				popoverWindow.ShowWindowShadow = false;
@@ -250,14 +251,6 @@ namespace MonoDevelop.SourceEditor
 			editor.QueueDraw ();
 		}
 
-		public bool RemoveLine (DocumentLine line)
-		{
-			if (!lineWidthDictionary.ContainsKey (line))
-				return false;
-			lineWidthDictionary.Remove (line);
-			return true;
-		}
-
 		internal void DestroyPopoverWindow ()
 		{
 			if (popoverWindow != null) {
@@ -284,10 +277,9 @@ namespace MonoDevelop.SourceEditor
 			}
 		}
 
-		static string GetFirstLine (ErrorText errorText)
+		static string GetFirstLine (string firstLine)
 		{
-			string firstLine = errorText.ErrorMessage ?? "";
-			int idx = firstLine.IndexOfAny (new [] {'\n', '\r'});
+			int idx = firstLine.IndexOfAny (new [] { '\n', '\r' });
 			if (idx > 0)
 				firstLine = firstLine.Substring (0, idx);
 			return firstLine;
@@ -299,7 +291,7 @@ namespace MonoDevelop.SourceEditor
 			if (!textWidthDictionary.TryGetValue (errorText.ErrorMessage, out result)) {
 				Pango.Layout layout = new Pango.Layout (editor.PangoContext);
 				layout.FontDescription = fontDescription;
-				layout.SetText (GetFirstLine (errorText));
+				layout.SetText (GetFirstLine (errorText.ErrorMessage));
 				int w, h;
 				layout.GetPixelSize (out w, out h);
 				textWidthDictionary[errorText.ErrorMessage] = result = new LayoutDescriptor (layout, w, h);
@@ -309,7 +301,6 @@ namespace MonoDevelop.SourceEditor
 
 		void HandleEditorEditorOptionsChanged (object sender, EventArgs e)
 		{
-			lineWidthDictionary.Clear ();
 			OnChanged (EventArgs.Empty);
 		}	
 

@@ -11,7 +11,6 @@ open ExtCore.Control
 open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.Range
 open Microsoft.FSharp.Compiler.Ast
-open Microsoft.FSharp.Compiler.PrettyNaming
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open Microsoft.FSharp.Compiler.SourceCodeServices.AstTraversal
 
@@ -150,9 +149,6 @@ type ExpandSelectionTextEditorExtension () =
             editor.SetSelection (startPos, endPos)
         else
             editor.ClearSelection()
-
-    static member SupportedFileExtensions =
-        [".fsscript"; ".fs"; ".fsx"; ".fsi"; ".sketchfs"]
 
     override x.IsValidInContext (context) =
         context.Name <> null && FileService.supportedFileName context.Name

@@ -60,6 +60,16 @@ namespace MonoDevelop.Projects
 			return next.SupportsFlavor (guid);
 		}
 
+		internal bool IsMicrosoftBuildRequired {
+			get {
+				return RequiresMicrosoftBuild || (next != null && next.IsMicrosoftBuildRequired);
+			}
+		}
+
+		protected bool RequiresMicrosoftBuild {
+			get; set;
+		}
+
 		internal protected virtual ProjectRunConfiguration OnCreateRunConfiguration (string name)
 		{
 			return next.OnCreateRunConfiguration (name);
@@ -73,6 +83,19 @@ namespace MonoDevelop.Projects
 		internal protected virtual void OnWriteRunConfiguration (ProgressMonitor monitor, ProjectRunConfiguration config, IPropertySet properties)
 		{
 			next.OnWriteRunConfiguration (monitor, config, properties);
+		}
+
+		/// <summary>
+		/// Called to initialize a TargetEvaluationContext instance required by RunTarget()
+		/// and other methods that invoke MSBuild targets
+		/// </summary>
+		/// <returns>The initialized evaluation context (it can be just the provided context)</returns>
+		/// <param name="target">The MSBuild target that is going to be invoked</param>
+		/// <param name="configuration">Build configuration</param>
+		/// <param name="context">Execution context</param>
+		internal protected virtual TargetEvaluationContext OnConfigureTargetEvaluationContext (string target, ConfigurationSelector configuration, TargetEvaluationContext context)
+		{
+			return next.OnConfigureTargetEvaluationContext (target, configuration, context);
 		}
 
 		internal protected virtual Task<TargetEvaluationResult> OnRunTarget (ProgressMonitor monitor, string target, ConfigurationSelector configuration, TargetEvaluationContext context)
@@ -140,9 +163,19 @@ namespace MonoDevelop.Projects
 			next.OnWriteConfiguration (monitor, config, pset);
 		}
 
+		internal protected virtual Task OnReevaluateProject (ProgressMonitor monitor)
+		{
+			return next.OnReevaluateProject (monitor);
+		}
+
 		internal protected virtual Task<ProjectFile []> OnGetSourceFiles (ProgressMonitor monitor, ConfigurationSelector configuration)
 		{
 			return next.OnGetSourceFiles (monitor, configuration);
+		}
+
+		internal protected virtual bool OnGetSupportsImportedItem (IMSBuildItemEvaluated buildItem)
+		{
+			return next.OnGetSupportsImportedItem (buildItem);
 		}
 
 		#region Building
@@ -172,6 +205,11 @@ namespace MonoDevelop.Projects
 			return next.OnGetCommonBuildActions ();
 		}
 
+		internal protected virtual bool OnGetFileSupportsBuildAction (string fileName, string buildAction)
+		{
+			return next.OnGetFileSupportsBuildAction (fileName, buildAction);
+		}
+
 		internal protected virtual ProjectItem OnCreateProjectItem (IMSBuildItemEvaluated item)
 		{
 			return next.OnCreateProjectItem (item);
@@ -198,9 +236,25 @@ namespace MonoDevelop.Projects
 			}
 		}
 
+		[Obsolete ("Use OnFastCheckNeedsBuild (ConfigurationSelector,TargetEvaluationContext)")]
 		internal protected virtual bool OnFastCheckNeedsBuild (ConfigurationSelector configuration)
 		{
 			return next.OnFastCheckNeedsBuild (configuration);
+		}
+
+		/// <summary>
+		/// Checks if this project needs to be built.
+		/// </summary>
+		/// <returns><c>true</c>, if the project is dirty and needs to be rebuilt, <c>false</c> otherwise.</returns>
+		/// <param name="configuration">Build configuration.</param>
+		/// <param name="context">Evaluation context.</param>
+		/// <remarks>
+		/// This method can be overriden to provide custom logic for checking if a project needs to be built, either
+		/// due to changes in the content or in the configuration.
+		/// </remarks>
+		internal protected virtual bool OnFastCheckNeedsBuild (ConfigurationSelector configuration, TargetEvaluationContext context)
+		{
+			return next.OnFastCheckNeedsBuild (configuration, context);
 		}
 
 		#endregion

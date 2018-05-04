@@ -45,6 +45,11 @@ namespace MonoDevelop.Projects
 			dict = dictionary.ToList ();
 		}
 
+		public void CopyFrom (IDictionary<string, string> dictionary)
+		{
+			dict = dictionary.ToList ();
+		}
+
 		void ICustomDataItem.Deserialize (ITypeSerializer handler, DataCollection data)
 		{
 			foreach (var v in data.OfType<DataItem> ()) {
@@ -139,6 +144,11 @@ namespace MonoDevelop.Projects
 		void ICollection<KeyValuePair<string, string>>.CopyTo (KeyValuePair<string, string> [] array, int arrayIndex)
 		{
 			((ICollection<KeyValuePair<string, string>>)dict).CopyTo (array, arrayIndex);
+		}
+
+		public List<KeyValuePair<string, string>>.Enumerator GetEnumerator ()
+		{
+			return dict.GetEnumerator ();
 		}
 
 		IEnumerator IEnumerable.GetEnumerator ()

@@ -48,12 +48,13 @@ using MonoDevelop.Ide.Desktop;
 using MonoDevelop.MacInterop;
 using MonoDevelop.Components;
 using MonoDevelop.Components.MainToolbar;
-using MonoDevelop.MacIntegration.MacMenu;
 using MonoDevelop.Components.Extensions;
 using System.Runtime.InteropServices;
 using ObjCRuntime;
 using System.Diagnostics;
 using Xwt.Mac;
+using MonoDevelop.Components.Mac;
+using System.Reflection;
 
 namespace MonoDevelop.MacIntegration
 {
@@ -83,6 +84,57 @@ namespace MonoDevelop.MacIntegration
 			}
 		}
 
+		[DllImport("/usr/lib/libobjc.dylib")]
+		private static extern IntPtr class_getInstanceMethod(IntPtr classHandle, IntPtr Selector);
+
+		[DllImport("/usr/lib/libobjc.dylib")]
+		private static extern IntPtr method_getImplementation(IntPtr method);
+
+		[DllImport("/usr/lib/libobjc.dylib")]
+		private static extern IntPtr imp_implementationWithBlock(ref BlockLiteral block);
+
+		[DllImport("/usr/lib/libobjc.dylib")]
+		private static extern void method_setImplementation(IntPtr method, IntPtr imp);
+
+		[MonoNativeFunctionWrapper]
+		delegate void AccessibilitySetValueForAttributeDelegate (IntPtr self, IntPtr selector, IntPtr valueHandle, IntPtr attributeHandle);
+		delegate void SwizzledAccessibilitySetValueForAttributeDelegate (IntPtr block, IntPtr self, IntPtr valueHandle, IntPtr attributeHandle);
+
+		static IntPtr originalAccessibilitySetValueForAttributeMethod;
+		void SwizzleNSApplication ()
+		{
+			// Swizzle accessibilitySetValue:forAttribute: so that we can detect when VoiceOver gets enabled
+			var nsApplicationClassHandle = Class.GetHandle ("NSApplication");
+			var accessibilitySetValueForAttributeSelector = Selector.GetHandle ("accessibilitySetValue:forAttribute:");
+
+			var accessibilitySetValueForAttributeMethod = class_getInstanceMethod (nsApplicationClassHandle, accessibilitySetValueForAttributeSelector);
+			originalAccessibilitySetValueForAttributeMethod = method_getImplementation (accessibilitySetValueForAttributeMethod);
+
+			var block = new BlockLiteral ();
+
+			SwizzledAccessibilitySetValueForAttributeDelegate d = accessibilitySetValueForAttribute;
+			block.SetupBlock (d, null);
+			var imp = imp_implementationWithBlock (ref block);
+			method_setImplementation (accessibilitySetValueForAttributeMethod, imp);
+		}
+
+		[MonoPInvokeCallback (typeof (SwizzledAccessibilitySetValueForAttributeDelegate))]
+		static void accessibilitySetValueForAttribute (IntPtr block, IntPtr self, IntPtr valueHandle, IntPtr attributeHandle)
+		{
+			var d = Marshal.GetDelegateForFunctionPointer<AccessibilitySetValueForAttributeDelegate> (originalAccessibilitySetValueForAttributeMethod);
+			d (self, Selector.GetHandle ("accessibilitySetValue:forAttribute:"), valueHandle, attributeHandle);
+
+			NSString attrString = (NSString)ObjCRuntime.Runtime.GetNSObject (attributeHandle);
+			var val = (NSNumber)ObjCRuntime.Runtime.GetNSObject (valueHandle);
+
+			if (attrString == "AXEnhancedUserInterface" && !IdeTheme.AccessibilityEnabled) {
+				if (val.BoolValue) {
+					ShowVoiceOverNotice ();
+				}
+			}
+			AccessibilityInUse = val.BoolValue;
+		}
+
 		public MacPlatformService ()
 		{
 			if (initedGlobal)
@@ -105,7 +157,50 @@ namespace MonoDevelop.MacIntegration
 
 			Xwt.Toolkit.CurrentEngine.RegisterBackend<IExtendedTitleBarWindowBackend,ExtendedTitleBarWindowBackend> ();
 			Xwt.Toolkit.CurrentEngine.RegisterBackend<IExtendedTitleBarDialogBackend,ExtendedTitleBarDialogBackend> ();
+
+			var description = XamMacBuildInfo.Value;
+			if (string.IsNullOrEmpty (description)) {
+				LoggingService.LogWarning ("Failed to parse version of Xamarin.Mac used at runtime");
+			} else {
+				LoggingService.LogInfo ("Using {0}", description);
+			}
 		}
+
+		static string GetInfoPart (string line)
+		{
+			return line.Split (':') [1].Trim ();
+		}
+
+		static Lazy<string> XamMacBuildInfo = new Lazy<string> (() => {
+			const string buildInfoResource = "Xamarin.Mac.buildinfo";
+			var asm = System.Reflection.Assembly.GetExecutingAssembly ();
+
+			string version, hash, branch;
+
+			try {
+				using (var stream = asm.GetManifestResourceStream (buildInfoResource))
+				using (var sr = new StreamReader (stream)) {
+					// Version: 4.4.0.36
+					// Hash: 0c7c49a6
+					// Branch: master
+					// Build date: 2018 - 03 - 12 15:24:46 - 0400 -- discarded
+
+					version = GetInfoPart (sr.ReadLine ());
+					hash = GetInfoPart (sr.ReadLine ());
+					branch = GetInfoPart (sr.ReadLine ());
+
+					return $"Xamarin.Mac {version} ({branch} / {hash})";
+				}
+			} catch {
+				return string.Empty;
+			}
+		});
+
+		internal override string GetNativeRuntimeDescription ()
+		{
+			return XamMacBuildInfo.Value;
+		}
+
 
 		static void CheckGtkVersion (uint major, uint minor, uint micro)
 		{
@@ -140,7 +235,9 @@ namespace MonoDevelop.MacIntegration
 		public override Xwt.Toolkit LoadNativeToolkit ()
 		{
 			var path = Path.GetDirectoryName (GetType ().Assembly.Location);
-			System.Reflection.Assembly.LoadFrom (Path.Combine (path, "Xwt.XamMac.dll"));
+			Assembly.LoadFrom (Path.Combine (path, "Xwt.XamMac.dll"));
+
+			// Also calls NSApplication.Init();
 			var loaded = Xwt.Toolkit.Load (Xwt.ToolkitType.XamMac);
 
 			loaded.RegisterBackend<Xwt.Backends.IDialogBackend, ThemedMacDialogBackend> ();
@@ -153,7 +250,74 @@ namespace MonoDevelop.MacIntegration
 			GlobalSetup ();
 			timer.EndTiming ();
 
+			var appDelegate = NSApplication.SharedApplication.Delegate as Xwt.Mac.AppDelegate;
+			if (appDelegate != null) {
+				appDelegate.Terminating += (object o, TerminationEventArgs e) => {
+					if (MonoDevelop.Ide.IdeApp.IsRunning) {
+						// If GLib the mainloop is still running that means NSApplication.Terminate() was called
+						// before Gtk.Application.Quit(). Cancel Cocoa termination and exit the mainloop.
+						e.Reply = NSApplicationTerminateReply.Cancel;
+						Gtk.Main.Quit ();
+					} else {
+						// The mainloop has already exited and we've already cleaned up our application state
+						// so it's now safe to terminate Cocoa.
+						e.Reply = NSApplicationTerminateReply.Now;
+					}
+				};
+			}
+
+			// Listen to the AtkCocoa notification for the presence of VoiceOver
+			SwizzleNSApplication ();
+
+			var nc = NSNotificationCenter.DefaultCenter;
+			nc.AddObserver ((NSString)"AtkCocoaAccessibilityEnabled", (NSNotification) => {
+				Console.WriteLine ($"VoiceOver on {IdeTheme.AccessibilityEnabled}");
+				if (!IdeTheme.AccessibilityEnabled) {
+					Console.WriteLine ("Showing notice");
+					ShowVoiceOverNotice ();
+				}
+			}, NSApplication.SharedApplication);
+
+			// Now that Cocoa has been initialized we can check whether the keyboard focus mode is turned on
+			// See System Preferences - Keyboard - Shortcuts - Full Keyboard Access
+			var keyboardMode = NSUserDefaults.StandardUserDefaults.IntForKey ("AppleKeyboardUIMode");
+			// 0 - Text boxes and lists only
+			// 2 - All controls
+			// 3 - All controls + keyboard access
+			if (keyboardMode != 0) {
+				Gtk.Rc.ParseString ("style \"default\" { engine \"xamarin\" { focusstyle = 2 } }");
+				Gtk.Rc.ParseString ("style \"radio-or-check-box\" { engine \"xamarin\" { focusstyle = 2 } } ");
+			}
+
+			// Disallow window tabbing globally
+			if (MacSystemInformation.OsVersion >= MacSystemInformation.Sierra)
+				NSWindow.AllowsAutomaticWindowTabbing = false;
+
 			return loaded;
+		}
+
+		const string EnabledKey = "com.monodevelop.AccessibilityEnabled";
+		static void ShowVoiceOverNotice ()
+		{
+			var alert = new NSAlert ();
+			alert.MessageText = GettextCatalog.GetString ("Assistive Technology Detected");
+			alert.InformativeText = GettextCatalog.GetString ("{0} has detected an assistive technology (such as VoiceOver) is running. Do you want to restart {0} and enable the accessibility features?", BrandingService.ApplicationName);
+			alert.AddButton (GettextCatalog.GetString ("Restart and enable"));
+			alert.AddButton (GettextCatalog.GetString ("No"));
+
+			var result = alert.RunModal ();
+			switch (result) {
+			case 1000:
+				NSUserDefaults defaults = NSUserDefaults.StandardUserDefaults;
+				defaults.SetBool (true, EnabledKey);
+				defaults.Synchronize ();
+
+				IdeApp.Restart ();
+				break;
+
+			default:
+				break;
+			}
 		}
 
 		protected override string OnGetMimeTypeForUri (string uri)
@@ -172,14 +336,14 @@ namespace MonoDevelop.MacIntegration
 
 		internal static void OpenUrl (string url)
 		{
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				NSWorkspace.SharedWorkspace.OpenUrl (new NSUrl (url));
 			});
 		}
 
 		public override void OpenFile (string filename)
 		{
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				NSWorkspace.SharedWorkspace.OpenFile (filename);
 			});
 		}
@@ -235,7 +399,7 @@ namespace MonoDevelop.MacIntegration
 
 				CommandEntrySet ces = commandManager.CreateCommandEntrySet (commandMenuAddinPath);
 				foreach (CommandEntry ce in ces) {
-					rootMenu.AddItem (new MDSubMenuItem (commandManager, (CommandEntrySet) ce));
+					rootMenu.AddItem (new MDSubMenuItem (commandManager, (CommandEntrySet)ce));
 				}
 			} catch (Exception ex) {
 				try {
@@ -249,6 +413,7 @@ namespace MonoDevelop.MacIntegration
 				setupFail = true;
 				return false;
 			}
+
 			return true;
 		}
 
@@ -278,7 +443,7 @@ namespace MonoDevelop.MacIntegration
 			commandManager.GetCommand (EditCommands.DefaultPolicies).Text = GettextCatalog.GetString ("Policies...");
 			commandManager.GetCommand (HelpCommands.About).Text = GetAboutCommandText ();
 			commandManager.GetCommand (MacIntegrationCommands.HideWindow).Text = GetHideWindowCommandText ();
-			commandManager.GetCommand (ToolCommands.AddinManager).Text = GettextCatalog.GetString ("Add-ins...");
+			commandManager.GetCommand (ToolCommands.AddinManager).Text = GettextCatalog.GetString ("Extensions...");
 
 			initedApp = true;
 
@@ -288,6 +453,8 @@ namespace MonoDevelop.MacIntegration
 				IdeApp.Workbench.RootWindow.Realized += (sender, args) => {
 					var win = GtkQuartz.GetWindow ((Gtk.Window) sender);
 					win.CollectionBehavior |= NSWindowCollectionBehavior.FullScreenPrimary;
+					if (MacSystemInformation.OsVersion >= MacSystemInformation.Sierra)
+						win.TabbingMode = NSWindowTabbingMode.Disallowed;
 				};
 			}
 
@@ -319,7 +486,7 @@ namespace MonoDevelop.MacIntegration
 		static void UpdateColorPanelSubviewsAppearance (NSView view, NSAppearance appearance)
 		{
 			if (view.Class.Name == "NSPageableTableView")
-					((NSTableView)view).BackgroundColor = Styles.BackgroundColor.ToNSColor ();
+					((NSTableView)view).BackgroundColor = Xwt.Mac.Util.ToNSColor (Styles.BackgroundColor);
 			view.Appearance = appearance;
 
 			foreach (var subview in view.Subviews)
@@ -397,7 +564,7 @@ namespace MonoDevelop.MacIntegration
 				{
 					// We can only attempt to quit safely if all windows are GTK windows and not modal
 					if (!IsModalDialogRunning ()) {
-						e.UserCancelled = !IdeApp.Exit ();
+						e.UserCancelled = !IdeApp.Exit ().Result; // FIXME: could this block in rare cases?
 						e.Handled = true;
 						return;
 					}
@@ -882,10 +1049,17 @@ namespace MonoDevelop.MacIntegration
 
 		public override bool IsModalDialogRunning ()
 		{
+			if (NSApplication.SharedApplication.ModalWindow != null)
+				return true;
+
 			var toplevels = GtkQuartz.GetToplevels ();
 
 			// Check GtkWindow's Modal flag or for a visible NSPanel
-			return toplevels.Any (t => (t.Value != null && t.Value.Modal && t.Value.Visible) || (t.Key.IsVisible && (t.Key is NSPanel)));
+			var ret = toplevels
+				.Where (x => !x.Key.DebugDescription.StartsWith ("<_NSFullScreenTileDividerWindow", StringComparison.Ordinal))
+				.Any (t => (t.Value != null && t.Value.Modal && t.Value.Visible));
+
+			return ret;
 		}
 
 		internal override void AddChildWindow (Gtk.Window parent, Gtk.Window child)
@@ -952,7 +1126,9 @@ namespace MonoDevelop.MacIntegration
 			var proc = new Process ();
 
 			var path = bundlePath.Combine ("Contents", "MacOS");
-			var psi = new ProcessStartInfo (path.Combine ("mdtool")) {
+			//assume renames of mdtool end with "tool"
+			var mdtool = Directory.EnumerateFiles (path, "*tool").Single();
+			var psi = new ProcessStartInfo (mdtool) {
 				CreateNoWindow = true,
 				UseShellExecute = false,
 				WorkingDirectory = path,

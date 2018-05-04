@@ -28,6 +28,7 @@ using System.Collections.Generic;
 using System.Linq;
 using MonoDevelop.Ide.Templates;
 using MonoDevelop.Projects;
+using NuGet.ProjectManagement;
 using NuGet.Protocol.Core.Types;
 using NuGet.Versioning;
 
@@ -56,7 +57,7 @@ namespace MonoDevelop.PackageManagement
 
 			ProgressMonitorStatusMessage progressMessage = ProgressMonitorStatusMessageFactory.CreateInstallingProjectTemplatePackagesMessage ();
 			PackageManagementMSBuildExtension.PackageRestoreTask =
-				backgroundPackageActionRunner.RunAsync (progressMessage, installPackageActions);
+				backgroundPackageActionRunner.RunAsync (progressMessage, installPackageActions, clearConsole: false);
 		}
 
 		List<IPackageAction> CreatePackageActions (Solution solution, IList<PackageReferencesForCreatedProject> packageReferencesForCreatedProjects)
@@ -103,15 +104,21 @@ namespace MonoDevelop.PackageManagement
 			ProjectTemplateSourceRepositoryProvider repositoryProvider,
 			ProjectTemplatePackageReference packageReference)
 		{
-			var primaryRepositories = repositoryProvider.GetRepositories (packageReference.IsLocalPackage);
-			var secondaryRepositories = GetSecondaryRepositories (primaryRepositories, packageReference.IsLocalPackage);
+			var primaryRepositories = repositoryProvider.GetRepositories (packageReference).ToList ();
+			var secondaryRepositories = GetSecondaryRepositories (primaryRepositories, packageReference);
 
+			var context = new NuGetProjectContext {
+				FileConflictResolution = FileConflictAction.IgnoreAll
+			};
 			return new InstallNuGetPackageAction (
 				primaryRepositories,
 				secondaryRepositories,
 				PackageManagementServices.Workspace.GetSolutionManager (dotNetProject.ParentSolution),
 				new DotNetProjectProxy (dotNetProject),
-				new NuGetProjectContext ());
+				context) {
+				LicensesMustBeAccepted = packageReference.RequireLicenseAcceptance,
+				OpenReadmeFile = false
+			};
 		}
 
 		/// <summary>
@@ -120,9 +127,9 @@ namespace MonoDevelop.PackageManagement
 		/// Returning null allows all enabled package sources to be used when resolving dependencies.
 		/// </summary>
 		static IEnumerable<SourceRepository> GetSecondaryRepositories (
-			IEnumerable<SourceRepository> primaryRepositories, bool local)
+			IEnumerable<SourceRepository> primaryRepositories, ProjectTemplatePackageReference packageReference)
 		{
-			if (local) {
+			if (packageReference.IsLocalPackage || packageReference.Directory.IsNotNull) {
 				return primaryRepositories;
 			}
 			return null;

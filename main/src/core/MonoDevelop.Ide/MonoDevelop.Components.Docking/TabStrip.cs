@@ -33,6 +33,7 @@ using Gtk;
 using System;
 using MonoDevelop.Ide.Gui;
 using System.Linq;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
 
@@ -47,8 +48,15 @@ namespace MonoDevelop.Components.Docking
 
 		public TabStrip (DockFrame frame)
 		{
+			Accessible.SetRole (AtkCocoa.Roles.AXTabGroup);
+			Accessible.SetCommonAttributes ("Docking.TabStrip",
+			                                GettextCatalog.GetString ("Pad Tab Bar"),
+			                                GettextCatalog.GetString ("The different pads in this dock position"));
+
 			VBox vbox = new VBox ();
+			vbox.Accessible.SetShouldIgnore (true);
 			box = new TabStripBox () { TabStrip = this };
+			box.Accessible.SetShouldIgnore (true);
 			vbox.PackStart (box, false, false, 0);
 		//	vbox.PackStart (bottomFiller, false, false, 0);
 			Add (vbox);
@@ -89,15 +97,22 @@ namespace MonoDevelop.Components.Docking
 				tab.Page.Hide ();
 			}
 			
-			tab.ButtonPressEvent += OnTabPress;
+			tab.TabPressed += OnTabPress;
+			tab.UpdateRole (true, this);
+
+			UpdateAccessibilityTabs ();
 		}
 
 		void HandleRemoved (object o, RemovedArgs args)
 		{
-			Gtk.Widget w = args.Widget;
-			w.ButtonPressEvent -= OnTabPress;
+			var w = (DockItemTitleTab)args.Widget;
+			w.UpdateRole (false, this);
+
+			w.TabPressed -= OnTabPress;
 			if (currentTab >= box.Children.Length)
 				currentTab = box.Children.Length - 1;
+
+			UpdateAccessibilityTabs ();
 		}
 
 		public void SetTabLabel (Gtk.Widget page, Xwt.Drawing.Image icon, string label)
@@ -109,6 +124,19 @@ namespace MonoDevelop.Components.Docking
 					break;
 				}
 			}
+		}
+
+		void UpdateAccessibilityTabs ()
+		{
+			var tabs = new Atk.Object [box.Children.Length];
+			int i = 0;
+
+			foreach (DockItemTitleTab tab in box.Children) {
+				tabs [i] = tab.Accessible;
+				i++;
+			}
+
+			Accessible.SetTabs (tabs);
 		}
 		
 		public void UpdateStyle (DockItem item)
@@ -177,13 +205,12 @@ namespace MonoDevelop.Components.Docking
 				box.Remove (w);
 		}
 		
-		void OnTabPress (object s, Gtk.ButtonPressEventArgs args)
+		void OnTabPress (object s, EventArgs args)
 		{
 			CurrentTab = Array.IndexOf (box.Children, s);
 			DockItemTitleTab t = (DockItemTitleTab) s;
 			DockItem.SetFocus (t.Page);
 			QueueDraw ();
-			args.RetVal = true;
 		}
 
 		protected override void OnSizeAllocated (Gdk.Rectangle allocation)
@@ -207,6 +234,10 @@ namespace MonoDevelop.Components.Docking
 		{
 			int tabsSize = 0;
 			var children = box.Children;
+
+			if (children == null || children.Length == 0) {
+				return;
+			}
 
 			foreach (DockItemTitleTab tab in children)
 				tabsSize += tab.LabelWidth;

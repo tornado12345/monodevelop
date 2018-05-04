@@ -63,6 +63,7 @@ namespace MonoDevelop.Ide
 		ArrayList errorsList = new ArrayList ();
 		bool initialized;
 		static readonly int ipcBasePort = 40000;
+		static Stopwatch startupTimer = new Stopwatch ();
 		
 		Task<int> IApplication.Run (string[] args)
 		{
@@ -74,11 +75,12 @@ namespace MonoDevelop.Ide
 		
 		int Run (MonoDevelopOptions options)
 		{
-			LoggingService.LogInfo ("Starting {0} {1}", BrandingService.ApplicationName, IdeVersionInfo.MonoDevelopVersion);
+			LoggingService.LogInfo ("Starting {0} {1}", BrandingService.ApplicationLongName, IdeVersionInfo.MonoDevelopVersion);
 			LoggingService.LogInfo ("Running on {0}", IdeVersionInfo.GetRuntimeInfo ());
 
 			//ensure native libs initialized before we hit anything that p/invokes
 			Platform.Initialize ();
+			GettextCatalog.Initialize ();
 
 			LoggingService.LogInfo ("Operating System: {0}", SystemInformation.GetOperatingSystemDescription ());
 
@@ -95,8 +97,16 @@ namespace MonoDevelop.Ide
 				return 1;
 			SetupExceptionManager ();
 
+			// explicit GLib type system initialization for GLib < 2.36 before any other type system access
+			GLib.GType.Init ();
+
 			IdeApp.Customizer = options.IdeCustomizer ?? new IdeCustomizer ();
-			IdeApp.Customizer.Initialize ();
+			try {
+				IdeApp.Customizer.Initialize ();
+			} catch (UnauthorizedAccessException ua) {
+				LoggingService.LogError ("Unauthorized access: " + ua.Message);
+				return 1;
+			}
 
 			try {
 				GLibLogging.Enabled = true;
@@ -111,7 +121,7 @@ namespace MonoDevelop.Ide
 
 			// XWT initialization
 			FilePath p = typeof(IdeStartup).Assembly.Location;
-			Assembly.LoadFrom (p.ParentDirectory.Combine ("Xwt.Gtk.dll"));
+			Platform.AssemblyLoad(p.ParentDirectory.Combine("Xwt.Gtk.dll"));
 			Xwt.Application.InitializeAsGuest (Xwt.ToolkitType.Gtk);
 			Xwt.Toolkit.CurrentEngine.RegisterBackend<IExtendedTitleBarWindowBackend,GtkExtendedTitleBarWindowBackend> ();
 			Xwt.Toolkit.CurrentEngine.RegisterBackend<IExtendedTitleBarDialogBackend,GtkExtendedTitleBarDialogBackend> ();
@@ -232,12 +242,17 @@ namespace MonoDevelop.Ide
 				// load previous combine
 				RecentFile openedProject = null;
 				if (IdeApp.Preferences.LoadPrevSolutionOnStartup && !startupInfo.HasSolutionFile && !IdeApp.Workspace.WorkspaceItemIsOpening && !IdeApp.Workspace.IsOpen) {
-					openedProject = DesktopService.RecentFiles.GetProjects ().FirstOrDefault ();
-					if (openedProject != null)
-						IdeApp.Workspace.OpenWorkspaceItem (openedProject.FileName).ContinueWith (t => IdeApp.OpenFiles (startupInfo.RequestedFileList), TaskScheduler.FromCurrentSynchronizationContext ());
+					openedProject = DesktopService.RecentFiles.MostRecentlyUsedProject;
+					if (openedProject != null) {
+						var metadata = GetOpenWorkspaceOnStartupMetadata ();
+						IdeApp.Workspace.OpenWorkspaceItem (openedProject.FileName, true, true, metadata).ContinueWith (t => IdeApp.OpenFiles (startupInfo.RequestedFileList, metadata), TaskScheduler.FromCurrentSynchronizationContext ());
+						startupInfo.OpenedRecentProject = true;
+					}
 				}
-				if (openedProject == null)
-					IdeApp.OpenFiles (startupInfo.RequestedFileList);
+				if (openedProject == null) {
+					IdeApp.OpenFiles (startupInfo.RequestedFileList, GetOpenWorkspaceOnStartupMetadata ());
+					startupInfo.OpenedFiles = startupInfo.HasFiles;
+				}
 				
 				monitor.Step (1);
 			
@@ -280,6 +295,11 @@ namespace MonoDevelop.Ide
 				
 			AddinManager.AddExtensionNodeHandler("/MonoDevelop/Ide/InitCompleteHandlers", OnExtensionChanged);
 			StartLockupTracker ();
+
+			startupTimer.Stop ();
+			Counters.Startup.Inc (GetStartupMetadata (startupInfo));
+
+			GLib.Idle.Add (OnIdle);
 			IdeApp.Run ();
 
 			IdeApp.Customizer.OnIdeShutdown ();
@@ -293,8 +313,16 @@ namespace MonoDevelop.Ide
 			IdeApp.Customizer.OnCoreShutdown ();
 
 			InstrumentationService.Stop ();
+
+			MonoDevelop.Components.GtkWorkarounds.Terminate ();
 			
 			return 0;
+		}
+
+		static bool OnIdle ()
+		{
+			Composition.CompositionManager.InitializeAsync ().Ignore ();
+			return false;
 		}
 
 		static DateTime lastIdle;
@@ -537,7 +565,7 @@ namespace MonoDevelop.Ide
 		
 		static void HandleException (Exception ex, bool willShutdown)
 		{
-			var msg = String.Format ("An unhandled exception has occured. Terminating {0}? {1}", BrandingService.ApplicationName, willShutdown);
+			var msg = String.Format ("An unhandled exception has occurred. Terminating {0}? {1}", BrandingService.ApplicationName, willShutdown);
 			var aggregateException = ex as AggregateException;
 			if (aggregateException != null) {
 				aggregateException.Flatten ().Handle (innerEx => {
@@ -568,6 +596,12 @@ namespace MonoDevelop.Ide
 		
 		public static int Main (string[] args, IdeCustomizer customizer = null)
 		{
+			// Using a Stopwatch instead of a TimerCounter since calling
+			// TimerCounter.BeginTiming here would occur before any timer
+			// handlers can be registered. So instead the startup duration is
+			// set as a metadata property on the Counters.Startup counter.
+			startupTimer.Start ();
+
 			var options = MonoDevelopOptions.Parse (args);
 			if (options.ShowHelp || options.Error != null)
 				return options.Error != null? -1 : 0;
@@ -620,7 +654,7 @@ namespace MonoDevelop.Ide
 				foreach (var path in paths) {
 					var file = BrandingService.GetFile (path.Replace ('/',Path.DirectorySeparatorChar));
 					if (File.Exists (file)) {
-						Assembly asm = Assembly.LoadFrom (file);
+						Assembly asm = Platform.AssemblyLoad(file);
 						var t = asm.GetType (type, true);
 						var c = Activator.CreateInstance (t) as IdeCustomizer;
 						if (c == null)
@@ -630,6 +664,28 @@ namespace MonoDevelop.Ide
 				}
 			}
 			return null;
+		}
+
+		static Dictionary<string, string> GetStartupMetadata (StartupInfo startupInfo)
+		{
+			var metadata = new Dictionary<string, string> ();
+
+			metadata ["CorrectedStartupTime"] = startupTimer.ElapsedMilliseconds.ToString ();
+			metadata ["StartupType"] = "0";
+
+			var assetType = StartupAssetType.FromStartupInfo (startupInfo);
+
+			metadata ["AssetTypeId"] = assetType.Id.ToString ();
+			metadata ["AssetTypeName"] = assetType.Name;
+
+			return metadata;
+		}
+
+		internal static IDictionary<string, string> GetOpenWorkspaceOnStartupMetadata ()
+		{
+			var metadata = new Dictionary<string, string> ();
+			metadata ["OnStartup"] = bool.TrueString;
+			return metadata;
 		}
 	}
 	

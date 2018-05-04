@@ -153,7 +153,7 @@ namespace MonoDevelop.VersionControl.Git
 		bool RefreshFile (string path, CheckoutNotifyFlags flags)
 		{
 			FilePath fp = RootRepository.FromGitPath (path);
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				if (IdeApp.IsInitialized) {
 					MonoDevelop.Ide.Gui.Document doc = IdeApp.Workbench.GetDocument (fp);
 					if (doc != null)
@@ -170,7 +170,8 @@ namespace MonoDevelop.VersionControl.Git
 		static bool OnTransferProgress (TransferProgress tp, ProgressMonitor monitor, ref int progress)
 		{
 			if (progress == 0 && tp.ReceivedObjects == 0) {
-				monitor.BeginTask (GettextCatalog.GetString ("Receiving and indexing objects"), 2 * tp.TotalObjects);
+				progress = 1;
+				monitor.Log.WriteLine (GettextCatalog.GetString ("Receiving and indexing objects"), 2 * tp.TotalObjects);
 				throttleWatch.Restart ();
 			}
 
@@ -179,11 +180,10 @@ namespace MonoDevelop.VersionControl.Git
 			if (throttleWatch.ElapsedMilliseconds > progressThrottle) {
 				monitor.Step (steps);
 				throttleWatch.Restart ();
+				progress = currentProgress;
 			}
-			progress = currentProgress;
 
 			if (tp.IndexedObjects >= tp.TotalObjects) {
-				monitor.EndTask ();
 				throttleWatch.Stop ();
 			}
 
@@ -193,7 +193,8 @@ namespace MonoDevelop.VersionControl.Git
 		static void OnCheckoutProgress (int completedSteps, int totalSteps, ProgressMonitor monitor, ref int progress)
 		{
 			if (progress == 0 && completedSteps == 0) {
-				monitor.BeginTask (GettextCatalog.GetString ("Checking out files"), totalSteps);
+				progress = 1;
+				monitor.Log.WriteLine (GettextCatalog.GetString ("Checking out files"), 2 * totalSteps);
 				throttleWatch.Restart ();
 			}
 
@@ -201,11 +202,10 @@ namespace MonoDevelop.VersionControl.Git
 			if (throttleWatch.ElapsedMilliseconds > progressThrottle) {
 				monitor.Step (steps);
 				throttleWatch.Restart ();
+				progress = completedSteps;
 			}
-			progress = completedSteps;
 
 			if (completedSteps >= totalSteps) {
-				monitor.EndTask ();
 				throttleWatch.Stop ();
 			}
 		}
@@ -396,12 +396,22 @@ namespace MonoDevelop.VersionControl.Git
 
 		protected override IEnumerable<VersionInfo> OnGetVersionInfo (IEnumerable<FilePath> paths, bool getRemoteStatus)
 		{
-			return GetDirectoryVersionInfo (FilePath.Null, paths, getRemoteStatus, false);
+			try {
+				return GetDirectoryVersionInfo (FilePath.Null, paths, getRemoteStatus, false);
+			} catch (Exception e) {
+				LoggingService.LogError ("Failed to query git status", e);
+				return paths.Select (x => VersionInfo.CreateUnversioned (x, false));
+			}
 		}
 
 		protected override VersionInfo[] OnGetDirectoryVersionInfo (FilePath localDirectory, bool getRemoteStatus, bool recursive)
 		{
-			return GetDirectoryVersionInfo (localDirectory, null, getRemoteStatus, recursive);
+			try {
+				return GetDirectoryVersionInfo (localDirectory, null, getRemoteStatus, recursive);
+			} catch (Exception e) {
+				LoggingService.LogError ("Failed to get git directory status", e);
+				return new VersionInfo [0];
+			}
 		}
 
 		// Used for checking if we will dupe data.
@@ -592,7 +602,7 @@ namespace MonoDevelop.VersionControl.Git
 		protected override void OnUpdate (FilePath[] localPaths, bool recurse, ProgressMonitor monitor)
 		{
 			// TODO: Make it work differently for submodules.
-			monitor.BeginTask (GettextCatalog.GetString (GettextCatalog.GetString ("Updating")), 5);
+			monitor.BeginTask (GettextCatalog.GetString ("Updating"), 5);
 
 			if (RootRepository.Head.IsTracking) {
 				Fetch (monitor, RootRepository.Head.Remote.Name);
@@ -609,7 +619,7 @@ namespace MonoDevelop.VersionControl.Git
 			monitor.EndTask ();
 		}
 
-		static void RetryUntilSuccess (ProgressMonitor monitor, Action<GitCredentialsType> func)
+		static void RetryUntilSuccess (ProgressMonitor monitor, Action<GitCredentialsType> func, Action onRetry = null)
 		{
 			bool retry;
 			using (var tfsSession = new TfsSmartSession ()) {
@@ -619,13 +629,17 @@ namespace MonoDevelop.VersionControl.Git
 						func (credType);
 						GitCredentials.StoreCredentials (credType);
 						retry = false;
-					} catch (AuthenticationException) {
+					} catch (AuthenticationException e) {
 						GitCredentials.InvalidateCredentials (credType);
-						retry = true;
+						retry = AlertButton.Yes == MessageService.AskQuestion (
+							GettextCatalog.GetString ("Remote server error: {0}", e.Message),
+							GettextCatalog.GetString ("Retry authentication?"),
+							AlertButton.Yes, AlertButton.No);
+						if (!retry)
+							monitor?.ReportError (e.Message, null);
 					} catch (VersionControlException e) {
 						GitCredentials.InvalidateCredentials (credType);
-						if (monitor != null)
-							monitor.ReportError (e.Message, null);
+						monitor?.ReportError (e.Message, null);
 						retry = false;
 					} catch (UserCancelledException) {
 						GitCredentials.StoreCredentials (credType);
@@ -633,9 +647,10 @@ namespace MonoDevelop.VersionControl.Git
 					} catch (LibGit2SharpException e) {
 						GitCredentials.InvalidateCredentials (credType);
 
-						if (!tfsSession.Disposed) {
+						if (credType == GitCredentialsType.Tfs) {
 							retry = true;
 							tfsSession.Dispose ();
+							onRetry?.Invoke ();
 							continue;
 						}
 
@@ -650,7 +665,7 @@ namespace MonoDevelop.VersionControl.Git
 						else
 							message = e.Message;
 
-						throw new VersionControlException (message);
+						throw new VersionControlException (message, e);
 					}
 				} while (retry);
 			}
@@ -658,6 +673,7 @@ namespace MonoDevelop.VersionControl.Git
 
 		public void Fetch (ProgressMonitor monitor, string remote)
 		{
+			monitor.BeginTask (GettextCatalog.GetString ("Fetching"), 1);
 			monitor.Log.WriteLine (GettextCatalog.GetString ("Fetching from '{0}'", remote));
 			int progress = 0;
 			RetryUntilSuccess (monitor, credType => RootRepository.Fetch (remote, new FetchOptions {
@@ -665,6 +681,7 @@ namespace MonoDevelop.VersionControl.Git
 				OnTransferProgress = tp => OnTransferProgress (tp, monitor, ref progress),
 			}));
 			monitor.Step (1);
+			monitor.EndTask ();
 		}
 
 		bool CommonPreMergeRebase (GitUpdateOptions options, ProgressMonitor monitor, out int stashIndex)
@@ -911,21 +928,94 @@ namespace MonoDevelop.VersionControl.Git
 		{
 			int transferProgress = 0;
 			int checkoutProgress = 0;
-			RetryUntilSuccess (monitor, credType => {
-				RootPath = LibGit2Sharp.Repository.Clone (Url, targetLocalPath, new CloneOptions {
-					CredentialsProvider = (url, userFromUrl, types) => GitCredentials.TryGet (url, userFromUrl, types, credType),
 
-					OnTransferProgress = (tp) => OnTransferProgress (tp, monitor, ref transferProgress),
-					OnCheckoutProgress = (path, completedSteps, totalSteps) => OnCheckoutProgress (completedSteps, totalSteps, monitor, ref checkoutProgress),
-					RecurseSubmodules = true,
+			try {
+				monitor.BeginTask ("Cloning...", 2);
+
+				RetryUntilSuccess (monitor, credType => {
+					RootPath = LibGit2Sharp.Repository.Clone (Url, targetLocalPath, new CloneOptions {
+						CredentialsProvider = (url, userFromUrl, types) => {
+							transferProgress = checkoutProgress = 0;
+							return GitCredentials.TryGet (url, userFromUrl, types, credType);
+						},
+						RepositoryOperationStarting = ctx => {
+							Runtime.RunInMainThread (() => {
+								monitor.Log.WriteLine ("Checking out repository at '{0}'", ctx.RepositoryPath);
+							});
+							return true;
+						},
+						OnTransferProgress = (tp) => OnTransferProgress (tp, monitor, ref transferProgress),
+						OnCheckoutProgress = (path, completedSteps, totalSteps) => {
+							OnCheckoutProgress (completedSteps, totalSteps, monitor, ref checkoutProgress);
+							Runtime.RunInMainThread (() => {
+								monitor.Log.WriteLine ("Checking out file '{0}'", path);
+							});
+						},
+					});
 				});
-			});
 
-			if (monitor.CancellationToken.IsCancellationRequested || RootPath.IsNull)
-				return;
-			
-			RootPath = RootPath.ParentDirectory;
-			RootRepository = new LibGit2Sharp.Repository (RootPath);
+				if (monitor.CancellationToken.IsCancellationRequested || RootPath.IsNull)
+					return;
+
+				monitor.Step (1);
+
+				RootPath = RootPath.ParentDirectory;
+				RootRepository = new LibGit2Sharp.Repository (RootPath);
+
+				RecursivelyCloneSubmodules (RootPath, monitor);
+			} finally {
+				monitor.EndTask ();
+			}
+		}
+
+		static void RecursivelyCloneSubmodules (string path, ProgressMonitor monitor)
+		{
+			var submodules = new List<string> ();
+			using (var repo = new LibGit2Sharp.Repository (path)) {
+				RetryUntilSuccess (monitor, credType => {
+					int transferProgress = 0, checkoutProgress = 0;
+					SubmoduleUpdateOptions updateOptions = new SubmoduleUpdateOptions () {
+						Init = true,
+						CredentialsProvider = (url, userFromUrl, types) => {
+							transferProgress = checkoutProgress = 0;
+							return GitCredentials.TryGet (url, userFromUrl, types, credType);
+						},
+						OnTransferProgress = (tp) => OnTransferProgress (tp, monitor, ref transferProgress),
+						OnCheckoutProgress = (file, completedSteps, totalSteps) => {
+							OnCheckoutProgress (completedSteps, totalSteps, monitor, ref checkoutProgress);
+							Runtime.RunInMainThread (() => {
+								monitor.Log.WriteLine ("Checking out file '{0}'", file);
+							});
+						},
+					};
+
+					// Iterate through the submodules (where the submodule is in the index),
+					// and clone them.
+					var submoduleArray = repo.Submodules.Where (sm => sm.RetrieveStatus ().HasFlag (SubmoduleStatus.InIndex)).ToArray ();
+					monitor.BeginTask (submoduleArray.Length);
+					foreach (var sm in submoduleArray) {
+						if (monitor.CancellationToken.IsCancellationRequested) {
+							throw new UserCancelledException ("Recursive clone of submodules was cancelled.");
+						}
+
+						Runtime.RunInMainThread (() => {
+							monitor.Log.WriteLine ("Checking out submodule at '{0}'", sm.Path);
+						});
+						repo.Submodules.Update (sm.Name, updateOptions);
+						monitor.Step (1);
+
+						submodules.Add (Path.Combine (repo.Info.WorkingDirectory, sm.Path));
+					}
+					monitor.EndTask ();
+				});
+			}
+
+			// If we are continuing the recursive operation, then
+			// recurse into nested submodules.
+			// Check submodules to see if they have their own submodules.
+			foreach (string submodule in submodules) {
+				RecursivelyCloneSubmodules (submodule, monitor);
+			}
 		}
 
 		protected override void OnRevert (FilePath[] localPaths, bool recurse, ProgressMonitor monitor)

@@ -25,6 +25,7 @@
 // THE SOFTWARE.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using MonoDevelop.Components.Commands;
@@ -32,7 +33,6 @@ using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Projects;
 using NuGet.Common;
-using System.Collections.Generic;
 
 namespace MonoDevelop.PackageManagement.Commands
 {
@@ -40,7 +40,6 @@ namespace MonoDevelop.PackageManagement.Commands
 	{
 		protected override void Run ()
 		{
-			ClearUpdatedPackages ();
 			IdeApp.Workspace.SolutionLoaded += SolutionLoaded;
 			IdeApp.Workspace.SolutionUnloaded += SolutionUnloaded;
 			IdeApp.Workspace.ItemUnloading += WorkspaceItemUnloading;
@@ -48,13 +47,18 @@ namespace MonoDevelop.PackageManagement.Commands
 			FileService.FileChanged += FileChanged;
 		}
 
-		async void SolutionLoaded (object sender, SolutionEventArgs e)
+		void SolutionLoaded (object sender, SolutionEventArgs e)
+		{
+			Task.Run (() => OnSolutionLoaded (e.Solution)).Ignore ();
+		}
+
+		async Task OnSolutionLoaded (Solution solution)
 		{
 			try {
 				if (ShouldRestorePackages) {
-					await RestoreAndCheckForUpdates (e.Solution);
-				} else if (ShouldCheckForUpdates && AnyProjectHasPackages (e.Solution)) {
-					CheckForUpdates (e.Solution);
+					await RestoreAndCheckForUpdates (solution);
+				} else if (ShouldCheckForUpdates && AnyProjectHasPackages (solution)) {
+					CheckForUpdates (solution);
 				}
 			} catch (Exception ex) {
 				LoggingService.LogError ("PackageManagementStartupHandler error", ex);
@@ -87,6 +91,7 @@ namespace MonoDevelop.PackageManagement.Commands
 		void LastWorkspaceItemClosed (object sender, EventArgs e)
 		{
 			ClearUpdatedPackages ();
+			PackageManagementCredentialService.Reset ();
 		}
 
 		async Task RestoreAndCheckForUpdates (Solution solution)
@@ -129,10 +134,7 @@ namespace MonoDevelop.PackageManagement.Commands
 		void WorkspaceItemUnloading (object sender, ItemUnloadingEventArgs e)
 		{
 			try {
-				if (PackageManagementServices.BackgroundPackageActionRunner.IsRunning) {
-					MessageService.ShowMessage (GettextCatalog.GetString ("Unable to close the solution when NuGet packages are being processed."));
-					e.Cancel = true;
-				}
+				e.Cancel = !PendingPackageActionsHandler.OnSolutionClosing ();
 			} catch (Exception ex) {
 				LoggingService.LogError ("Error on unloading workspace item.", ex);
 			}
@@ -163,9 +165,6 @@ namespace MonoDevelop.PackageManagement.Commands
 				return;
 			}
 
-			//check that the projects have the correct backing system for project.json
-			RefreshProjectsIfNecessary (projects);
-
 			//queue up in a timeout in case this was kicked off from a command
 			GLib.Timeout.Add (0, () => {
 				if (projects.Count == 1) {
@@ -184,20 +183,6 @@ namespace MonoDevelop.PackageManagement.Commands
 				//TODO: handle project.json changing in multiple solutions at once
 				return false;
 			});
-		}
-
-		static void RefreshProjectsIfNecessary (List<DotNetProject> projects)
-		{
-			foreach (var solution in projects.GroupBy (p => p.ParentSolution)) {
-				var solutionManager = (MonoDevelopSolutionManager)PackageManagementServices.Workspace.GetSolutionManager (solution.Key);
-				foreach (var nugetProject in solutionManager.GetNuGetProjects ()) {
-					var msbuildProject = nugetProject as NuGet.ProjectManagement.MSBuildNuGetProject;
-					if (msbuildProject != null && solution.Any (p => p.FileName == msbuildProject.MSBuildNuGetProjectSystem.ProjectFullPath)) {
-						solutionManager.ClearProjectCache ();
-						break;
-					}
-				}
-			}
 		}
 	}
 }

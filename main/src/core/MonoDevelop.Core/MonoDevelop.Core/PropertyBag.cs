@@ -232,49 +232,51 @@ namespace MonoDevelop.Core
 		{
 			if (data.Count == 0)
 				return;
-			
-			properties = ImmutableDictionary<string,object>.Empty;
+
+			var propertiesBuilder = ImmutableDictionary.CreateBuilder<string, object> ();
 			context = handler.SerializationContext.Serializer.DataContext;
 			sourceFile = handler.SerializationContext.BaseFile;
 			foreach (DataNode nod in data) {
 				if (nod.Name != "ctype")
-					properties = properties.SetItem (UnescapeName (nod.Name), new DataNodeInfo { DataNode = nod });
+					propertiesBuilder.Add (UnescapeName (nod.Name), new DataNodeInfo { DataNode = nod });
 			}
+
+			properties = propertiesBuilder.ToImmutable ();
 		}
 		
 		string EscapeName (string str)
 		{
-			StringBuilder sb = new StringBuilder (str.Length);
+			StringBuilder sb = StringBuilderCache.Allocate ();
 			for (int n=0; n<str.Length; n++) {
 				char c = str [n];
 				if (c == '_')
 					sb.Append ("__");
 				else if (c != '.' && c != '-' && !char.IsLetter (c) && (!char.IsNumber (c) || n==0)) {
 					string s = ((int)c).ToString ("X");
-					sb.Append ("_" + s.Length.ToString ());
+					sb.Append ("_").Append (s.Length.ToString ());
 					sb.Append (s);
 				}
 				else
 					sb.Append (c);
 			}
-			return sb.ToString ();
+			return StringBuilderCache.ReturnAndFree (sb);
 		}
 		
 		string UnescapeName (string str)
 		{
-			StringBuilder sb = new StringBuilder (str.Length);
+			StringBuilder sb = StringBuilderCache.Allocate ();
 			for (int n=0; n<str.Length; n++) {
 				char c = str [n];
 				if (c == '_') {
 					if (n + 1 >= str.Length)
-						return sb.ToString ();
+						return StringBuilderCache.ReturnAndFree (sb);
 					if (str [n + 1] == '_') {
 						sb.Append (c);
 						n++;
 					} else {
 						int len = int.Parse (str.Substring (n+1,1));
 						if (n + 2 + len - 1 >= str.Length)
-							return sb.ToString ();
+							return StringBuilderCache.ReturnAndFree (sb);
 						int ic;
 						if (int.TryParse (str.Substring (n + 2, len), NumberStyles.HexNumber, null, out ic))
 							sb.Append ((char)ic);
@@ -283,7 +285,7 @@ namespace MonoDevelop.Core
 				} else
 					sb.Append (c);
 			}
-			return sb.ToString ();
+			return StringBuilderCache.ReturnAndFree (sb);
 		}
 	}
 

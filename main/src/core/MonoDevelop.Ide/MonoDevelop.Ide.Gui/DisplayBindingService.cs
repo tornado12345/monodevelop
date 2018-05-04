@@ -39,12 +39,31 @@ namespace MonoDevelop.Ide.Gui
 {
 	public static class DisplayBindingService
 	{
+		const string extensionPath = "/MonoDevelop/Ide/DisplayBindings";
+
+		static DisplayBindingService ()
+		{
+			AddinManager.ExtensionChanged += OnExtensionChanged;
+			UpdateExtensionObjects ();
+		}
+
+		static void OnExtensionChanged (object sender, ExtensionEventArgs args)
+		{
+			if (args.PathChanged (extensionPath))
+				UpdateExtensionObjects ();
+		}
+
+		static void UpdateExtensionObjects ()
+		{
+			registeredObjects = AddinManager.GetExtensionObjects (extensionPath);
+		}
+
+		static object [] registeredObjects;
 		private static List<IDisplayBinding> runtimeBindings = new List<IDisplayBinding>();
 
 		public static IEnumerable<T> GetBindings<T> ()
 		{
-			return runtimeBindings.OfType<T>().Concat(AddinManager.GetExtensionObjects ("/MonoDevelop/Ide/DisplayBindings")
-				.OfType<T> ());
+			return runtimeBindings.OfType<T> ().Concat (registeredObjects.OfType<T> ());
 		}
 
 		public static void RegisterRuntimeDisplayBinding(IDisplayBinding binding)
@@ -99,8 +118,11 @@ namespace MonoDevelop.Ide.Gui
 				if (attachable == null)
 					continue;
 
-				if (attachable.CanAttachTo (workbenchWindow.ViewContent))
-					workbenchWindow.InsertViewContent (index++, attachable.CreateViewContent (workbenchWindow.ViewContent));
+				if (attachable.CanAttachTo (workbenchWindow.ViewContent)) {
+					var subViewContent = attachable.CreateViewContent (workbenchWindow.ViewContent);
+					workbenchWindow.InsertViewContent (index++, subViewContent);
+					subViewContent.WorkbenchWindow = workbenchWindow;
+				}
 			}
 		}
 

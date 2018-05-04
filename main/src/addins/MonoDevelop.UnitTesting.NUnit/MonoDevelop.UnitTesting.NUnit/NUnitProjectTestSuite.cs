@@ -43,6 +43,8 @@ using System.Reflection;
 using MonoDevelop.Ide.Gui.Components;
 using MonoDevelop.Core.Assemblies;
 using MonoDevelop.Core;
+using MonoDevelop.PackageManagement;
+using System.Text;
 
 namespace MonoDevelop.UnitTesting.NUnit
 {
@@ -77,11 +79,14 @@ namespace MonoDevelop.UnitTesting.NUnit
 
 		public static NUnitProjectTestSuite CreateTest (DotNetProject project)
 		{
+			if (project.TargetFramework.Id.Identifier == ".NETCoreApp")
+				return null;
+
 			if (!project.ParentSolution.GetConfiguration (IdeApp.Workspace.ActiveConfiguration).BuildEnabledForItem (project))
 				return null;
 
-			foreach (var p in project.References) {
-				var nv = GetNUnitVersion (p);
+			foreach (var item in project.Items) {
+				var nv = GetNUnitVersion (item);
 				if (nv != null)
 					return new NUnitProjectTestSuite (project, nv.Value);
 			}
@@ -91,6 +96,17 @@ namespace MonoDevelop.UnitTesting.NUnit
 		public static bool IsNUnitReference (ProjectReference p)
 		{
 			return GetNUnitVersion (p).HasValue;
+		}
+
+		public static NUnitVersion? GetNUnitVersion (ProjectItem item)
+		{
+			switch (item) {
+			case ProjectReference pr:
+				return GetNUnitVersion (pr);
+			case ProjectPackageReference ppr:
+				return GetNUnitVersion (ppr);
+			}
+			return null;
 		}
 
 		public static NUnitVersion? GetNUnitVersion (ProjectReference p)
@@ -115,6 +131,15 @@ namespace MonoDevelop.UnitTesting.NUnit
 					}
 				}
 			}
+			return null;
+		}
+
+		internal static NUnitVersion? GetNUnitVersion (ProjectPackageReference p)
+		{
+			if (p.Include.IndexOf ("GuiUnit", StringComparison.OrdinalIgnoreCase) != -1)
+				return NUnitVersion.NUnit2;
+			if (p.Include.IndexOf ("nunit", StringComparison.OrdinalIgnoreCase) != -1)
+				return p.IsAtLeastVersion (new Version (3, 0)) ? NUnitVersion.NUnit3 : NUnitVersion.NUnit2;
 			return null;
 		}
 
@@ -183,21 +208,25 @@ namespace MonoDevelop.UnitTesting.NUnit
 		protected override string TestInfoCachePath {
 			get { return Path.Combine (resultsPath, storeId + ".test-cache"); }
 		}
-		
-		protected override IEnumerable<string> SupportAssemblies {
-			get {
+
+		protected override async Task<IEnumerable<string>> GetSupportAssembliesAsync ()
+		{
+			DotNetProject project = base.OwnerSolutionItem as DotNetProject;
+
+			if (project != null) {
+				var references = await project.GetReferences (IdeApp.Workspace.ActiveConfiguration).ConfigureAwait (false);
 				// Referenced assemblies which are not in the gac and which are not localy copied have to be preloaded
-				DotNetProject project = base.OwnerSolutionItem as DotNetProject;
-				if (project != null) {
-					foreach (var pr in project.References) {
-						if (pr.ReferenceType != ReferenceType.Package && !pr.LocalCopy && pr.ReferenceOutputAssembly) {
-							foreach (string file in pr.GetReferencedFileNames (IdeApp.Workspace.ActiveConfiguration))
-								yield return file;
-						}
-					}
-				}
+				var supportAssemblies = references.Where (r => !r.IsCopyLocal && (!r.IsProjectReference || r.ReferenceOutputAssembly) && !r.IsFrameworkFile && !r.IsImplicit && !IsGacReference (r))
+				                                  .Select (r => r.FilePath.FullPath.ToString ())
+				                                  .Where (File.Exists)
+				                                  .Distinct ();
+				return supportAssemblies;
 			}
+
+			return Enumerable.Empty<string> ();
 		}
+
+		bool IsGacReference (AssemblyReference r) => string.Equals (r.Metadata.GetValue ("ResolvedFrom"), "{GAC}", StringComparison.OrdinalIgnoreCase);
 	}
 }
 

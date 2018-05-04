@@ -37,7 +37,10 @@ using MonoDevelop.Ide.CodeFormatting;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Core.Text;
 using System.Linq;
+using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
+using System.IO;
+using MonoDevelop.Projects;
 
 namespace MonoDevelop.Ide.CodeTemplates
 {
@@ -142,12 +145,19 @@ namespace MonoDevelop.Ide.CodeTemplates
 				var c = editor.GetCharAt (offset);
 				//Only legal characters in template Shortcut
 				//LetterOrDigit make sense
-				//_ to allow underscore naming convention
-				//# is because there are #if templates
-				//~ because disctructor template
-				//@ some Razor templates start with @
 				//in theory we should probably just support LetterOrDigit and _
-				if (!char.IsLetterOrDigit (c) && c != '_' && c != '#' && c != '~' && c != '@') {
+				if (!char.IsLetterOrDigit (c)) {
+					//_ to allow underscore naming convention
+					//# is because there are #if templates
+					//~ because disctructor template
+					//@ some Razor templates start with @
+					if (c == '_' || c == '#' || c == '~' || c == '@')
+						continue;
+
+					// '-' because CSS property names templates include them
+					if (c == '-' && DesktopService.GetMimeTypeIsSubtype(editor.MimeType, "text/x-css"))
+						continue;
+
 					break;
 				}
 			}
@@ -167,6 +177,11 @@ namespace MonoDevelop.Ide.CodeTemplates
 		{
 			int offset = editor.CaretOffset;
 			int start  = FindPrevWordStart (editor, offset);
+
+			// HTML snippets include the opening '<', so ensure that we remove the old one if present
+			if (start > 0 && '<' == editor.GetCharAt(start - 1) && DesktopService.GetMimeTypeIsSubtype(editor.MimeType, "text/x-html"))
+				start -= 1;
+
 			editor.RemoveText (start, offset - start);
 			return start;
 		}
@@ -185,10 +200,15 @@ namespace MonoDevelop.Ide.CodeTemplates
 			}
 			return result;
 		}
-		
+
+		static HashSet<string> reportedVariables = new HashSet<string> ();
 		public void AddVariable (CodeTemplateVariable var)
 		{
-			variableDecarations.Add (var.Name, var);
+			if (variableDecarations.ContainsKey (var.Name)) {
+				if (reportedVariables.Add (var.Name))
+					LoggingService.LogWarning ("code template duplicate : " + var.Name);
+			}
+			variableDecarations [var.Name] = var;
 		}
 		
 		public class TemplateResult
@@ -224,7 +244,7 @@ namespace MonoDevelop.Ide.CodeTemplates
 		{
 			var expansion = CodeTemplateService.GetExpansionObject (this);
 			var result = new TemplateResult ();
-			var sb = new StringBuilder ();
+			var sb = StringBuilderCache.Allocate ();
 			int lastOffset = 0;
 			string code = context.Editor.FormatString (context.InsertPosition, context.TemplateCode);
 			result.TextLinks = new List<TextLink> ();
@@ -234,13 +254,45 @@ namespace MonoDevelop.Ide.CodeTemplates
 				lastOffset = match.Index + match.Length;
 				if (string.IsNullOrEmpty (name)) { // $$ is interpreted as $
 					sb.Append ("$");
-				} else if (name == "end") {
-					result.CaretEndOffset = sb.Length;
-				} else if (name == "selected") {
-					if (!string.IsNullOrEmpty (context.SelectedText)) {
-						string indent = GetIndent (sb);
-						string selection = Reindent (context.SelectedText, indent);
-						sb.Append (selection);
+				} else {
+					switch (name) {
+					case "end":
+						result.CaretEndOffset = sb.Length;
+						break;
+					case "selected":
+						if (!string.IsNullOrEmpty (context.SelectedText)) {
+							string indent = GetIndent (sb);
+							string selection = Reindent (context.SelectedText, indent);
+							sb.Append (selection);
+						}
+						break;
+					case "TM_CURRENT_LINE":
+						sb.Append (context.Editor.CaretLine);
+						break;
+					case "TM_CURRENT_WORD":
+						sb.Append ("");
+						break;
+					case "TM_FILENAME":
+						sb.Append (context.Editor.FileName);
+						break;
+					case "TM_FILEPATH":
+						sb.Append (Path.GetDirectoryName (context.Editor.FileName));
+						break;
+					case "TM_FULLNAME":
+						sb.Append (AuthorInformation.Default.Name);
+						break;
+					case "TM_LINE_INDEX":
+						sb.Append (context.Editor.CaretColumn - 1);
+						break;
+					case "TM_LINE_NUMBER":
+						sb.Append (context.Editor.CaretLine);
+						break;
+					case "TM_SOFT_TABS":
+						sb.Append (context.Editor.Options.TabsToSpaces ? "YES" : "NO"); // Note: these strings need no translation.
+						break;
+					case "TM_TAB_SIZE":
+						sb.Append (context.Editor.Options.TabSize);
+						break;
 					}
 				}
 				if (!variableDecarations.ContainsKey (name))
@@ -287,15 +339,18 @@ namespace MonoDevelop.Ide.CodeTemplates
 			
 			// format & indent template code
 			var data = TextEditorFactory.CreateNewDocument ();
-			data.Text = sb.ToString ();
+			data.Text = StringBuilderCache.ReturnAndFree (sb);
 			data.TextChanged += delegate(object sender, MonoDevelop.Core.Text.TextChangeEventArgs e) {
-				int delta = e.InsertionLength - e.RemovalLength;
+				for (int i = 0; i < e.TextChanges.Count; ++i) {
+					var change = e.TextChanges[i];
+					int delta = change.InsertionLength - change.RemovalLength;
 
-				foreach (var link in result.TextLinks) {
-					link.Links = link.Links.AdjustSegments (e).ToList ();
+					foreach (var link in result.TextLinks) {
+						link.Links = link.Links.AdjustSegments (e).ToList ();
+					}
+					if (result.CaretEndOffset > change.Offset)
+						result.CaretEndOffset += delta;
 				}
-				if (result.CaretEndOffset > e.Offset)
-					result.CaretEndOffset += delta;
 			};
 
 			IndentCode (data, context.LineIndent);
@@ -314,7 +369,7 @@ namespace MonoDevelop.Ide.CodeTemplates
 		
 		public string IndentCode (string code, string eol, string indent)
 		{
-			var result = new StringBuilder ();
+			var result = StringBuilderCache.Allocate ();
 			for (int i = 0; i < code.Length; i++) {
 				switch (code[i]) {
 				case '\r':
@@ -330,7 +385,7 @@ namespace MonoDevelop.Ide.CodeTemplates
 					break;
 				}
 			}
-			return result.ToString ();
+			return StringBuilderCache.ReturnAndFree (result);
 		}
 
 		static void IndentCode (ITextDocument data, string lineIndent)
@@ -349,38 +404,38 @@ namespace MonoDevelop.Ide.CodeTemplates
 			while (i >= 0 && !Char.IsWhiteSpace (str[i])) {
 				i--;
 			}
-			var indent = new StringBuilder ();
+			var indent = StringBuilderCache.Allocate ();
 			while (i >= 0 && (str[i] == ' ' || str[i] == '\t')) {
 				indent.Append (str[i]);
 				i--;
 			}
-			return indent.ToString ();
+			return StringBuilderCache.ReturnAndFree (indent);
 		}
 		
 		string RemoveIndent (string text, string indent)
 		{
 			var doc = TextEditorFactory.CreateNewDocument ();
 			doc.Text = text;
-			var result = new StringBuilder ();
+			var result = StringBuilderCache.Allocate ();
 			foreach (var line in doc.GetLines ()) {
 				string curLineIndent = line.GetIndentation (doc);
 				int offset = Math.Min (curLineIndent.Length, indent.Length);
 				result.Append (doc.GetTextBetween (line.Offset + offset, line.EndOffsetIncludingDelimiter));
 			}
-			return result.ToString ();
+			return StringBuilderCache.ReturnAndFree (result);
 		}
 		
 		string Reindent (string text, string indent)
 		{
 			var doc = TextEditorFactory.CreateNewDocument ();
 			doc.Text = text;
-			var result = new StringBuilder ();
+			var result = StringBuilderCache.Allocate ();
 			foreach (var line in doc.GetLines ()) {
 				if (result.Length > 0)
 					result.Append (indent);
 				result.Append (doc.GetTextAt (line.SegmentIncludingDelimiter));
 			}
-			return result.ToString ();
+			return StringBuilderCache.ReturnAndFree (result);
 		}
 
 		public void Insert (MonoDevelop.Ide.Gui.Document document)
@@ -414,6 +469,7 @@ namespace MonoDevelop.Ide.CodeTemplates
 				Editor = editor,
 				//ParsedDocument = context.ParsedDocument != null ? context.ParsedDocument.ParsedFile : null,
 				InsertPosition = data.CaretLocation,
+				InsertOffset = data.CaretOffset,
 				LineIndent = data.GetLineIndent (data.CaretLocation.Line),
 				TemplateCode = Code
 			};

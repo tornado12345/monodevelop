@@ -142,9 +142,9 @@ namespace MonoDevelop.Ide.Gui
 			Present ();
 		}
 		
-		internal bool Close ()
+		internal async Task<bool> Close ()
 		{
-			return workbench.Close();
+			return await workbench.Close();
 		}
 
 		public ImmutableList<Document> Documents {
@@ -358,7 +358,7 @@ namespace MonoDevelop.Ide.Gui
 			}
 		}
 
-		internal bool SaveAllDirtyFiles ()
+		internal async Task<bool> SaveAllDirtyFiles ()
 		{
 			Document[] docs = Documents.Where (doc => doc.IsDirty && doc.Window.ViewContent != null).ToArray ();
 			if (!docs.Any ())
@@ -369,7 +369,13 @@ namespace MonoDevelop.Ide.Gui
 				if (result == AlertButton.Cancel)
 					return false;
 
-				doc.Save ();
+				if (result == AlertButton.CloseWithoutSave) {
+					doc.Window.ViewContent.DiscardChanges ();
+					await doc.Window.CloseWindow (true);
+					continue;
+				}
+
+				await doc.Save ();
 				if (doc.IsDirty) {
 					doc.Select ();
 					return false;
@@ -385,11 +391,17 @@ namespace MonoDevelop.Ide.Gui
 				(object)(doc.Window.ViewContent.IsUntitled
 					? doc.Window.ViewContent.UntitledName
 					: System.IO.Path.GetFileName (doc.Window.ViewContent.ContentName))),
-				"",
-			 	 AlertButton.Cancel, doc.Window.ViewContent.IsUntitled ? AlertButton.SaveAs : AlertButton.Save);
+				GettextCatalog.GetString ("If you don't save, all changes will be permanently lost."),
+				AlertButton.CloseWithoutSave, AlertButton.Cancel, doc.Window.ViewContent.IsUntitled ? AlertButton.SaveAs : AlertButton.Save);
 		}
-		
+
+		[Obsolete("Use CloseAllDocumentsAsync")]
 		public void CloseAllDocuments (bool leaveActiveDocumentOpen)
+		{
+			CloseAllDocumentsAsync (leaveActiveDocumentOpen).Ignore ();
+		}
+
+		public async Task CloseAllDocumentsAsync (bool leaveActiveDocumentOpen)
 		{
 			Document[] docs = new Document [Documents.Count];
 			Documents.CopyTo (docs, 0);
@@ -399,10 +411,10 @@ namespace MonoDevelop.Ide.Gui
 			
 			foreach (Document doc in docs) {
 				if (doc != ActiveDocument)
-					doc.Close ();
+					await doc.Close ();
 			}
 			if (!leaveActiveDocumentOpen && ActiveDocument != null)
-				ActiveDocument.Close ();
+				await ActiveDocument.Close ();
 		}
 
 		internal Pad ShowPad (PadCodon content)
@@ -553,8 +565,10 @@ namespace MonoDevelop.Ide.Gui
 		{
 			if (string.IsNullOrEmpty (info.FileName))
 				return null;
-			// Ensure that paths like /a/./a.cs are equalized 
-			using (Counters.OpenDocumentTimer.BeginTiming ("Opening file " + info.FileName)) {
+
+			var metadata = CreateOpenDocumentTimerMetadata ();
+
+			using (Counters.OpenDocumentTimer.BeginTiming ("Opening file " + info.FileName, metadata)) {
 				NavigationHistoryService.LogActiveDocument ();
 				Counters.OpenDocumentTimer.Trace ("Look for open document");
 				foreach (Document doc in Documents) {
@@ -579,12 +593,11 @@ namespace MonoDevelop.Ide.Gui
 
 							if (info.Options.HasFlag (OpenDocumentOptions.BringToFront)) {
 								doc.Select ();
-								doc.Window.SelectWindow ();
 								NavigationHistoryService.LogActiveDocument ();
 							}
 							return doc;
 						} else {
-							if (!doc.Close ())
+							if (!await doc.Close ())
 								return doc;
 							break;
 						}
@@ -599,8 +612,10 @@ namespace MonoDevelop.Ide.Gui
 					true
 				);
 
-				await RealOpenFile (pm, info);
+				bool result = await RealOpenFile (pm, info);
 				pm.Dispose ();
+
+				AddOpenDocumentTimerMetadata (metadata, info, result);
 				
 				if (info.NewContent != null) {
 					Counters.OpenDocumentTimer.Trace ("Wrapping document");
@@ -620,12 +635,32 @@ namespace MonoDevelop.Ide.Gui
 			}
 		}
 
+		Dictionary<string, string> CreateOpenDocumentTimerMetadata ()
+		{
+			var metadata = new Dictionary<string, string> ();
+			metadata ["Result"] = "None";
+			return metadata;
+		}
+
+		void AddOpenDocumentTimerMetadata (IDictionary<string, string> metadata, FileOpenInformation info, bool result)
+		{
+			if (info.NewContent != null)
+				metadata ["EditorType"] = info.NewContent.GetType ().FullName;
+			if (info.Project != null)
+				metadata ["OwnerProjectGuid"] = info.Project?.ItemId;
+			
+			metadata ["Extension"] = info.FileName.Extension;
+			metadata ["Result"] = result ? "Success" : "Failure";
+		}
+
 		async Task<ViewContent> BatchOpenDocument (ProgressMonitor monitor, FilePath fileName, Project project, int line, int column, DockNotebook dockNotebook)
 		{
 			if (string.IsNullOrEmpty (fileName))
 				return null;
-			
-			using (Counters.OpenDocumentTimer.BeginTiming ("Batch opening file " + fileName)) {
+
+			var metadata = CreateOpenDocumentTimerMetadata ();
+
+			using (Counters.OpenDocumentTimer.BeginTiming ("Batch opening file " + fileName, metadata)) {
 				var openFileInfo = new FileOpenInformation (fileName, project) {
 					Options = OpenDocumentOptions.OnlyInternalViewer,
 					Line = line,
@@ -633,7 +668,9 @@ namespace MonoDevelop.Ide.Gui
 					DockNotebook = dockNotebook
 				};
 				
-				await RealOpenFile (monitor, openFileInfo);
+				bool result = await RealOpenFile (monitor, openFileInfo);
+
+				AddOpenDocumentTimerMetadata (metadata, openFileInfo, result);
 				
 				return openFileInfo.NewContent;
 			}
@@ -677,11 +714,12 @@ namespace MonoDevelop.Ide.Gui
 					defaultName, mimeType, content, Environment.NewLine));
 			
 			newContent.UntitledName = defaultName;
-			newContent.IsDirty = true;
+			newContent.IsDirty = false;
 			newContent.Binding = binding;
 			workbench.ShowView (newContent, true, binding);
 
 			var document = WrapDocument (newContent.WorkbenchWindow);
+			document.Editor.Encoding = Encoding.UTF8;
 			document.StartReparseThread ();
 			return document;
 		}
@@ -841,7 +879,7 @@ namespace MonoDevelop.Ide.Gui
 			return pad;
 		}
 		
-		async void OnWindowClosing (object sender, WorkbenchWindowEventArgs args)
+		async Task OnWindowClosing (object sender, WorkbenchWindowEventArgs args)
 		{
 			var window = (IWorkbenchWindow) sender;
 			var viewContent = window.ViewContent;
@@ -853,11 +891,24 @@ namespace MonoDevelop.Ide.Gui
 							: System.IO.Path.GetFileName (viewContent.ContentName)),
 					GettextCatalog.GetString ("If you don't save, all changes will be permanently lost."),
 					AlertButton.CloseWithoutSave, AlertButton.Cancel, viewContent.IsUntitled ? AlertButton.SaveAs : AlertButton.Save);
-				if (result == AlertButton.Save || result == AlertButton.SaveAs) {
-					await FindDocument (window).Save ();
-					args.Cancel = viewContent.IsDirty;
-					if (args.Cancel)
-						FindDocument (window).Select ();
+				if (result == AlertButton.Save) {
+					var doc = FindDocument (window);
+					await doc.Save ();
+					if (viewContent.IsDirty) {
+						// This may happen if the save operation failed
+						args.Cancel = true;
+						doc.Select ();
+						return;
+					}
+				} else if (result == AlertButton.SaveAs) {
+					var doc = FindDocument (window);
+					var resultSaveAs = await doc.SaveAs ();
+					if (!resultSaveAs || viewContent.IsDirty) {
+						// This may happen if the save operation failed or Save As was canceled
+						args.Cancel = true;
+						doc.Select ();
+						return;
+					}
 				} else {
 					args.Cancel |= result != AlertButton.CloseWithoutSave;
 					if (!args.Cancel)
@@ -871,6 +922,9 @@ namespace MonoDevelop.Ide.Gui
 		{
 			IWorkbenchWindow window = (IWorkbenchWindow) sender;
 			var doc = FindDocument (window);
+			if (doc == null)
+				return;
+
 			window.Closing -= OnWindowClosing;
 			window.Closed -= OnWindowClosed;
 			documents = documents.Remove (doc);
@@ -881,7 +935,7 @@ namespace MonoDevelop.Ide.Gui
 		
 		// When looking for the project to which the file belongs, look first
 		// in the active project, then the active solution, and so on
-		static Project GetProjectContainingFile (FilePath fileName)
+		internal static Project GetProjectContainingFile (FilePath fileName)
 		{
 			Project project = null;
 			if (IdeApp.ProjectOperations.CurrentSelectedProject != null) {
@@ -952,7 +1006,12 @@ namespace MonoDevelop.Ide.Gui
 			
 			IDisplayBinding binding = null;
 			IViewDisplayBinding viewBinding = null;
-			Project project = openFileInfo.Project ?? GetProjectContainingFile (fileName);
+			if (openFileInfo.Project == null) {
+				// Set the project if one can be found. The project on the FileOpenInformation
+				// is used to add project metadata to the OpenDocumentTimer counter.
+				openFileInfo.Project = GetProjectContainingFile (fileName);
+			}
+			Project project = openFileInfo.Project;
 			
 			if (openFileInfo.DisplayBinding != null) {
 				binding = viewBinding = openFileInfo.DisplayBinding;
@@ -1261,7 +1320,7 @@ namespace MonoDevelop.Ide.Gui
 				try {
 //					DateTime t = DateTime.Now;
 
-					await fileStatusLock.WaitAsync ();
+					await fileStatusLock.WaitAsync ().ConfigureAwait (false);
 					if (fileStatus == null)
 						return;
 					List<FilePath> modified = new List<FilePath> (fileStatus.Count);
@@ -1537,14 +1596,22 @@ namespace MonoDevelop.Ide.Gui
 		{
 			this.project = project;
 		}
-		
+
 		public async Task<bool> Invoke (string fileName)
 		{
 			try {
 				Counters.OpenDocumentTimer.Trace ("Creating content");
 				string mimeType = DesktopService.GetMimeTypeForUri (fileName);
 				if (binding.CanHandle (fileName, mimeType, project)) {
-					newContent = binding.CreateContent (fileName, mimeType, project);
+					try {
+						newContent = binding.CreateContent (fileName, mimeType, project);
+					} catch (InvalidEncodingException iex) {
+						monitor.ReportError (GettextCatalog.GetString ("The file '{0}' could not opened. {1}", fileName, iex.Message), null);
+						return false;
+					} catch (OverflowException) {
+						monitor.ReportError (GettextCatalog.GetString ("The file '{0}' could not opened. File too large.", fileName), null);
+						return false;
+					}
 				} else {
 					monitor.ReportError (GettextCatalog.GetString ("The file '{0}' could not be opened.", fileName), null);
 				}
@@ -1556,9 +1623,9 @@ namespace MonoDevelop.Ide.Gui
 				newContent.Binding = binding;
 				if (project != null)
 					newContent.Project = project;
-				
+
 				Counters.OpenDocumentTimer.Trace ("Loading file");
-				
+
 				try {
 					await newContent.Load (fileInfo);
 				} catch (InvalidEncodingException iex) {
@@ -1572,7 +1639,7 @@ namespace MonoDevelop.Ide.Gui
 				monitor.ReportError (GettextCatalog.GetString ("The file '{0}' could not be opened.", fileName), ex);
 				return false;
 			}
-			
+
 			// content got re-used
 			if (newContent.WorkbenchWindow != null) {
 				newContent.WorkbenchWindow.SelectWindow ();
@@ -1585,18 +1652,17 @@ namespace MonoDevelop.Ide.Gui
 			workbench.ShowView (newContent, fileInfo.Options.HasFlag (OpenDocumentOptions.BringToFront), binding, fileInfo.DockNotebook);
 
 			newContent.WorkbenchWindow.DocumentType = binding.Name;
-			
 
 			var ipos = (TextEditor) newContent.GetContent (typeof(TextEditor));
 			if (fileInfo.Line > 0 && ipos != null) {
 				FileSettingsStore.Remove (fileName);
-				ipos.RunWhenLoaded (JumpToLine); 
+				ipos.RunWhenLoaded (JumpToLine);
 			}
-			
+
 			fileInfo.NewContent = newContent;
 			return true;
 		}
-		
+
 		void JumpToLine ()
 		{
 			var ipos = (TextEditor) newContent.GetContent (typeof(TextEditor));

@@ -43,7 +43,7 @@ namespace MonoDevelop.PackageManagement.Tests
 		{
 			packageSourceProvider = new FakePackageSourceProvider ();
 			packageSources = packageSourceProvider.PackageSources;
-			viewModel = new RegisteredPackageSourcesViewModel (packageSourceProvider, new FolderBrowser ());
+			viewModel = new RegisteredPackageSourcesViewModel (packageSourceProvider, new FolderBrowser (), null);
 		}
 
 		void CreateViewModelWithOnePackageSource ()
@@ -551,6 +551,26 @@ namespace MonoDevelop.PackageManagement.Tests
 			Assert.AreEqual ("test", expectedViewModel.Password);
 			Assert.AreEqual ("abc", expectedViewModel.Name);
 			Assert.AreEqual ("http://url", expectedViewModel.Source);
+		}
+
+		[Test]
+		public void NewPackageSourceName_ChangedWithWhitespaceAtStartAndEnd_NewPackageSourceNameWhitespaceIsTrimmed ()
+		{
+			CreateViewModel ();
+			viewModel.Load ();
+			viewModel.NewPackageSourceName = "  Test  ";
+
+			Assert.AreEqual ("Test", viewModel.NewPackageSourceName);
+		}
+
+		[Test]
+		public void NewPackageSourceUrl_ChangedWithWhitespaceAtStartAndEnd_NewPackageSourceUrlWhitespaceIsTrimmed ()
+		{
+			CreateViewModel ();
+			viewModel.Load ();
+			viewModel.NewPackageSourceUrl  = " Test ";
+
+			Assert.AreEqual ("Test", viewModel.NewPackageSourceUrl);
 		}
 	}
 }

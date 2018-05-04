@@ -1,4 +1,4 @@
-//
+﻿//
 // TestResultsPad.cs
 //
 // Author:
@@ -35,6 +35,7 @@ using Gtk;
 using Gdk;
 
 using MonoDevelop.Core;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.UnitTesting.Commands;
 using MonoDevelop.Ide.Gui;
@@ -171,6 +172,8 @@ namespace MonoDevelop.UnitTesting
 			
 			buttonSuccess = new ToggleButton ();
 			buttonSuccess.Label = GettextCatalog.GetString ("Successful Tests");
+			buttonSuccess.Accessible.Name = "TestResultsPad.SuccessfulTests";
+			buttonSuccess.Accessible.Description = GettextCatalog.GetString ("Show the results for the successful tests");
 			buttonSuccess.Active = false;
 			buttonSuccess.Image = new ImageView (TestStatusIcon.Success);
 			buttonSuccess.Image.Show ();
@@ -180,6 +183,8 @@ namespace MonoDevelop.UnitTesting
 
 			buttonInconclusive = new ToggleButton ();
 			buttonInconclusive.Label = GettextCatalog.GetString ("Inconclusive Tests");
+			buttonInconclusive.Accessible.Name = "TestResultsPad.InconclusiveTests";
+			buttonInconclusive.Accessible.Description = GettextCatalog.GetString ("Show the results for the inconclusive tests");
 			buttonInconclusive.Active = true;
 			buttonInconclusive.Image = new ImageView (TestStatusIcon.Inconclusive);
 			buttonInconclusive.Image.Show ();
@@ -189,6 +194,8 @@ namespace MonoDevelop.UnitTesting
 			
 			buttonFailures = new ToggleButton ();
 			buttonFailures.Label = GettextCatalog.GetString ("Failed Tests");
+			buttonFailures.Accessible.Name = "TestResultsPad.FailedTests";
+			buttonFailures.Accessible.Description = GettextCatalog.GetString ("Show the results for the failed tests");
 			buttonFailures.Active = true;
 			buttonFailures.Image = new ImageView (TestStatusIcon.Failure);
 			buttonFailures.Image.Show ();
@@ -198,6 +205,8 @@ namespace MonoDevelop.UnitTesting
 
 			buttonIgnored = new ToggleButton ();
 			buttonIgnored.Label = GettextCatalog.GetString ("Ignored Tests");
+			buttonIgnored.Accessible.Name = "TestResultsPad.IgnoredTests";
+			buttonIgnored.Accessible.Description = GettextCatalog.GetString ("Show the results for the ignored tests");
 			buttonIgnored.Active = true;
 			buttonIgnored.Image = new ImageView (TestStatusIcon.NotRun);
 			buttonIgnored.Image.Show ();
@@ -207,6 +216,8 @@ namespace MonoDevelop.UnitTesting
 			
 			buttonOutput = new ToggleButton ();
 			buttonOutput.Label = GettextCatalog.GetString ("Output");
+			buttonOutput.Accessible.Name = "TestResultsPad.Output";
+			buttonOutput.Accessible.Description = GettextCatalog.GetString ("Show the test output");
 			buttonOutput.Active = false;
 			buttonOutput.Image = new ImageView (MonoDevelop.Ide.Gui.Stock.OutputIcon, IconSize.Menu);
 			buttonOutput.Image.Show ();
@@ -218,12 +229,17 @@ namespace MonoDevelop.UnitTesting
 			
 			buttonRun = new Button ();
 			buttonRun.Label = GettextCatalog.GetString ("Rerun Tests");
+			buttonRun.Accessible.Name = "TestResultsPad.Run";
+			buttonRun.Accessible.Description = GettextCatalog.GetString ("Start a test run and run all the tests");
 			buttonRun.Image = new ImageView ("md-execute-all", IconSize.Menu);
 			buttonRun.Image.Show ();
 			buttonRun.Sensitive = false;
 			toolbar.Add (buttonRun);
 			
 			buttonStop = new Button (new ImageView (Ide.Gui.Stock.Stop, Gtk.IconSize.Menu));
+			buttonStop.Accessible.Name = "TestResultsPad.Stop";
+			buttonStop.Accessible.SetTitle (GettextCatalog.GetString ("Stop"));
+			buttonStop.Accessible.Description = GettextCatalog.GetString ("Stop the current test run");
 			toolbar.Add (buttonStop);
 			toolbar.ShowAll ();
 			
@@ -325,11 +341,14 @@ namespace MonoDevelop.UnitTesting
 		public void InitializeTestRun (UnitTest test, CancellationTokenSource cs)
 		{
 			rootTest = test;
+
 			cancellationSource = cs;
-			cs.Token.Register (OnCancel);
+			if (cs != null)
+				cs.Token.Register (OnCancel);
+			
 			results.Clear ();
 
-			testsToRun = test.CountTestCases ();
+			testsToRun = test != null ? test.CountTestCases () : 0;
 			error = null;
 			errorMessage = null;
 			
@@ -400,7 +419,13 @@ namespace MonoDevelop.UnitTesting
 			TreeIter row = failuresStore.AppendValues (testRow, null, GettextCatalog.GetString ("Stack Trace"), null, null, 0);
 			AddStackTrace (row, error.StackTrace, null);
 		}
-		
+
+		public void ReportExecutionError (string message)
+		{
+			var stock = ImageService.GetIcon (Ide.Gui.Stock.Error, Gtk.IconSize.Menu);
+			TreeIter testRow = failuresStore.AppendValues (stock, message, null, null, 0);
+		}
+
 		readonly static Regex stackTraceLineRegex = new Regex (@".*\s(?<file>.*)\:\D*\s?(?<line>\d+)", RegexOptions.Compiled);
 		
 		public static bool TryParseLocationFromStackTrace (string stackTraceLine, out string fileName, out int lineNumber)
@@ -809,7 +834,7 @@ namespace MonoDevelop.UnitTesting
 
 		void OnCancel ()
 		{
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				failuresStore.AppendValues (TestStatusIcon.Failure, GettextCatalog.GetString ("Test execution cancelled."), null);
 			});
 		}

@@ -1,8 +1,5 @@
 ﻿namespace MonoDevelop.FSharp.Shared
 open System
-open Microsoft.FSharp.Compiler.SourceCodeServices
-open Microsoft.FSharp.Compiler
-open System.Globalization
 
 // --------------------------------------------------------------------------------------
 /// Parsing utilities for IntelliSense (e.g. parse identifier on the left-hand side
@@ -29,7 +26,7 @@ module Parsing =
             match sym.Text with
             | "" -> [], ""
             | text ->
-                let res = text.Split '.' |> List.ofArray |> List.rev
+                let res = text.Split '.' |> List.ofArray |> List.filter (String.isEmpty >> not) |> List.rev
                 if lineStr.[col - 1] = '.' then res |> List.rev, ""
                 else
                     match res with

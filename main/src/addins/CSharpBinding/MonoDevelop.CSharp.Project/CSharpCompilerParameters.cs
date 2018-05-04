@@ -13,10 +13,10 @@
 // distribute, sublicense, and/or sell copies of the Software, and to
 // permit persons to whom the Software is furnished to do so, subject to
 // the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be
 // included in all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
 // EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
 // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
@@ -27,68 +27,56 @@
 //
 using System;
 using System.Collections.Generic;
-
-using MonoDevelop.Projects;
-using MonoDevelop.Core.Serialization;
-using MonoDevelop.Core;
-using Mono.Collections.Generic;
-using System.Linq;
-using MonoDevelop.Projects.MSBuild;
 using System.Collections.Immutable;
+using System.Globalization;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using MonoDevelop.Core;
+using MonoDevelop.Core.Serialization;
+using MonoDevelop.Projects;
 
 namespace MonoDevelop.CSharp.Project
 {
-	public enum LangVersion {
-		Default = 0,
-		ISO_1   = 1,
-		ISO_2   = 2,
-		Version3 = 3,
-		Version4 = 4,
-		Version5 = 5,
-		Version6 = 6
-	}
-	
 	/// <summary>
 	/// This class handles project specific compiler parameters
 	/// </summary>
-	public class CSharpCompilerParameters: DotNetCompilerParameters
+	public class CSharpCompilerParameters : DotNetCompilerParameters
 	{
 		// Configuration parameters
 
 		int? warninglevel = 4;
-		
+
 		[ItemProperty ("NoWarn", DefaultValue = "")]
 		string noWarnings = String.Empty;
-		
+
 		bool? optimize = false;
-		
+
 		[ItemProperty ("AllowUnsafeBlocks", DefaultValue = false)]
 		bool unsafecode = false;
-		
+
 		[ItemProperty ("CheckForOverflowUnderflow", DefaultValue = false)]
 		bool generateOverflowChecks;
-		
+
 		[ItemProperty ("DefineConstants", DefaultValue = "")]
 		string definesymbols = String.Empty;
 
 		[ProjectPathItemProperty ("DocumentationFile")]
 		FilePath documentationFile;
-		
+
 		[ItemProperty ("LangVersion", DefaultValue = "Default")]
 		string langVersion = "Default";
-		
+
 		[ItemProperty ("NoStdLib", DefaultValue = false)]
 		bool noStdLib;
-		
+
 		[ItemProperty ("TreatWarningsAsErrors", DefaultValue = false)]
 		bool treatWarningsAsErrors;
 
-		[ItemProperty("PlatformTarget", DefaultValue="anycpu")]
+		[ItemProperty ("PlatformTarget", DefaultValue = "anycpu")]
 		string platformTarget = "anycpu";
-		
-		[ItemProperty("WarningsNotAsErrors", DefaultValue="")]
+
+		[ItemProperty ("WarningsNotAsErrors", DefaultValue = "")]
 		string warningsNotAsErrors = "";
 
 		protected override void Write (IPropertySet pset)
@@ -121,8 +109,8 @@ namespace MonoDevelop.CSharp.Project
 
 		public override CompilationOptions CreateCompilationOptions ()
 		{
-			var project = (CSharpProject) ParentProject;
-			return new CSharpCompilationOptions (
+			var project = (CSharpProject)ParentProject;
+			var options = new CSharpCompilationOptions (
 				OutputKind.ConsoleApplication,
 				false,
 				null,
@@ -144,40 +132,72 @@ namespace MonoDevelop.CSharp.Project
 				assemblyIdentityComparer: DesktopAssemblyIdentityComparer.Default,
 				strongNameProvider: new DesktopStrongNameProvider ()
 			);
+
+			return options.WithPlatform (GetPlatform ())
+				.WithGeneralDiagnosticOption (TreatWarningsAsErrors ? ReportDiagnostic.Error : ReportDiagnostic.Default)
+				.WithOptimizationLevel (Optimize ? OptimizationLevel.Release : OptimizationLevel.Debug)
+				.WithSpecificDiagnosticOptions (GetSuppressedWarnings ().ToDictionary (
+					suppress => suppress, _ => ReportDiagnostic.Suppress));
 		}
 
-		public override Microsoft.CodeAnalysis.ParseOptions CreateParseOptions (DotNetProjectConfiguration configuration)
+		Microsoft.CodeAnalysis.Platform GetPlatform ()
+		{
+			Microsoft.CodeAnalysis.Platform platform;
+			if (Enum.TryParse (PlatformTarget, true, out platform))
+				return platform;
+
+			return Microsoft.CodeAnalysis.Platform.AnyCpu;
+		}
+
+		IEnumerable<string> GetSuppressedWarnings ()
+		{
+			string warnings = NoWarnings ?? string.Empty;
+			var items = warnings.Split (new [] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries).Distinct ();
+
+			foreach (string warning in items) {
+				if (warning.StartsWith ("CS", StringComparison.OrdinalIgnoreCase)) {
+					yield return warning;
+				} else {
+					yield return "CS" + warning;
+				}
+			}
+		}
+
+		public override ParseOptions CreateParseOptions (DotNetProjectConfiguration configuration)
 		{
 			var symbols = GetDefineSymbols ();
 			if (configuration != null)
 				symbols = symbols.Concat (configuration.GetDefineSymbols ()).Distinct ();
-			return new Microsoft.CodeAnalysis.CSharp.CSharpParseOptions (
-				GetRoslynLanguageVersion (langVersion),
-				Microsoft.CodeAnalysis.DocumentationMode.Parse,
-				Microsoft.CodeAnalysis.SourceCodeKind.Regular,
+
+			langVersion.TryParse (out LanguageVersion lv);
+
+			return new CSharpParseOptions (
+				lv,
+				DocumentationMode.Parse,
+				SourceCodeKind.Regular,
 				ImmutableArray<string>.Empty.AddRange (symbols)
 			);
 		}
 
 
-		public LangVersion LangVersion {
+		public LanguageVersion LangVersion {
 			get {
-				var val = TryLangVersionFromString (langVersion);
-				if (val == null) {
-					throw new Exception ("Unknown LangVersion string '" + val + "'");
+				if (!langVersion.TryParse (out LanguageVersion val)) {
+					throw new Exception ("Unknown LangVersion string '" + langVersion + "'");
 				}
-				return val.Value;
+				return val;
 			}
 			set {
-				var v = TryLangVersionToString (value);
-				if (v == null) {
-					throw new ArgumentOutOfRangeException ("Unknown LangVersion enum value '" + value + "'");
+				if (LangVersion == value) {
+					return;
 				}
-				langVersion = v;
+
+				langVersion = LanguageVersionToString (value);
+				NotifyChange ();
 			}
 		}
 
-#region Code Generation
+		#region Code Generation
 
 		public override void AddDefineSymbol (string symbol)
 		{
@@ -201,85 +221,110 @@ namespace MonoDevelop.CSharp.Project
 			else
 				definesymbols = string.Empty;
 		}
-		
+
 		public string DefineSymbols {
 			get {
 				return definesymbols;
 			}
 			set {
+				if (definesymbols == (value ?? string.Empty))
+					return;
 				definesymbols = value ?? string.Empty;
+				NotifyChange ();
 			}
 		}
-		
+
 		public bool Optimize {
 			get {
 				return optimize ?? false;
 			}
 			set {
-				if (value != Optimize)
-					optimize = value;
+				if (value == Optimize)
+					return;
+				optimize = value;
+				NotifyChange ();
 			}
 		}
-		
+
 		public bool UnsafeCode {
 			get {
 				return unsafecode;
 			}
 			set {
+				if (unsafecode == value)
+					return;
 				unsafecode = value;
+				NotifyChange ();
 			}
 		}
-		
+
 		public bool GenerateOverflowChecks {
 			get {
 				return generateOverflowChecks;
 			}
 			set {
+				if (generateOverflowChecks == value)
+					return;
 				generateOverflowChecks = value;
+				NotifyChange ();
 			}
 		}
-		
+
 		public FilePath DocumentationFile {
 			get {
 				return documentationFile;
 			}
 			set {
+				if (documentationFile == value)
+					return;
 				documentationFile = value;
+				NotifyChange ();
 			}
 		}
-		
+
 		public string PlatformTarget {
 			get {
 				return platformTarget;
 			}
 			set {
+				if (platformTarget == (value ?? string.Empty))
+					return;
 				platformTarget = value ?? string.Empty;
+				NotifyChange ();
 			}
 		}
 
-#endregion
+		#endregion
 
-#region Errors and Warnings 
+		#region Errors and Warnings
 		public int WarningLevel {
 			get {
 				return warninglevel ?? 4;
 			}
 			set {
+				int? newLevel = warninglevel ;
 				if (warninglevel.HasValue) {
-					warninglevel = value;
+					newLevel = value;
 				} else {
 					if (value != 4)
-						warninglevel = value; 
+						newLevel = value;
 				}
+				if (warninglevel == newLevel)
+					return;
+				warninglevel = newLevel;
+				NotifyChange ();
 			}
 		}
-		
+
 		public string NoWarnings {
 			get {
 				return noWarnings;
 			}
 			set {
+				if (noWarnings == value)
+					return;
 				noWarnings = value;
+				NotifyChange ();
 			}
 		}
 
@@ -288,7 +333,10 @@ namespace MonoDevelop.CSharp.Project
 				return noStdLib;
 			}
 			set {
+				if (noStdLib == value)
+					return;
 				noStdLib = value;
+				NotifyChange ();
 			}
 		}
 
@@ -297,59 +345,43 @@ namespace MonoDevelop.CSharp.Project
 				return treatWarningsAsErrors;
 			}
 			set {
+				if (treatWarningsAsErrors == value)
+					return;
 				treatWarningsAsErrors = value;
+				NotifyChange ();
 			}
 		}
-		
+
 		public string WarningsNotAsErrors {
 			get {
 				return warningsNotAsErrors;
 			}
 			set {
+				if (warningsNotAsErrors == value)
+					return;
 				warningsNotAsErrors = value;
+				NotifyChange ();
 			}
 		}
-#endregion
+		#endregion
 
-		static LangVersion? TryLangVersionFromString (string value)
+		internal static string LanguageVersionToString (LanguageVersion value)
 		{
 			switch (value) {
-			case "Default": return LangVersion.Default;
-			case "ISO-1": return LangVersion.ISO_1;
-			case "ISO-2": return LangVersion.ISO_2;
-			case "3": return LangVersion.Version3;
-			case "4": return LangVersion.Version4;
-			case "5": return LangVersion.Version5;
-			case "6": return LangVersion.Version6;
-			default: return null;
-			}
-		}
-
-		Microsoft.CodeAnalysis.CSharp.LanguageVersion GetRoslynLanguageVersion (string value)
-		{
-			switch (value) {
-			case "ISO-1": return Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp1;
-			case "ISO-2": return Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp2;
-			case "3": return Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp3;
-			case "4": return Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp4;
-			case "5": return Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp5;
-			case "6": return Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp6;
-			default: return Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp6;
+			case LanguageVersion.Default: return "Default";
+			case LanguageVersion.Latest: return "Latest";
+			case LanguageVersion.CSharp1: return "ISO-1";
+			case LanguageVersion.CSharp2: return "ISO-2";
+			case LanguageVersion.CSharp7_1: return "7.1";
+			case LanguageVersion.CSharp7_2: return "7.2";
+			case LanguageVersion.CSharp7_3: return "7.3";
+			default: return ((int)value).ToString ();
 			}
 		}
 
-		internal static string TryLangVersionToString (LangVersion value)
+		void NotifyChange ()
 		{
-			switch (value) {
-			case LangVersion.Default: return "Default";
-			case LangVersion.ISO_1: return "ISO-1";
-			case LangVersion.ISO_2: return "ISO-2";
-			case LangVersion.Version3: return "3";
-			case LangVersion.Version4: return "4";
-			case LangVersion.Version5: return "5";
-			case LangVersion.Version6: return "6";
-			default: return null;
-			}
+			ParentProject?.NotifyModified ("CompilerParameters");
 		}
 	}
 }

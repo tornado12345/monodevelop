@@ -34,6 +34,7 @@ using MonoDevelop.Core;
 using MonoDevelop.Ide.Gui.Dialogs;
 using MonoDevelop.Core.Assemblies;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 
 namespace MonoDevelop.Ide.Gui.OptionPanels
 {
@@ -77,14 +78,14 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			tree.SearchColumn = -1; // disable the interactive search
 
 			CellRendererText crt = new CellRendererText ();
-			tree.AppendColumn ("Runtime", crt, "markup", 0);
+			tree.AppendColumn (GettextCatalog.GetString ("Runtime"), crt, "markup", 0);
 			TargetRuntime defRuntime = IdeApp.Preferences.DefaultTargetRuntime;
 			
 			foreach (TargetRuntime tr in Runtime.SystemAssemblyService.GetTargetRuntimes ()) {
 				string name = tr.DisplayName;
 				TreeIter it;
 				if (tr == defRuntime) {
-					name = "<b>" + name + " (Default)</b>";
+					name = string.Format ("<b>{0} {1}</b>", name, GettextCatalog.GetString ("(Default)"));
 					defaultIter = it = store.AppendValues (name, tr);
 				} else
 					it = store.AppendValues (name, tr);
@@ -94,6 +95,20 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			
 			tree.Selection.Changed += HandleChanged;
 			UpdateButtons ();
+
+			SetupAccessibility ();
+		}
+
+		void SetupAccessibility ()
+		{
+			tree.SetCommonAccessibilityAttributes ("MonoRuntimePanel.tree", GettextCatalog.GetString ("Available Runtimes"),
+			                                       GettextCatalog.GetString ("A list of available runtimes"));
+			buttonAdd.SetCommonAccessibilityAttributes ("MonoRuntimePanel.add", "",
+			                                            GettextCatalog.GetString ("Click to install a new runtime"));
+			buttonRemove.SetCommonAccessibilityAttributes ("MonoRuntimePanel.remove", "",
+			                                               GettextCatalog.GetString ("Click to remove the currently selected runtime"));
+			buttonDefault.SetCommonAccessibilityAttributes ("MonoRuntimePanel.default", "",
+			                                                GettextCatalog.GetString ("Click to set the currently selected runtime as default"));
 		}
 
 		void HandleChanged(object sender, EventArgs e)
@@ -196,7 +211,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			else
 				text = ((TargetRuntime)ob).DisplayName;
 			if (store.GetPath (it).Equals (store.GetPath (defaultIter)))
-				text = "<b>" + text + " (Default)</b>";
+				text = string.Format ("<b>{0} {1}</b>", text, GettextCatalog.GetString ("(Default)"));
 			store.SetValue (it, 0, text);
 		}
 		

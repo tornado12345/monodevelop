@@ -812,7 +812,7 @@ namespace MonoDevelop.VersionControl.Views
 				} else
 					opset.AddSeparator ();
 			}
-			IdeApp.CommandService.ShowContextMenu (filelist, evnt, opset, commandChain);
+			filelist.ShowContextMenu (evnt, opset, commandChain);
 		}
 
 		public VersionControlItemList GetSelectedItems ()
@@ -1081,7 +1081,7 @@ namespace MonoDevelop.VersionControl.Views
 					// the value. Do not capture the TreeIter as it may invalidate
 					// before the diff data has asyncronously loaded.
 					GC.KeepAlive (info.Diff.Value);
-					Gtk.Application.Invoke (delegate { if (!disposed) FillDifs (); });
+					Gtk.Application.Invoke ((o, args) => { if (!disposed) FillDifs (); });
 				});
 			} else if (info.Exception != null) {
 				text = new [] { GettextCatalog.GetString ("Could not get diff information. ") };

@@ -46,14 +46,29 @@ namespace MonoDevelop.PackageManagement.Tests.Helpers
 
 		public void Run (ProgressMonitorStatusMessage progressMessage, IPackageAction action)
 		{
+			Run (progressMessage, action, true);
+		}
+
+		public void Run (ProgressMonitorStatusMessage progressMessage, IPackageAction action, bool clearConsole)
+		{
 			RunProgressMessage = progressMessage;
 			ActionRun = action;
 
 			RunAction (progressMessage, action);
 		}
 
+		public Action<ProgressMonitorStatusMessage, IEnumerable<IPackageAction>, bool> RunActions =
+			(progressMessage, action, clearConsole) => { };
+
 		public void Run (ProgressMonitorStatusMessage progressMessage, IEnumerable<IPackageAction> actions)
 		{
+			Run (progressMessage, actions, true);
+		}
+
+		public void Run (ProgressMonitorStatusMessage progressMessage, IEnumerable<IPackageAction> actions, bool clearConsole)
+		{
+			RunProgressMessage = progressMessage;
+			RunActions (progressMessage, actions, clearConsole);
 		}
 
 		public void ShowError (ProgressMonitorStatusMessage progressMessage, Exception exception)
@@ -68,7 +83,25 @@ namespace MonoDevelop.PackageManagement.Tests.Helpers
 			ShowErrorMessage = message;
 		}
 
+		public Action<ProgressMonitorStatusMessage, IEnumerable<IPackageAction>> RunAsyncAction =
+			(progressMessage, actions) => { };
+
 		public Task RunAsync (ProgressMonitorStatusMessage progressMessage, IEnumerable<IPackageAction> actions)
+		{
+			RunAsyncAction (progressMessage, actions);
+			return Task.FromResult (0);
+		}
+
+		public Task RunAsync (ProgressMonitorStatusMessage progressMessage, IEnumerable<IPackageAction> actions, bool clearConsole)
+		{
+			throw new NotImplementedException ();
+		}
+
+		public void Cancel ()
+		{
+		}
+
+		public PendingPackageActionsInformation GetPendingActionsInfo ()
 		{
 			throw new NotImplementedException ();
 		}

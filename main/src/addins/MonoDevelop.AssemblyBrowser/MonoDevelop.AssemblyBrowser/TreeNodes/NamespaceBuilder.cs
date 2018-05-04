@@ -1,4 +1,4 @@
-//
+﻿//
 // NamespaceBuilder.cs
 //
 // Author:
@@ -59,9 +59,9 @@ namespace MonoDevelop.AssemblyBrowser
 				if (e1 == null && e2 == null)
 					return 0;
 				if (e1 == null)
-					return -1;
-				if (e2 == null)
 					return 1;
+				if (e2 == null)
+					return -1;
 				
 				return e1.Name.CompareTo (e2.Name);
 			} catch (Exception e) {
@@ -107,12 +107,7 @@ namespace MonoDevelop.AssemblyBrowser
 			return null;
 		}
 		
-		public List<ReferenceSegment> Decompile (TextEditor data, ITreeNavigator navigator, bool publicOnly)
-		{
-			return Disassemble (data, navigator);
-		}
-
-		List<ReferenceSegment> IAssemblyBrowserNodeBuilder.GetSummary (TextEditor data, ITreeNavigator navigator, bool publicOnly)
+		public List<ReferenceSegment> Decompile (TextEditor data, ITreeNavigator navigator, DecompileFlags flags)
 		{
 			return Disassemble (data, navigator);
 		}

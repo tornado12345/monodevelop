@@ -1,6 +1,6 @@
 include $(top_srcdir)/xbuild.include
 
-SUBDIRS = external . contrib src po man theme-icons build tests
+SUBDIRS = external . src po man theme-icons msbuild build tests
 
 MD_CONFIGURE=$(top_srcdir)/../scripts/configure.sh
 
@@ -22,12 +22,15 @@ clean-local: sln_clean
 	cd build && $(MAKE) clean
 
 NUGET_FOUND = $$(echo $$(which nuget))
-NUGET_RESTORE = mono external/nuget-binary/nuget.exe restore;
+NUGET_RESTORE = mono external/nuget-binary/nuget.exe restore -DisableParallelProcessing;
 
 #FIXME: move the restore logic into MSBuild (Before.sln.targets),
 #       see: https://github.com/kzu/NuGet.Restore
 restore-packages:
 	@$(NUGET_RESTORE)
+	msbuild /t:Restore /p:RestoreDisableParallel=true external/RefactoringEssentials/RefactoringEssentials/RefactoringEssentials.csproj
+	mono external/fsharpbinding/.paket/paket.bootstrapper.exe
+	pushd . && cd external/fsharpbinding && mono .paket/paket.exe restore && popd
 
 vcrevision:
 	touch vcrevision
@@ -127,6 +130,19 @@ endif
 
 run-bundle: $(PROGRAM)
 	LANG= LC_ALL= $(MD_LAUNCH_SETUP) $(MD_LAUNCH_EXTRA_ENV) $(MD_BIN_PATH)/MonoDevelop --no-redirect
+
+run-leaks: $(PROGRAM)
+	@if [ -a `pwd`/build/bin/libgobject-tracker.dylib ]; then \
+		DYLD_FORCE_FLAT_NAMESPACE=1 DYLD_INSERT_LIBRARIES=`pwd`/build/bin/libgobject-tracker.dylib LANG= LC_ALL= $(MD_LAUNCH_SETUP) $(MD_LAUNCH_EXTRA_ENV) $(MD_BIN_PATH)/MonoDevelop --no-redirect; \
+	else \
+		echo '\033[0;31m' \
+		&& echo "You need to compile and install libgobject-tracker.dylib from https://github.com/alanmcgovern/gobject-tracker to run gobject leak checking" \
+		&& echo '\033[0m'; \
+	fi
+
+run-no-accessibility: $(PROGRAM)
+	DISABLE_ATKCOCOA=yes LANG= LC_ALL= $(MD_LAUNCH_SETUP) $(MD_LAUNCH_EXTRA_ENV) $(MD_BIN_PATH)/MonoDevelop --no-redirect
+
 run-64: run-sgen-64
 
 run-boehm: runmd
@@ -174,6 +190,9 @@ check-addins:
 test:
 	cd tests && $(MAKE) test assembly=$(assembly)
 
+deploy-tests:
+	cd tests && $(MAKE) deploy-tests
+
 uitest:
 	cd tests && $(MAKE) uitest assembly=$(assembly) categories=$(categories) tests=$(tests)
 
@@ -191,11 +210,11 @@ app-dir: all
 # we can't use the variables that are conditionally defined
 EXTRA_DIST = $(bin_SCRIPTS) $(desktop_DATA) $(appdata_DATA) $(pixmap_DATA) \
 	monodevelop.xml $(pkgconfig_in_files) external/Makefile.in \
-	Main.sln \
+	Main.sln MonoDevelop.props Directory.Build.props \
 	md.targets
 
 DISTCLEANFILES = monodevelop intltool-extract intltool-merge intltool-update \
-	$(pkgconfig_DATA) 
+	$(pkgconfig_DATA)
 
 include $(top_srcdir)/Makefile.include
 

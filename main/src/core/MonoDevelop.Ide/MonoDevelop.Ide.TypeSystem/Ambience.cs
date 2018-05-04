@@ -30,7 +30,6 @@ using System;
 using System.Text;
 using System.Collections.Generic;
 using MonoDevelop.Core;
-using Mono.Cecil;
 using System.Linq;
 using MonoDevelop.Ide.CodeCompletion;
 using Microsoft.CodeAnalysis;
@@ -107,9 +106,9 @@ namespace MonoDevelop.Ide.TypeSystem
 			if (String.IsNullOrEmpty (str))
 				return string.Empty;
 			
-			StringBuilder sb = new StringBuilder (str.Length);
+			var sb = StringBuilderCache.Allocate ();
 			MarkupUtilities.AppendEscapedString (sb, str, 0, str.Length);
-			return sb.ToString (); 
+			return StringBuilderCache.ReturnAndFree(sb); 
 		}
 
 		#region Documentation
@@ -267,7 +266,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		{
 			if (maxLineLength <= 0)
 				return text;
-			StringBuilder result = new StringBuilder ();
+			StringBuilder result = StringBuilderCache.Allocate ();
 			int lineLength = 0;
 			bool inTag = false;
 			bool inAmp = false;
@@ -301,14 +300,14 @@ namespace MonoDevelop.Ide.TypeSystem
 					lineLength = 0;
 				}
 			}
-			return result.ToString ();
+			return StringBuilderCache.ReturnAndFree(result);
 		}
 		
 		public static string EscapeText (string text)
 		{
 			if (text == null)
 				return null;
-			StringBuilder result = new StringBuilder (text.Length);
+			StringBuilder result = StringBuilderCache.Allocate ();
 			foreach (char ch in text) {
 				switch (ch) {
 				case '<':
@@ -336,12 +335,12 @@ namespace MonoDevelop.Ide.TypeSystem
 					break;
 				}
 			}
-			return result.ToString ();
+			return StringBuilderCache.ReturnAndFree (result);
 		}
 		
 		public static string UnescapeText (string text)
 		{
-			var sb = new StringBuilder (text.Length);
+			var sb = StringBuilderCache.Allocate ();
 			for (int i = 0; i < text.Length; i++) {
 				char ch = text[i];
 				if (ch == '&') {
@@ -371,7 +370,7 @@ namespace MonoDevelop.Ide.TypeSystem
 					sb.Append (ch);
 				}
 			}
-			return sb.ToString ();	
+			return StringBuilderCache.ReturnAndFree (sb);	
 		}
 		
 		
@@ -382,7 +381,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		
 		static string ParseBody (ISymbol member, XmlTextReader xml, string endTagName, DocumentationFormatOptions options)
 		{
-			StringBuilder result = new StringBuilder (); 
+			StringBuilder result = StringBuilderCache.Allocate (); 
 			bool wasWhiteSpace = true;
 			bool appendSpace = false;
 			string listType = "bullet";
@@ -408,7 +407,7 @@ namespace MonoDevelop.Ide.TypeSystem
 						break;
 					case "term": {
 						string inner = "<root>" + xml.ReadInnerXml () + "</root>";
-						result.Append ("<i>" + ParseBody (member, new XmlTextReader (new StringReader (inner)), "root", options) + " </i>");
+						result.Append ("<i>").Append (ParseBody (member, new XmlTextReader (new StringReader (inner)), "root", options)).Append (" </i>");
 						break;
 					}
 					case "description": {
@@ -430,7 +429,8 @@ namespace MonoDevelop.Ide.TypeSystem
 							prefix = "    ";
 							break;
 						}
-						result.AppendLine (prefix + ParseBody (member, new XmlTextReader (new StringReader (inner)), "root", options));
+						result.Append (prefix);
+						result.AppendLine (ParseBody (member, new XmlTextReader (new StringReader (inner)), "root", options));
 						break;
 					}
 					case "item": {
@@ -447,7 +447,8 @@ namespace MonoDevelop.Ide.TypeSystem
 								prefix = "  \u2022 ";
 								break;
 							}
-							result.AppendLine (prefix + ParseBody (member, new XmlTextReader (new StringReader (inner)), "root", options));
+							result.Append (prefix);
+							result.AppendLine (ParseBody (member, new XmlTextReader (new StringReader (inner)), "root", options));
 						break;
 					}
 					case "see":
@@ -497,7 +498,7 @@ namespace MonoDevelop.Ide.TypeSystem
 				}
 			}
 		end:
-			return result.ToString ().Trim ();
+			return StringBuilderCache.ReturnAndFree (result).Trim ();
 		}
 
 		static string FormatCref (string cref)
@@ -513,9 +514,9 @@ namespace MonoDevelop.Ide.TypeSystem
 				return null;
 			System.IO.StringReader reader = new System.IO.StringReader ("<docroot>" + doc + "</docroot>");
 			XmlTextReader xml = new XmlTextReader (reader);
-			StringBuilder ret = new StringBuilder (70);
-			StringBuilder parameterBuilder = new StringBuilder ();
-			StringBuilder exceptions = new StringBuilder ();
+			StringBuilder ret = StringBuilderCache.Allocate ();
+			StringBuilder parameterBuilder = StringBuilderCache.Allocate ();
+			StringBuilder exceptions = StringBuilderCache.Allocate ();
 			exceptions.AppendLine (options.FormatHeading (GettextCatalog.GetString ("Exceptions:")));
 			//		ret.Append ("<small>");
 			int paramCount = 0, exceptionCount = 0, summaryEnd = -1;
@@ -529,6 +530,7 @@ namespace MonoDevelop.Ide.TypeSystem
 							if (summaryEnd < 0)
 								summaryEnd = ret.Length;
 							break;
+						case "member":
 						case "summary":
 							var summary = options.FormatBody (ParseBody (member, xml, xml.Name, options));
 							if (!IsEmptyDocumentation (summary)) {
@@ -563,7 +565,7 @@ namespace MonoDevelop.Ide.TypeSystem
 							exceptions.Append ("</b>");
 							if (options.SmallText)
 								exceptions.Append ("</small>");
-							
+
 							exceptions.AppendLine (options.FormatBody (ParseBody (member, xml, xml.Name, options)));
 							break;
 						case "returns":
@@ -576,7 +578,7 @@ namespace MonoDevelop.Ide.TypeSystem
 							break;
 						case "param":
 							string paramName = xml.GetAttribute ("name") != null ? xml ["name"].Trim () : "";
-								
+
 							var body = options.FormatBody (ParseBody (member, xml, xml.Name, options));
 							if (!IsEmptyDocumentation (body)) {
 								paramCount++;
@@ -603,40 +605,45 @@ namespace MonoDevelop.Ide.TypeSystem
 						case "seealso":
 							if (string.IsNullOrEmpty (options.HighlightParameter)) {
 								ret.Append (options.FormatHeading (GettextCatalog.GetString ("See also:")));
-								ret.Append (" " + EscapeText (xml ["cref"] + xml ["langword"]));
+								ret.Append (" ");
+								ret.Append (EscapeText (xml ["cref"]));
+								ret.Append (EscapeText (xml ["langword"]));
 							}
 							break;
 						}
 					}
 				} while (xml.Read ());
-			
-			} catch (Exception ex) {
-				MonoDevelop.Core.LoggingService.LogError (ex.ToString ());
-				return EscapeText (doc);
-			}
 
-			if (IsEmptyDocumentation (ret.ToString ()) && IsEmptyDocumentation (parameterBuilder.ToString ()))
-				return EscapeText (doc);
-			if (string.IsNullOrEmpty (options.HighlightParameter) && exceptionCount > 0)
-				ret.Append (exceptions.ToString ());
-			
-			string result = ret.ToString ();
-			if (summaryEnd < 0)
-				summaryEnd = result.Length;
-			if (paramCount > 0) {
-				var paramSb = new StringBuilder ();
-				if (result.Length > 0)
-					paramSb.AppendLine ();/*
+				if (IsEmptyDocumentation (ret.ToString ()) && IsEmptyDocumentation (parameterBuilder.ToString ()))
+					return EscapeText (doc);
+				if (string.IsNullOrEmpty (options.HighlightParameter) && exceptionCount > 0)
+					ret.Append (exceptions.ToString ());
+
+				string result = ret.ToString ();
+				if (summaryEnd < 0)
+					summaryEnd = result.Length;
+				if (paramCount > 0) {
+					var paramSb = StringBuilderCache.Allocate ();
+					if (result.Length > 0)
+						paramSb.AppendLine ();/*
 				paramSb.Append ("<small>");
 				paramSb.AppendLine (options.FormatHeading (GettextCatalog.GetPluralString ("Parameter:", "Parameters:", paramCount)));
 				paramSb.Append ("</small>");*/
-				paramSb.Append (parameterBuilder.ToString ());
-				result = result.Insert (summaryEnd, paramSb.ToString ());
+					paramSb.Append (parameterBuilder.ToString ());
+					result = result.Insert (summaryEnd, StringBuilderCache.ReturnAndFree(paramSb));
+				}
+				result = result.Trim ();
+				if (result.EndsWith (Environment.NewLine + "</small>"))
+					result = result.Substring (0, result.Length - (Environment.NewLine + "</small>").Length) + "</small>";
+				return result;
+			} catch (Exception ex) {
+				MonoDevelop.Core.LoggingService.LogError (ex.ToString ());
+				return EscapeText (doc);
+			} finally {
+				StringBuilderCache.Free (ret);
+				StringBuilderCache.Free (parameterBuilder);
+				StringBuilderCache.Free (exceptions);
 			}
-			result = result.Trim ();
-			if (result.EndsWith (Environment.NewLine + "</small>"))
-				result = result.Substring (0, result.Length - (Environment.NewLine + "</small>").Length) + "</small>";
-			return result;
 		}
 		#endregion
 

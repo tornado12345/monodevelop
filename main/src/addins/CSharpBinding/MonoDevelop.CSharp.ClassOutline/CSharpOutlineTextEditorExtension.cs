@@ -68,7 +68,6 @@ namespace MonoDevelop.CSharp.ClassOutline
 		TreeStore outlineTreeStore;
 		TreeModelSort outlineTreeModelSort;
 		Widget[] toolbarWidgets;
-		AstAmbience astAmbience;
 
 		OutlineNodeComparer comparer;
 		OutlineSettings settings;
@@ -89,7 +88,6 @@ namespace MonoDevelop.CSharp.ClassOutline
 
 			if (DocumentContext != null)
 				DocumentContext.DocumentParsed += UpdateDocumentOutline;
-			astAmbience = new AstAmbience (TypeSystemService.Workspace.Options);
 		}
 
 		public override void Dispose ()
@@ -148,10 +146,7 @@ namespace MonoDevelop.CSharp.ClassOutline
 				JumpToDeclaration (true);
 			};
 
-			var analysisDocument = DocumentContext.ParsedDocument;
-			if (analysisDocument != null)
-				lastCU = analysisDocument.GetAst<SemanticModel> ();
-
+			UpdateDocumentOutline (this, EventArgs.Empty);
 			outlineTreeView.Realized += delegate { RefillOutlineStore (); };
 			UpdateSorting ();
 
@@ -227,6 +222,7 @@ namespace MonoDevelop.CSharp.ClassOutline
 			} else {
 				Editor.CaretOffset = ((SyntaxTrivia)o).SpanStart;
 			}
+			Editor.CenterToCaret ();
 
 			if (focusEditor) {
 				GLib.Timeout.Add (10, delegate {
@@ -247,8 +243,9 @@ namespace MonoDevelop.CSharp.ClassOutline
 			}
 		}
 
-		void OutlineTreeTextFunc (TreeViewColumn column, CellRenderer cell, TreeModel model, TreeIter iter)
+		static void OutlineTreeTextFunc (TreeViewColumn column, CellRenderer cell, TreeModel model, TreeIter iter)
 		{
+			var astAmbience = new AstAmbience (TypeSystemService.Workspace.Options);
 			var txtRenderer = (CellRendererText)cell;
 			object o = model.GetValue (iter, 0);
 			var syntaxNode = o as SyntaxNode;
@@ -283,12 +280,12 @@ namespace MonoDevelop.CSharp.ClassOutline
 		}
 
 		uint refillOutlineStoreId;
-		void UpdateDocumentOutline (object sender, EventArgs args)
+		async void UpdateDocumentOutline (object sender, EventArgs args)
 		{
-			var analysisDocument = DocumentContext.ParsedDocument;
+			var analysisDocument = DocumentContext.AnalysisDocument;
 			if (analysisDocument == null)
 				return;
-			lastCU = analysisDocument.GetAst<SemanticModel> ();
+			lastCU = await analysisDocument.GetSemanticModelAsync ();
 			//limit update rate to 3s
 			if (!refreshingOutline) {
 				refreshingOutline = true;
@@ -301,7 +298,7 @@ namespace MonoDevelop.CSharp.ClassOutline
 			Runtime.AssertMainThread ();
 			Gdk.Threads.Enter ();
 			refreshingOutline = false;
-			if (outlineTreeStore == null || !outlineTreeView.IsRealized) {
+			if (outlineTreeStore == null || outlineTreeView == null || !outlineTreeView.IsRealized) {
 				refillOutlineStoreId = 0;
 				return false;
 			}

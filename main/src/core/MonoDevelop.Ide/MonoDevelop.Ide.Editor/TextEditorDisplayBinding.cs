@@ -39,7 +39,7 @@ namespace MonoDevelop.Ide.Editor
 
 		public static FilePath SyntaxModePath {
 			get {
-				return UserProfile.Current.UserDataRoot.Combine ("HighlightingSchemes");
+				return UserProfile.Current.UserDataRoot.Combine ("ColorThemes");
 			}
 		}
 
@@ -73,7 +73,7 @@ namespace MonoDevelop.Ide.Editor
 				}
 			}
 			if (success)
-				SyntaxModeService.LoadStylesAndModes (SyntaxModePath);
+				SyntaxHighlightingService.LoadStylesAndModesInPath (SyntaxModePath);
 		}
 
 		public string Name {
@@ -95,10 +95,16 @@ namespace MonoDevelop.Ide.Editor
 
 		public ViewContent CreateContent (FilePath fileName, string mimeType, Project ownerProject)
 		{
-			var editor = TextEditorFactory.CreateNewEditor ();
-			editor.MimeType = mimeType;
+			TextEditor editor;
+
+			// HACK: CreateNewEditor really needs to know whether the document exists (& should be loaded)
+			// or we're creating an empty document with the given file name & mime type.
+			//
+			// That information could be added to FilePath but fileName is converted to a string below
+			// which means the information is lost.
+			editor = TextEditorFactory.CreateNewEditor(fileName, mimeType);
+
 			editor.GetViewContent ().Project = ownerProject;
-			editor.GetViewContent ().ContentName = fileName;
 			return editor.GetViewContent (); 
 		}
 

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <Import Project="..\..\..\MonoDevelop.props" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -9,7 +10,7 @@
     <OutputType>Library</OutputType>
     <AssemblyName>MonoDevelop.Refactoring</AssemblyName>
     <RootNamespace>MonoDevelop.Refactoring</RootNamespace>
-    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>True</DebugSymbols>
@@ -56,22 +57,12 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
-    <Reference Include="gtk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
-    <Reference Include="gdk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
+    <Reference Include="gtk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
+    <Reference Include="gdk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
     <Reference Include="Mono.Posix" />
-    <Reference Include="pango-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
-    <Reference Include="glib-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
-    <Reference Include="atk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f">
-      <SpecificVersion>False</SpecificVersion>
-    </Reference>
+    <Reference Include="pango-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
+    <Reference Include="glib-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
+    <Reference Include="atk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f"/>
     <Reference Include="System.Core" />
     <Reference Include="System.Xml" />
     <Reference Include="Mono.Cairo" />
@@ -82,6 +73,10 @@
     </Reference>
     <Reference Include="System.Composition.AttributedModel">
       <HintPath>..\..\..\build\bin\System.Composition.AttributedModel.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Composition.Runtime">
+      <HintPath>..\..\..\build\bin\System.Composition.Runtime.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="System.Collections.Immutable">
@@ -108,40 +103,54 @@
       <HintPath>..\..\..\build\bin\Microsoft.CodeAnalysis.Features.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.EditorFeatures">
+      <HintPath>..\..\..\build\bin\Microsoft.CodeAnalysis.EditorFeatures.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.ValueTuple">
+      <HintPath>..\..\..\packages\System.ValueTuple.4.4.0\lib\netstandard1.0\System.ValueTuple.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Composition.TypedParts">
+      <HintPath>..\..\..\build\bin\System.Composition.TypedParts.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Composition.Hosting">
+      <HintPath>..\..\..\build\bin\System.Composition.Hosting.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.Workspaces.Desktop">
+      <HintPath>..\..\..\build\bin\Microsoft.CodeAnalysis.Workspaces.Desktop.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp.EditorFeatures">
+      <HintPath>..\..\..\build\bin\Microsoft.CodeAnalysis.CSharp.EditorFeatures.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup Condition=" '$(Configuration)' == 'Debug' OR '$(Configuration)' == 'DebugMac' ">
+    <Reference Include="ClrHeapAllocationAnalyzer">
+      <HintPath>..\..\..\packages\ClrHeapAllocationAnalyzer.1.0.0.8\analyzers\dotnet\cs\ClrHeapAllocationAnalyzer.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.cs" />
-    <Compile Include="gtk-gui\generated.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\Gui\ResultsEditorExtension.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\Gui\ResultTooltipProvider.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\Gui\AnalysisOptionsPanel.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\Gui\ResultMarker.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\Fixes\RenameMemberFix.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\Extensions\AnalysisTypeExtensionNode.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\Extensions\FixHandlerExtensionNode.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\Extensions\AnalysisRuleAddinNode.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\AnalysisCommands.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\AnalysisExtensions.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\AnalysisOptions.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\AnalysisService.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\FixableResult.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\Result.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\RuleTree.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\RuleTreeType.cs" />
-    <Compile Include="MonoDevelop.AnalysisCore\Fixes\GenericFix.cs" />
     <Compile Include="MonoDevelop.Refactoring\RefactoringService.cs" />
     <Compile Include="MonoDevelop.Refactoring\Change.cs" />
     <Compile Include="MonoDevelop.Refactoring.Rename\RenameRefactoring.cs" />
     <Compile Include="MonoDevelop.Refactoring.Rename\RenameItemDialog.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Refactoring.Rename.RenameItemDialog.cs" />
     <Compile Include="MonoDevelop.Refactoring\RefactoringOptions.cs" />
     <Compile Include="MonoDevelop.Refactoring\RefactoringPreviewDialog.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.Refactoring.RefactoringPreviewDialog.cs" />
     <Compile Include="MonoDevelop.CodeActions\CodeActionEditorExtension.cs" />
     <Compile Include="MonoDevelop.CodeActions\CodeActionPanelWidget.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.CodeActions.ContextActionPanelWidget.cs" />
     <Compile Include="MonoDevelop.CodeIssues\CodeIssuePanelWidget.cs" />
-    <Compile Include="gtk-gui\MonoDevelop.CodeIssues.CodeIssuePanelWidget.cs" />
     <Compile Include="AddinInfo.cs" />
     <Compile Include="MonoDevelop.CodeIssues\DiagnosticResult.cs" />
     <Compile Include="MonoDevelop.CodeActions\CodeRefactoringDescriptor.cs" />
@@ -150,23 +159,36 @@
     <Compile Include="MonoDevelop.CodeIssues\CodeDiagnosticRunner.cs" />
     <Compile Include="MonoDevelop.CodeActions\CodeActionContainer.cs" />
     <Compile Include="MonoDevelop.AnalysisCore\IssueMarker.cs" />
-    <Compile Include="MonoDevelop.CodeIssues\CodeDiagnosticProvider.cs" />
-    <Compile Include="MonoDevelop.CodeIssues\BuiltInCodeDiagnosticProvider.cs" />
-    <Compile Include="MonoDevelop.CodeIssues\AnalyzersFromAssembly.cs" />
-    <Compile Include="MonoDevelop.CodeActions\ValidCodeAction.cs" />
-    <Compile Include="MonoDevelop.CodeActions\ValidCodeDiagnosticAction.cs" />
-    <Compile Include="MonoDevelop.CodeIssues\CodeDiagnosticFixDescriptor.cs" />
     <Compile Include="MonoDevelop.Refactoring\Commands.cs" />
     <Compile Include="MonoDevelop.Refactoring\RefactoringSymbolInfo.cs" />
-    <Compile Include="MonoDevelop.CodeIssues\ISuppressionFixProvider.cs" />
     <Compile Include="MonoDevelop.CodeIssues\CodeFix.cs" />
-    <Compile Include="MonoDevelop.CodeIssues\CSharpSuppressionFixProvider.cs" />
     <Compile Include="MonoDevelop.Refactoring\FindReferencesProvider.cs" />
     <Compile Include="MonoDevelop.Refactoring\JumpToDeclarationHandler.cs" />
     <Compile Include="MonoDevelop.Refactoring\InsertionPointService.cs" />
     <Compile Include="MonoDevelop.Refactoring\AnalyzeWholeSolutionHandler.cs" />
     <Compile Include="MonoDevelop.Refactoring\AnalyzeCurrentProjectHandler.cs" />
     <Compile Include="MonoDevelop.Refactoring\RefactoringPreviewTooltipWindow.cs" />
+    <Compile Include="MonoDevelop.CodeActions\CodeFixMenuService.cs" />
+    <Compile Include="MonoDevelop.Refactoring.SignatureChange\SignatureChangeOptionService.cs" />
+    <Compile Include="MonoDevelop.Refactoring.SignatureChange\SignatureChangeDialog.cs" />
+    <Compile Include="MonoDevelop.Refactoring.GenerateType\GenerateTypeDialog.cs" />
+    <Compile Include="MonoDevelop.Refactoring.GenerateType\GenerateTypeOptionsService.cs" />
+    <Compile Include="MonoDevelop.Refactoring\QuickFixMenuHandler.cs" />
+    <Compile Include="MonoDevelop.Refactoring.PackageInstaller\PackageInstallerService.cs" />
+    <Compile Include="MonoDevelop.Refactoring.PackageInstaller\SymbolSearchService.cs" />
+    <Compile Include="MonoDevelop.CodeActions\RoslynProgressTracker.cs" />
+    <Compile Include="MonoDevelop.Refactoring.ExtractInterface\ExtractInterfaceOptionService.cs" />
+    <Compile Include="MonoDevelop.Refactoring.ExtractInterface\ExtractInterfaceDialog.cs" />
+    <Compile Include="MonoDevelop.AnalysisCore\MonoDevelopWorkspaceDiagnosticAnalyzerProviderService.cs" />
+    <Compile Include="MonoDevelop.AnalysisCore\MonoDevelopWorkspaceDiagnosticAnalyzerProviderService.AnalyzerAssemblyLoader.cs" />
+    <Compile Include="MonoDevelop.Refactoring.PickMembersService\PickMembersService.cs" />
+    <Compile Include="MonoDevelop.Refactoring.PickMembersService\PickMembersDialog.cs" />
+    <Compile Include="MonoDevelop.AnalysisCore\MonoDevelopWorkspaceDiagnosticAnalyzerProviderService.OptionsTable.cs" />
+    <Compile Include="Gui\MonoDevelop.CodeActions.ContextActionPanelWidget.cs" />
+    <Compile Include="Gui\MonoDevelop.CodeIssues.CodeIssuePanelWidget.cs" />
+    <Compile Include="Gui\MonoDevelop.Refactoring.RefactoringPreviewDialog.cs" />
+    <Compile Include="Gui\MonoDevelop.Refactoring.Rename.RenameItemDialog.cs" />
+    <Compile Include="Gui\MonoDevelop.Refactoring.SignatureChange.SignatureChangeDialog.cs" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="MonoDevelop.Refactoring\" />
@@ -174,15 +196,17 @@
     <Folder Include="MonoDevelop.AnalysisCore\" />
     <Folder Include="MonoDevelop.CodeIssues\" />
     <Folder Include="MonoDevelop.CodeActions\" />
-    <Folder Include="MonoDevelop.AnalysisCore\Rules\" />
     <Folder Include="MonoDevelop.CodeIssues\Pad\" />
+    <Folder Include="MonoDevelop.Refactoring.SignatureChange\" />
+    <Folder Include="MonoDevelop.Refactoring.GenerateType\" />
+    <Folder Include="MonoDevelop.Refactoring.PackageInstaller\" />
+    <Folder Include="MonoDevelop.Refactoring.ExtractInterface\" />
+    <Folder Include="MonoDevelop.Refactoring.PickMembersService\" />
+    <Folder Include="Gui\" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="MonoDevelop.Refactoring.addin.xml">
       <LogicalName>MonoDevelop.Refactoring.addin.xml</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="gtk-gui\gui.stetic">
-      <LogicalName>gui.stetic</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
@@ -303,21 +327,19 @@
     <ProjectReference Include="..\..\..\external\RefactoringEssentials\RefactoringEssentials\RefactoringEssentials.csproj">
       <Project>{C465A5DC-AD28-49A2-89C0-F81838814A7E}</Project>
       <Name>RefactoringEssentials</Name>
-      <Private>False</Private>
+      <Private>True</Private>
     </ProjectReference>
-    <ProjectReference Include="..\..\core\Mono.Texteditor\Mono.TextEditor.csproj">
-      <Project>{A2329308-3751-4DBD-9A75-5F7B8B024625}</Project>
-      <Name>Mono.TextEditor</Name>
-      <Private>False</Private>
-    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="FSharpBinding" />
+    <InternalsVisibleTo Include="MonoDevelop.CSharpBinding" />
+    <InternalsVisibleTo Include="MonoDevelop.PackageManagement" />
+    <InternalsVisibleTo Include="MonoDevelop.MonoDroid" />
+    <InternalsVisibleTo Include="MonoDevelop.Refactoring.Tests" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
-    <None Include="MonoDevelop.AnalysisCore\README.txt" />
-    <None Include="MonoDevelop.AnalysisCore\TODO.txt" />
     <None Include="MonoDevelop.Refactoring\QuickFixHandler.cs" />
-    <None Include="gtk-gui\MonoDevelop.Refactoring.OverridesImplementsDialog.cs" />
-    <None Include="gtk-gui\MonoDevelop.Refactoring.EncapsulateFieldDialog.cs" />
     <None Include="MonoDevelop.CodeIssues\Pad\Runner\AnalysisJobQueue.cs" />
     <None Include="MonoDevelop.CodeIssues\Pad\Runner\CodeIssueEventArgs.cs" />
     <None Include="MonoDevelop.CodeIssues\Pad\Runner\IAnalysisJob.cs" />
@@ -354,10 +376,16 @@
     <None Include="MonoDevelop.CodeIssues\Pad\AnalysisState.cs" />
     <None Include="MonoDevelop.CodeIssues\Pad\AnalysisStateChangeEventArgs.cs" />
     <None Include="MonoDevelop.CodeIssues\Pad\CategoryGroupingProvider.cs" />
+    <None Include="packages.config" />
   </ItemGroup>
-
-  <Target Name="AfterBuild">
-    <Copy SourceFiles="..\..\..\build\bin\Microsoft.CodeAnalysis.CSharp.Features.dll" DestinationFolder="..\..\..\build\bin" ContinueOnError="true" />
-    <Copy SourceFiles="..\..\..\build\bin\Microsoft.CodeAnalysis.Features.dll" DestinationFolder="..\..\..\build\bin" ContinueOnError="true" />
-  </Target>
-  </Project>
+  <ProjectExtensions>
+    <MonoDevelop>
+      <Properties>
+        <Policies>
+          <TextStylePolicy inheritsSet="null" scope="text/x-csharp" />
+          <CSharpFormattingPolicy IndentBlock="True" IndentBraces="False" IndentSwitchCaseSection="True" LabelPositioning="OneLess" NewLinesForBracesInTypes="True" NewLinesForBracesInMethods="True" SpaceWithinMethodDeclarationParenthesis="False" SpaceBetweenEmptyMethodDeclarationParentheses="False" SpaceWithinMethodCallParentheses="False" SpaceBetweenEmptyMethodCallParentheses="False" SpaceAfterControlFlowStatementKeyword="True" SpaceWithinExpressionParentheses="False" SpaceWithinCastParentheses="False" SpaceWithinOtherParentheses="False" SpaceAfterCast="False" SpacesIgnoreAroundVariableDeclaration="False" SpaceBetweenEmptySquareBrackets="False" SpaceWithinSquareBrackets="False" SpaceAfterColonInBaseTypeDeclaration="True" SpaceAfterComma="True" SpaceAfterDot="False" SpaceAfterSemicolonsInForStatement="True" SpaceBeforeColonInBaseTypeDeclaration="True" SpaceBeforeComma="False" SpaceBeforeDot="False" SpaceBeforeSemicolonsInForStatement="False" SpacingAroundBinaryOperator="Single" WrappingPreserveSingleLine="True" WrappingKeepStatementsOnSingleLine="True" PlaceSystemDirectiveFirst="True" IndentSwitchSection="False" NewLinesForBracesInProperties="False" NewLinesForBracesInAccessors="False" NewLinesForBracesInAnonymousMethods="False" NewLinesForBracesInControlBlocks="False" NewLinesForBracesInAnonymousTypes="False" NewLinesForBracesInObjectCollectionArrayInitializers="False" NewLinesForBracesInLambdaExpressionBody="False" NewLineForElse="False" NewLineForCatch="False" NewLineForFinally="False" NewLineForMembersInObjectInit="False" NewLineForMembersInAnonymousTypes="False" NewLineForClausesInQuery="False" SpacingAfterMethodDeclarationName="True" SpaceAfterMethodCallName="True" SpaceBeforeOpenSquareBracket="True" scope="text/x-csharp" />
+        </Policies>
+      </Properties>
+    </MonoDevelop>
+  </ProjectExtensions>
+</Project>

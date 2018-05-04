@@ -54,7 +54,7 @@ namespace MonoDevelop.Components.MainToolbar
 		/// <summary>
 		/// Load configuration information for a solution
 		/// </summary>
-		public void Load (Solution sol)
+		public void Load (Solution sol, SolutionItem project, SolutionItemRunConfiguration runConfig)
 		{
 			currentSolutionConfigurations.Clear ();
 			currentTargetPartitions.Clear ();
@@ -62,9 +62,6 @@ namespace MonoDevelop.Components.MainToolbar
 
 			if (sol == null)
 				return;
-
-			var project = sol.StartupItem;
-			var runConfig = (sol.StartupConfiguration as SingleItemSolutionRunConfiguration)?.RunConfiguration;
 
 			// Create a set of configuration partitions. Each partition will contain configurations
 			// which are implicitly selected when selecting an execution target. For example, in
@@ -77,8 +74,8 @@ namespace MonoDevelop.Components.MainToolbar
 			List<TargetPartition> partitions = new List<TargetPartition> ();
 			if (project != null) {
 				foreach (var conf in project.Configurations) {
-					var targets = project.GetExecutionTargets (conf.Selector, runConfig);
-					if (!targets.Any ()) {
+					var targets = project.GetExecutionTargets (conf.Selector, runConfig).ToArray ();
+					if (targets.Length == 0) {
 						targets = new ExecutionTarget[] { dummyExecutionTarget };
 					}
 					var parts = partitions.Where (p => targets.Any (p.Targets.Contains)).ToArray();

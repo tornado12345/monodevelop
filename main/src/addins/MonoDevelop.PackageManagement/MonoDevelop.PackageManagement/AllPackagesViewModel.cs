@@ -68,6 +68,18 @@ namespace MonoDevelop.PackageManagement
 			return new AllPackagesViewModel (solutionManager, dotNetProject, recentPackagesRepository);
 		}
 
+		public static AllPackagesViewModel Create (
+			DotNetProject project,
+			RecentNuGetPackagesRepository recentPackagesRepository)
+		{
+			if (project == null)
+				return Create (recentPackagesRepository);
+
+			var solutionManager = PackageManagementServices.Workspace.GetSolutionManager (project.ParentSolution);
+			var dotNetProject = new DotNetProjectProxy (project);
+			return new AllPackagesViewModel (solutionManager, dotNetProject, recentPackagesRepository);
+		}
+
 		public AllPackagesViewModel (
 			IMonoDevelopSolutionManager solutionManager,
 			IDotNetProject dotNetProject,
@@ -523,8 +535,10 @@ namespace MonoDevelop.PackageManagement
 			var provider = new MultiSourcePackageMetadataProvider (
 				selectedPackageSource.GetSourceRepositories (),
 				packageManager.PackagesFolderSourceRepository,
-				packageManager.GlobalPackagesFolderSourceRepository,
-				new NuGet.Logging.NullLogger ());
+				packageManager.GlobalPackageFolderRepositories,
+				new [] { NuGetProject },
+				false,
+				new NuGet.Common.NullLogger ());
 
 			packageViewModel.LoadPackageMetadata (provider, cancellationTokenSource.Token);
 		}
