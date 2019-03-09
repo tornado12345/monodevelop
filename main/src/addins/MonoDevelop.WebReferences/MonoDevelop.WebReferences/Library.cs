@@ -18,14 +18,14 @@ namespace MonoDevelop.WebReferences
 		/// <summary>Read the service description for a specified uri.</summary>
 		/// <param name="uri">A string containing the unique reference identifier for the service.</param>
 		/// <returns>A ServiceDescription for the specified uri.</returns>
+		[Obsolete]
 		public static ServiceDescription ReadServiceDescription(string uri) 
 		{
 			var desc = new ServiceDescription();
 			try 
 			{
-				var request = (HttpWebRequest)WebRequest.Create(uri);
-				WebResponse response  = request.GetResponse();
-			
+				WebResponse response = WebRequestHelper.GetResponse (() => (HttpWebRequest)WebRequest.Create (uri));
+
 				desc = ServiceDescription.Read(response.GetResponseStream());
 				response.Close();
 				desc.RetrievalUrl = uri;
@@ -64,7 +64,9 @@ namespace MonoDevelop.WebReferences
 		/// <returns>An XmlDocument containing the generated xml for the specified discovery document.</returns>
 		public static void GenerateDiscoXml (StringBuilder text, DiscoveryDocument doc)
 		{
-			text.Append ("<big><b>" + GettextCatalog.GetString ("Web Service References") + "</b></big>\n\n");
+			text.Append ("<big><b>")
+				.Append (GettextCatalog.GetString ("Web Service References"))
+				.Append ("</b></big>\n\n");
 			foreach (object oref in doc.References)
 			{
 				var dref = oref as DiscoveryReference;

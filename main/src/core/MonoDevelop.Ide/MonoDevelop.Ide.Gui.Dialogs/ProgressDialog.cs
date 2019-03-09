@@ -57,8 +57,6 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 			ActionArea.Hide ();
 			DefaultHeight = 5;
 			
-			TransientFor = parent;
-			
 			btnCancel.Visible = allowCancel;
 
 			expander.Visible = showDetails;

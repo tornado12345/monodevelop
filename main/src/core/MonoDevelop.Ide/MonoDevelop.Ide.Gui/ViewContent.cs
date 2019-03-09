@@ -55,9 +55,12 @@ namespace MonoDevelop.Ide.Gui
 				if (value != contentName) {
 					contentName = value;
 					OnContentNameChanged ();
+					OriginalContentName = null;
 				}
 			}
 		}
+
+		internal string OriginalContentName { get; set; }
 
 		public bool IsUntitled {
 			get { return (ContentName == null); }
@@ -162,9 +165,13 @@ namespace MonoDevelop.Ide.Gui
 
 	public abstract class AbstractXwtViewContent : ViewContent
 	{
+		XwtControl control;
+
 		public sealed override Control Control {
 			get {
-				return (Gtk.Widget)Toolkit.CurrentEngine.GetNativeWidget (Widget);
+				if (control == null)
+					control = new XwtControl (Widget);
+				return control;
 			}
 		}
 

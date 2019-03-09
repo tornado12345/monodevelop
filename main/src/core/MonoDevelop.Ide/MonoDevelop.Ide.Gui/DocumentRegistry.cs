@@ -48,8 +48,6 @@ namespace MonoDevelop.Ide.Gui
 	{
 		readonly static List<DocumentInfo> openFiles = new List<DocumentInfo> ();
 
-		readonly static FileSystemWatcher fileSystemWatcher;
-
 		public static IEnumerable<Document> OpenFiles {
 			get {
 				return openFiles.Select(di => di.Document);
@@ -58,10 +56,6 @@ namespace MonoDevelop.Ide.Gui
 
 		static DocumentRegistry ()
 		{
-			fileSystemWatcher = new FileSystemWatcher ();
-			fileSystemWatcher.Created += (s, e) => Runtime.RunInMainThread (() => OnFileChanged (s, e));
-			fileSystemWatcher.Changed += (s, e) => Runtime.RunInMainThread (() => OnFileChanged (s, e));
-
 			FileService.FileCreated += HandleFileServiceChange;
 			FileService.FileChanged += HandleFileServiceChange;
 		}
@@ -77,6 +71,8 @@ namespace MonoDevelop.Ide.Gui
 				foreach (var view in openFiles) {
 					if (SkipView (view.Document) || !string.Equals (view.Document.FileName, file.FileName, FilePath.PathComparison))
 						continue;
+					if (view.LastSaveTimeUtc == File.GetLastWriteTimeUtc (file.FileName))
+						continue;
 					if (!view.Document.IsDirty)
 						view.Document.Reload ();
 					else
@@ -87,41 +83,11 @@ namespace MonoDevelop.Ide.Gui
 			if (foundOneChange)
 				CommitViewChange (GetAllChangedFiles ());
 		}
-		static void OnFileChanged (object sender, FileSystemEventArgs e)
-		{
-			if (e.ChangeType == WatcherChangeTypes.Changed || e.ChangeType == WatcherChangeTypes.Created)
-				CheckFileChange (e.FullPath);
-		}
 
 		internal static bool SkipView (Document view)
 		{
 			return !view.IsFile || view.IsUntitled ;
 		}
-
-
-		static void CheckFileChange (string fileName)
-		{
-			if (skipFiles.Contains (fileName)) {
-				skipFiles.Remove (fileName);
-				return;
-			}
-
-			var changedViews = new List<DocumentInfo> ();
-			foreach (var view in openFiles) {
-				if (SkipView (view.Document))
-					continue;
-				if (string.Equals (view.Document.FileName, fileName, FilePath.PathComparison)) {
-					if (view.LastSaveTimeUtc == File.GetLastWriteTimeUtc (fileName))
-						continue;
-					if (!view.Document.IsDirty)
-						view.Document.Reload ();
-					else
-						changedViews.Add (view);
-				}
-			}
-			CommitViewChange (changedViews);
-		}
-
 
 		static void CommitViewChange (List<DocumentInfo> changedDocuments)
 		{
@@ -214,6 +180,7 @@ namespace MonoDevelop.Ide.Gui
 				LastSaveTimeUtc = DateTime.UtcNow;
 				doc.Saved += Doc_Saved;
 				doc.Reloaded += Doc_Saved;
+				doc.FileNameChanged += Doc_Saved;
 			}
 
 
@@ -231,6 +198,7 @@ namespace MonoDevelop.Ide.Gui
 			{
 				Document.Saved -= Doc_Saved;
 				Document.Reloaded -= Doc_Saved;
+				Document.FileNameChanged -= Doc_Saved;
 			}
 		}
 

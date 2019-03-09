@@ -120,10 +120,16 @@ namespace MonoDevelop.VersionControl.Views
 		[CommandHandler (MonoDevelop.Ide.Commands.EditCommands.Copy)]
 		protected void OnCopy ()
 		{
-			string data = widget.DiffText;
-			if (data == null)
+			string data = widget.GetSelectedText ();
+			if (data == null) {
 				return;
+			}
 
+			CopyToClipboard (data);
+		}
+
+		internal static void CopyToClipboard (string data)
+		{
 			var clipboard = Clipboard.Get (Gdk.Atom.Intern ("CLIPBOARD", false));
 			clipboard.Text = data;
 			clipboard = Clipboard.Get (Gdk.Atom.Intern ("PRIMARY", false));

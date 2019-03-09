@@ -60,6 +60,7 @@ namespace MonoDevelop.AspNet.Projects
 
 		WebFormsRegistrationCache registrationCache;
 		WebFormsCodeBehindTypeNameCache codebehindTypeNameCache;
+		public const string TypeScriptCompile = "TypeScriptCompile";
 
 		#region properties
 
@@ -303,6 +304,8 @@ namespace MonoDevelop.AspNet.Projects
 				return WebSubtype.Stylus;
 			case "CSHTML":
 				return WebSubtype.Razor;
+			case "TS":
+				return WebSubtype.TypeScript;
 			default:
 				return WebSubtype.None;
 			}
@@ -546,11 +549,12 @@ namespace MonoDevelop.AspNet.Projects
 
 		protected override string OnGetDefaultBuildAction (string fileName)
 		{
-
-			WebSubtype type = DetermineWebSubtype (fileName);
+			var type = DetermineWebSubtype (fileName);
 			switch (type) {
 			case WebSubtype.Code:
 				return BuildAction.Compile;
+			case WebSubtype.TypeScript:
+				return TypeScriptCompile;
 			case WebSubtype.None:
 				return base.OnGetDefaultBuildAction (fileName);
 			default:
@@ -625,21 +629,6 @@ namespace MonoDevelop.AspNet.Projects
 							files.Add (file);
 
 			return files;
-		}
-
-		protected override void OnPopulateSupportFileList (FileCopySet list, ConfigurationSelector configuration)
-		{
-			base.OnPopulateSupportFileList (list, configuration);
-
-			//HACK: workaround for MD not local-copying package references
-			foreach (MonoDevelop.Projects.ProjectReference projectReference in Project.References) {
-				if (projectReference.Package != null && projectReference.Package.Name == "system.web.mvc") {
-					if (projectReference.ReferenceType == ReferenceType.Package)
-						foreach (SystemAssembly assem in projectReference.Package.Assemblies)
-							list.Add (assem.Location);
-					break;
-				}
-			}
 		}
 
 		public string GetAspNetMvcVersion ()

@@ -24,6 +24,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -49,20 +50,24 @@ namespace MonoDevelop.PackageManagement
 	class PackageReferenceNuGetProject : BuildIntegratedNuGetProject, IBuildIntegratedNuGetProject, IHasDotNetProject
 	{
 		DotNetProject project;
-		IPackageManagementEvents packageManagementEvents;
+		ConfigurationSelector configuration;
+		PackageManagementEvents packageManagementEvents;
 		string msbuildProjectPath;
 		string projectName;
+		bool reevaluationRequired;
 
-		public PackageReferenceNuGetProject (DotNetProject project)
-			: this (project, PackageManagementServices.PackageManagementEvents)
+		public PackageReferenceNuGetProject (DotNetProject project, ConfigurationSelector configuration)
+			: this (project, configuration, (PackageManagementEvents)PackageManagementServices.PackageManagementEvents)
 		{
 		}
 
 		public PackageReferenceNuGetProject (
 			DotNetProject project,
-			IPackageManagementEvents packageManagementEvents)
+			ConfigurationSelector configuration,
+			PackageManagementEvents packageManagementEvents)
 		{
 			this.project = project;
+			this.configuration = configuration;
 			this.packageManagementEvents = packageManagementEvents;
 
 			var targetFramework = NuGetFramework.Parse (project.TargetFramework.Id.ToString ());
@@ -98,8 +103,13 @@ namespace MonoDevelop.PackageManagement
 
 		public static NuGetProject Create (DotNetProject project)
 		{
+			return Create (project, ConfigurationSelector.Default);
+		}
+
+		public static NuGetProject Create (DotNetProject project, ConfigurationSelector configuration)
+		{
 			if (CanCreate (project))
-				return new PackageReferenceNuGetProject (project);
+				return new PackageReferenceNuGetProject (project, configuration);
 
 			return null;
 		}
@@ -143,26 +153,20 @@ namespace MonoDevelop.PackageManagement
 
 		bool AddPackageReference (PackageIdentity packageIdentity, INuGetProjectContext context)
 		{
-			ProjectPackageReference packageReference = project.GetPackageReference (packageIdentity);
-			if (packageReference != null) {
+			ProjectPackageReference packageReference = project.GetPackageReference (packageIdentity, matchVersion: false);
+			if (packageReference?.Equals (packageIdentity, matchVersion: true) == true) {
 				context.Log (MessageLevel.Warning, GettextCatalog.GetString ("Package '{0}' already exists in project '{1}'", packageIdentity, project.Name));
 				return false;
 			}
 
-			RemoveExistingPackageReference (packageIdentity);
-
-			packageReference = ProjectPackageReference.Create (packageIdentity);
-			project.Items.Add (packageReference);
+			if (packageReference != null) {
+				packageReference.Version = packageIdentity.Version.ToNormalizedString ();
+			} else {
+				packageReference = ProjectPackageReference.Create (packageIdentity);
+				project.Items.Add (packageReference);
+			}
 
 			return true;
-		}
-
-		void RemoveExistingPackageReference (PackageIdentity packageIdentity)
-		{
-			ProjectPackageReference packageReference = project.GetPackageReference (packageIdentity, matchVersion: false);
-			if (packageReference != null) {
-				project.Items.Remove (packageReference);
-			}
 		}
 
 		public override async Task<bool> UninstallPackageAsync (
@@ -216,71 +220,38 @@ namespace MonoDevelop.PackageManagement
 
 		public override async Task<IReadOnlyList<PackageSpec>> GetPackageSpecsAsync (DependencyGraphCacheContext context)
 		{
-			PackageSpec existingPackageSpec = GetExistingProjectPackageSpec (context);
+			PackageSpec existingPackageSpec = context.GetExistingProjectPackageSpec (MSBuildProjectPath);
 			if (existingPackageSpec != null) {
 				return new [] { existingPackageSpec };
 			}
 
 			PackageSpec packageSpec = await CreateProjectPackageSpec (context);
-
-			if (context != null) {
-				AddToCache (context, packageSpec);
-			}
-
 			return new [] { packageSpec };
-		}
-
-		PackageSpec GetExistingProjectPackageSpec (DependencyGraphCacheContext context)
-		{
-			PackageSpec packageSpec = null;
-			if (context != null) {
-				if (context.PackageSpecCache.TryGetValue (MSBuildProjectPath, out packageSpec)) {
-					return packageSpec;
-				}
-			}
-			return packageSpec;
 		}
 
 		async Task<PackageSpec> CreateProjectPackageSpec (DependencyGraphCacheContext context)
 		{
-			PackageSpec packageSpec = await Runtime.RunInMainThread (() => CreateProjectPackageSpec (project, context));
-			return packageSpec;
+			DependencyGraphSpec dependencySpec = await MSBuildPackageSpecCreator.GetDependencyGraphSpec (project, configuration, context?.Logger);
+
+			context.AddToCache (dependencySpec);
+
+			PackageSpec spec = dependencySpec.GetProjectSpec (project.FileName);
+			if (spec != null)
+				return spec;
+
+			throw new InvalidOperationException (GettextCatalog.GetString ("Unable to create package spec for project. '{0}'", project.FileName));
 		}
 
-		static PackageSpec CreateProjectPackageSpec (DotNetProject project, DependencyGraphCacheContext context)
+		public override async Task PostProcessAsync (INuGetProjectContext nuGetProjectContext, CancellationToken token)
 		{
-			PackageSpec packageSpec = PackageSpecCreator.CreatePackageSpec (project, context);
-			return packageSpec;
-		}
-
-		void AddToCache (DependencyGraphCacheContext context, PackageSpec projectPackageSpec)
-		{
-			if (IsMissingFromCache (context, projectPackageSpec)) {
-				context.PackageSpecCache.Add (
-					projectPackageSpec.RestoreMetadata.ProjectUniqueName,
-					projectPackageSpec);
-			}
-		}
-
-		bool IsMissingFromCache (
-			DependencyGraphCacheContext context,
-			PackageSpec packageSpec)
-		{
-			PackageSpec ignore;
-			return !context.PackageSpecCache.TryGetValue (
-				packageSpec.RestoreMetadata.ProjectUniqueName,
-				out ignore);
-		}
-
-		public override Task PostProcessAsync (INuGetProjectContext nuGetProjectContext, CancellationToken token)
-		{
-			Runtime.RunInMainThread (() => {
+			await Runtime.RunInMainThread (async () => {
+				if (reevaluationRequired) {
+					await DotNetProject.ReevaluateProject (new ProgressMonitor ());
+				}
 				DotNetProject.NotifyModified ("References");
 			});
 
-			packageManagementEvents.OnFileChanged (project.GetNuGetAssetsFilePath ());
-
-			return base.PostProcessAsync (nuGetProjectContext, token);
+			await base.PostProcessAsync (nuGetProjectContext, token);
 		}
 
 		public void OnBeforeUninstall (IEnumerable<NuGetProjectAction> actions)
@@ -289,6 +260,16 @@ namespace MonoDevelop.PackageManagement
 
 		public void OnAfterExecuteActions (IEnumerable<NuGetProjectAction> actions)
 		{
+			reevaluationRequired = actions.Any (action => action.NuGetProjectActionType == NuGetProjectActionType.Install);
+
+			foreach (var action in actions) {
+				var eventArgs = new PackageEventArgs (this, action.PackageIdentity, null);
+				if (action.NuGetProjectActionType == NuGetProjectActionType.Install) {
+					packageManagementEvents.OnPackageInstalled (Project, eventArgs);
+				} else if (action.NuGetProjectActionType == NuGetProjectActionType.Uninstall) {
+					packageManagementEvents.OnPackageUninstalled (Project, eventArgs);
+				}
+			}
 		}
 
 		public void NotifyProjectReferencesChanged (bool includeTransitiveProjectReferences)
@@ -311,6 +292,27 @@ namespace MonoDevelop.PackageManagement
 		public bool ProjectRequiresReloadAfterRestore ()
 		{
 			return true;
+		}
+
+		public Task AddFileToProjectAsync (string filePath)
+		{
+			if (project.IsFileInProject (filePath))
+				return Task.CompletedTask;
+
+			return Runtime.RunInMainThread (async () => {
+				var fullPath = GetFullPath (filePath);
+				string buildAction = project.GetDefaultBuildAction (fullPath);
+				var fileItem = new ProjectFile (fullPath) {
+					BuildAction = buildAction
+				};
+				project.AddFile (fileItem);
+				await SaveProject ();
+			});
+		}
+
+		string GetFullPath (string relativePath)
+		{
+			return project.BaseDirectory.Combine (relativePath);
 		}
 	}
 }

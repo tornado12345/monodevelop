@@ -179,52 +179,20 @@ namespace MonoDevelop.Core.Assemblies
 		
 		public override string GetMSBuildBinPath (string toolsVersion)
 		{
-			bool monoUseMSBuild = Runtime.Preferences.BuildWithMSBuild || System.Version.Parse (toolsVersion) >= new System.Version(15, 0);
-
-			if (monoUseMSBuild) {
-				var path = Path.Combine (monoDir, "msbuild", toolsVersion, "bin");
-				if (File.Exists (Path.Combine (path, "MSBuild.exe")) ||
-				    File.Exists (Path.Combine (path, "MSBuild.dll"))) {
-					return path;
-				}
-
-				// ToolsVersion >= 15.0 is supported only by msbuild, so, just
-				// return null here
-				return null;
+			var path = Path.Combine (monoDir, "msbuild", toolsVersion, "bin");
+			if (File.Exists (Path.Combine (path, "MSBuild.exe")) ||
+			    File.Exists (Path.Combine (path, "MSBuild.dll"))) {
+				return path;
 			}
-
-			var xbpath = Path.Combine (monoDir, "xbuild", toolsVersion, "bin");
-			if (File.Exists (Path.Combine (xbpath, "xbuild.exe")))
-				return xbpath;
-
-			if (toolsVersion == "4.0")
-				//HACK: Mono puts xbuild 4.0 in 4.5 directory, even though there is no such thing as ToolsVersion 4.5
-				return GetMSBuildBinPath ("4.5");
 
 			return null;
 		}
 		
 		public override string GetMSBuildToolsPath (string toolsVersion)
 		{
-			bool monoUseMSBuild = Runtime.Preferences.BuildWithMSBuild || System.Version.Parse (toolsVersion) >= new System.Version (15, 0);
-
-			if (monoUseMSBuild) {
-				var path = Path.Combine (monoDir, "msbuild", toolsVersion, "bin");
-				if (Directory.Exists (path))
-					return path;
-
-				// ToolsVersion >= 15.0 is supported only by msbuild, so, just
-				// return null here
-				return null;
-			}
-
-			var xbpath = Path.Combine (monoDir, "xbuild", toolsVersion, "bin");
-			if (Directory.Exists (xbpath))
-				return xbpath;
-
-			if (toolsVersion == "4.0")
-				//HACK: Mono puts xbuild 4.0 in 4.5 directory, even though there is no such thing as ToolsVersion 4.5
-				return GetMSBuildToolsPath ("4.5");
+			var path = Path.Combine (monoDir, "msbuild", toolsVersion, "bin");
+			if (Directory.Exists (path))
+				return path;
 
 			return null;
 		}
@@ -326,13 +294,6 @@ namespace MonoDevelop.Core.Assemblies
 			return new ExecutionEnvironment (EnvironmentVariables);
 		}
 
-		static bool Is64BitPE (Mono.Cecil.TargetArchitecture machine)
-		{
-			return machine == Mono.Cecil.TargetArchitecture.AMD64 ||
-				   machine == Mono.Cecil.TargetArchitecture.IA64 ||
-				   machine == Mono.Cecil.TargetArchitecture.ARM64;
-		}
-
 		/// <summary>
 		/// Get the Mono executable best matching the assembly architecture flags.
 		/// </summary>
@@ -341,35 +302,30 @@ namespace MonoDevelop.Core.Assemblies
 		/// <param name="assemblyPath">Assembly path.</param>
 		public string GetMonoExecutableForAssembly (string assemblyPath)
 		{
-			Mono.Cecil.ModuleAttributes peKind;
-			Mono.Cecil.TargetArchitecture machine;
+			return GetMonoExecutable (AssemblyUtilities.GetProcessExecutionArchitectureForAssembly (assemblyPath));
+		}
 
-			try {
-				using (var adef = Mono.Cecil.AssemblyDefinition.ReadAssembly (assemblyPath)) {
-					peKind = adef.MainModule.Attributes;
-					machine = adef.MainModule.Architecture;
-				}
-			} catch {
-				peKind = Mono.Cecil.ModuleAttributes.ILOnly;
-				machine = Mono.Cecil.TargetArchitecture.I386;
-			}
-
+		internal string GetMonoExecutable (ProcessExecutionArchitecture use64Bit)
+		{
 			string monoPath;
-
-			if ((peKind & (Mono.Cecil.ModuleAttributes.Required32Bit | Mono.Cecil.ModuleAttributes.Preferred32Bit)) != 0) {
-				monoPath = Path.Combine (MonoRuntimeInfo.Prefix, "bin", "mono32");
-				if (File.Exists (monoPath))
-					return monoPath;
-			} else if (Is64BitPE (machine)) {
+			switch (use64Bit) {
+			case ProcessExecutionArchitecture.X64:
 				monoPath = Path.Combine (MonoRuntimeInfo.Prefix, "bin", "mono64");
 				if (File.Exists (monoPath))
 					return monoPath;
+				break;
+			case ProcessExecutionArchitecture.X86:
+				monoPath = Path.Combine (MonoRuntimeInfo.Prefix, "bin", "mono32");
+				if (File.Exists (monoPath))
+					return monoPath;
+				break;
 			}
 
 			return monoPath = Path.Combine (MonoRuntimeInfo.Prefix, "bin", "mono");
 		}
+
 	}
-	
+
 	class PcFileCacheContext: Mono.PkgConfig.IPcFileCacheContext<LibraryPackageInfo>
 	{
 		public void ReportError (string message, System.Exception ex)

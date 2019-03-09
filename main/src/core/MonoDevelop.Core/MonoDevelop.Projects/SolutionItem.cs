@@ -93,6 +93,7 @@ namespace MonoDevelop.Projects
 		{
 			itemExtension = ExtensionChain.GetExtension<SolutionItemExtension> ();
 			base.OnExtensionChainInitialized ();
+			fileStatusTracker.TrackFileChanges ();
 		}
 
 		SolutionItemExtension ItemExtension {
@@ -119,7 +120,8 @@ namespace MonoDevelop.Projects
 		{
 			if (Disposing != null)
 				Disposing (this, EventArgs.Empty);
-			
+
+			fileStatusTracker.Dispose ();
 			base.OnDispose ();
 			Counters.ItemsLoaded--;
 
@@ -370,7 +372,7 @@ namespace MonoDevelop.Projects
 
 		protected virtual IEnumerable<IBuildTarget> OnGetExecutionDependencies ()
 		{
-			yield break;
+			yield return this;
 		}
 
 		/// <summary>
@@ -477,7 +479,6 @@ namespace MonoDevelop.Projects
 			} finally {
 				fileStatusTracker.EndSave ();
 			}
-			FileService.NotifyFileChanged (FileName);
 		}
 
 		internal bool IsSaved {
@@ -618,11 +619,11 @@ namespace MonoDevelop.Projects
 				try {
 					SolutionItemConfiguration iconf = GetConfiguration (solutionConfiguration);
 					string confName = iconf != null ? iconf.Id : solutionConfiguration.ToString ();
-					monitor.BeginTask (GettextCatalog.GetString ("Building: {0} ({1})", Name, confName), 1);
+					monitor.BeginTask (GettextCatalog.GetString ("Building {0} ({1})", Name, confName), 1);
 
 					operationStarted = ParentSolution != null && await ParentSolution.BeginBuildOperation (monitor, solutionConfiguration, operationContext);
 
-					using (Counters.BuildProjectTimer.BeginTiming ("Building " + Name, GetProjectEventMetadata (solutionConfiguration))) {
+					using (Counters.BuildProjectTimer.BeginTiming ("Building " + Name, CreateProjectEventMetadata (solutionConfiguration))) {
 						result = await InternalBuild (monitor, solutionConfiguration, operationContext);
 					}
 
@@ -635,35 +636,19 @@ namespace MonoDevelop.Projects
 				return result;
 			}
 
-			ITimeTracker tt = Counters.BuildProjectAndReferencesTimer.BeginTiming ("Building " + Name, GetProjectEventMetadata (solutionConfiguration));
+			if (ParentSolution == null) {
+				throw new InvalidOperationException ("Cannot build SolutionItem without parent solution");
+			}
+
+			ITimeTracker tt = Counters.BuildProjectAndReferencesTimer.BeginTiming ("Building " + Name, CreateProjectEventMetadata (solutionConfiguration));
 			try {
-				operationStarted = ParentSolution != null && await ParentSolution.BeginBuildOperation (monitor, solutionConfiguration, operationContext);
-
-				// Get a list of all items that need to be built (including this),
-				// and build them in the correct order
-
-				var referenced = new List<SolutionItem> ();
-				var visited = new Set<SolutionItem> ();
-				GetBuildableReferencedItems (visited, referenced, this, solutionConfiguration);
-				if (Runtime.Preferences.SkipBuildingUnmodifiedProjects)
-					referenced.RemoveAll (si => {
-						if (si is Project p)
-							return !p.FastCheckNeedsBuild (solutionConfiguration);
-						return false;//Don't filter things that don't have FastCheckNeedsBuild
-					});
-				var sortedReferenced = TopologicalSort (referenced, solutionConfiguration);
-
-				SolutionItemConfiguration iconf = GetConfiguration (solutionConfiguration);
-				string confName = iconf != null ? iconf.Id : solutionConfiguration.ToString ();
-				monitor.BeginTask (GettextCatalog.GetString ("Building: {0} ({1})", Name, confName), sortedReferenced.Count);
-
-				result = await SolutionFolder.RunParallelBuildOperation (monitor, solutionConfiguration, sortedReferenced, (ProgressMonitor m, SolutionItem item) => {
-					return item.Build (m, solutionConfiguration, false, operationContext);
-				}, false);
+				operationStarted = await ParentSolution.BeginBuildOperation (monitor, solutionConfiguration, operationContext);
+				result = await ParentSolution.BuildItems (
+					monitor, solutionConfiguration, new[] { this }, operationContext,
+					GettextCatalog.GetString ("Building {0} ({1})", Name, solutionConfiguration.ToString ())
+				);
 			} finally {
-				monitor.EndTask ();
 				tt.End ();
-
 				if (operationStarted)
 					await ParentSolution.EndBuildOperation (monitor, solutionConfiguration, operationContext, result);
 			}
@@ -758,12 +743,12 @@ namespace MonoDevelop.Projects
 
 		async Task<BuildResult> CleanTask (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext)
 		{
-			ITimeTracker tt = Counters.BuildProjectTimer.BeginTiming ("Cleaning " + Name, GetProjectEventMetadata (configuration));
+			ITimeTracker tt = Counters.BuildProjectTimer.BeginTiming ("Cleaning " + Name, CreateProjectEventMetadata (configuration));
 			try {
 				try {
 					SolutionItemConfiguration iconf = GetConfiguration (configuration);
 					string confName = iconf != null ? iconf.Id : configuration.ToString ();
-					monitor.BeginTask (GettextCatalog.GetString ("Cleaning: {0} ({1})", Name, confName), 1);
+					monitor.BeginTask (GettextCatalog.GetString ("Cleaning {0} ({1})", Name, confName), 1);
 
 					SolutionItemConfiguration conf = GetConfiguration (configuration);
 					if (conf != null) {
@@ -865,24 +850,49 @@ namespace MonoDevelop.Projects
 			sortedItems.Add (insertItem);
 			inserted[index] = true;
 		}
-		
+
+		[Obsolete ("Use CreateProjectEventMetadata")]
 		public IDictionary<string, string> GetProjectEventMetadata (ConfigurationSelector configurationSelector)
 		{
-			var data = new Dictionary<string, string> ();
+			string id = null;
 			if (configurationSelector != null) {
 				var slnConfig = configurationSelector as SolutionConfigurationSelector;
 				if (slnConfig != null) {
-					data ["Config.Id"] = slnConfig.Id;
+					id = slnConfig.Id;
 				}
 			}
 
-			OnGetProjectEventMetadata (data);
-			return data;
+			// Due to API break restrictions, this may cause the work to be done twice
+			// For example: MonoDevelop.Projects.Project
+			var obsoleteMetadata = new Dictionary<string, string> ();
+			OnGetProjectEventMetadata (obsoleteMetadata);
+
+			return obsoleteMetadata;
 		}
 
+		public ProjectEventMetadata CreateProjectEventMetadata (ConfigurationSelector configurationSelector)
+		{
+			return ItemExtension.OnGetProjectEventMetadata (configurationSelector);
+		}
+
+		[Obsolete ("Use OnGetProjectEventMetadata (ProjectEventMetadata) instead")]
 		protected virtual void OnGetProjectEventMetadata (IDictionary<string, string> metadata)
 		{
 		}
+
+		protected virtual ProjectEventMetadata OnGetProjectEventMetadata (ConfigurationSelector configurationSelector)
+		{
+			string id = null;
+			if (configurationSelector != null) {
+				var slnConfig = configurationSelector as SolutionConfigurationSelector;
+				if (slnConfig != null) {
+					id = slnConfig.Id;
+				}
+			}
+
+			return new ProjectEventMetadata (id);
+		}
+
 		/// <summary>
 		/// Executes this solution item
 		/// </summary>
@@ -1459,6 +1469,15 @@ namespace MonoDevelop.Projects
 				ConfigurationRemoved (this, args);
 		}
 
+		internal event EventHandler<SolutionItemEventArgs> ReloadRequired {
+			add {
+				fileStatusTracker.ReloadRequired += value;
+			}
+			remove {
+				fileStatusTracker.ReloadRequired -= value;
+			}
+		}
+
 		protected virtual void OnReloadRequired (SolutionItemEventArgs args)
 		{
 			ItemExtension.OnReloadRequired (args);
@@ -1565,6 +1584,11 @@ namespace MonoDevelop.Projects
 			internal protected override IEnumerable<SolutionItem> OnGetReferencedItems (ConfigurationSelector configuration)
 			{
 				return Item.OnGetReferencedItems (configuration);
+			}
+
+			protected internal override ProjectEventMetadata OnGetProjectEventMetadata (ConfigurationSelector configurationSelector)
+			{
+				return Item.OnGetProjectEventMetadata (configurationSelector);
 			}
 
 			internal protected override void OnSetFormat (MSBuildFileFormat format)
@@ -1781,6 +1805,85 @@ namespace MonoDevelop.Projects
 				return item.FileName;
 			}
 			throw new NotSupportedException ();
+		}
+	}
+
+	public class ProjectEventMetadata : CounterMetadata
+	{
+		public ProjectEventMetadata ()
+		{
+		}
+
+		public ProjectEventMetadata (CounterMetadata metadata)
+			: base (metadata)
+		{
+		}
+
+		public ProjectEventMetadata (string configurationId)
+		{
+			if (configurationId != null) {
+				Properties["Config.Id"] = configurationId;
+			}
+		}
+
+		public string ProjectTypes {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public int BuildType {
+			get => GetProperty<int> ();
+			set => SetProperty (value);
+		}
+
+		public string BuildTypeString {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public bool FirstBuild {
+			get => GetProperty<bool> ();
+			set => SetProperty (value);
+		}
+
+		public string ProjectID {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public string ProjectType {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public string ProjectFlavor {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public string Capabilities {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public string Configuration {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public string Platform {
+			get => GetProperty<string> ();
+			set => SetProperty (value);
+		}
+
+		public bool Success {
+			get => GetProperty<bool> ();
+			set => SetProperty (value);
+		}
+
+		public bool Cancelled {
+			get => GetProperty<bool> ();
+			set => SetProperty (value);
 		}
 	}
 }

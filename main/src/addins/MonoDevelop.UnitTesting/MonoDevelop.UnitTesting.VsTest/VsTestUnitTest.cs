@@ -44,6 +44,9 @@ namespace MonoDevelop.UnitTesting.VsTest
 		string name;
 		SourceCodeLocation sourceCodeLocation;
 
+		protected VsTestUnitTest(string displayName) : base (displayName)
+		{ }
+
 		public VsTestUnitTest (IVsTestTestRunner testRunner, TestCase test, Project project)
 			: base (test.DisplayName)
 		{
@@ -57,6 +60,7 @@ namespace MonoDevelop.UnitTesting.VsTest
 		void Init ()
 		{
 			TestId = test.Id.ToString ();
+			TestSourceCodeDocumentId = test.FullyQualifiedName;
 			if (!string.IsNullOrEmpty (test.CodeFilePath))
 				sourceCodeLocation = new SourceCodeLocation (test.CodeFilePath, test.LineNumber, 0);
 			else {
@@ -88,7 +92,6 @@ namespace MonoDevelop.UnitTesting.VsTest
 					sourceCodeLocation = new SourceCodeLocation (source.SourceTree.FilePath, line.StartLinePosition.Line, line.StartLinePosition.Character);
 				}).Ignore ();
 			}
-
 			int index = test.FullyQualifiedName.LastIndexOf ('.');
 			if (index > 0) {
 				FixtureTypeName = test.FullyQualifiedName.Substring (0, index);
@@ -104,18 +107,10 @@ namespace MonoDevelop.UnitTesting.VsTest
 				FixtureTypeNamespace = string.Empty;
 				FixtureTypeName = string.Empty;
 			}
-
-			int openBraceIndex = test.DisplayName.IndexOf ('(');
-			if (openBraceIndex == -1) {
-				index = test.DisplayName.LastIndexOf ('.');
-			} else {
-				index = test.DisplayName.LastIndexOf ('.', openBraceIndex);
-			}
-
-			if (index > 0) {
-				name = test.DisplayName.Substring (index + 1);
-			} else {
-				name = test.DisplayName;
+			name = test.DisplayName;
+			var obsoletePrefix = string.IsNullOrEmpty (FixtureTypeNamespace) ? FixtureTypeName : FixtureTypeNamespace + "." + FixtureTypeName;
+			if (test.DisplayName.StartsWith(obsoletePrefix, StringComparison.Ordinal) && test.DisplayName [obsoletePrefix.Length] == '.') {
+				name = test.DisplayName.Substring (obsoletePrefix.Length + 1);
 			}
 		}
 

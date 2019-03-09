@@ -55,7 +55,9 @@ namespace MonoDevelop.Platform
 		}
 		
 		struct GnomeVfsApp {
+			#pragma warning disable 649 // never assigned
 			public string Id, DisplayName, Command;
+			#pragma warning restore 649
 		}
 
 		protected override string OnGetMimeTypeDescription (string mt)
@@ -173,8 +175,10 @@ namespace MonoDevelop.Platform
 				CreateNoWindow = true,
 				UseShellExecute = false,
 			};
-			foreach (var env in environmentVariables)
-				psi.EnvironmentVariables [env.Key] = env.Value;
+			if (environmentVariables != null) {
+				foreach (var env in environmentVariables)
+					psi.EnvironmentVariables [env.Key] = env.Value;
+			}
 			
 			ProcessWrapper proc = new ProcessWrapper ();
 			if (terminal_command.Contains ("gnome-terminal")) {
@@ -244,6 +248,20 @@ namespace MonoDevelop.Platform
 				EscapeDir (dir),
 				title);
 		}
+		
+		private static string Xfce4TerminalRunner (string command, string args, string dir, string title, bool pause, Guid applicationId)
+		{
+			string extra_commands = pause 
+				? BashPause
+				: String.Empty;
+			
+			return String.Format (@" -T ""{4}"" --working-directory=""{3}"" -x bash -c ""'{0}' {1} ; {2}""",
+				command,
+				EscapeArgs (args),
+				extra_commands,
+				EscapeDir (dir),
+				title);
+		}
 
 		private static string KdeTerminalRunner (string command, string args, string dir, string title, bool pause, Guid applicationId)
 		{
@@ -251,12 +269,11 @@ namespace MonoDevelop.Platform
 				? BashPause.Replace ("'", "\"")
 					: String.Empty;
 
-			return String.Format (@" --nofork --caption ""{4}"" --workdir=""{3}"" -e ""bash"" -c '{0} {1} ; {2}'",
+			return String.Format (@" --nofork --workdir=""{3}"" -e ""bash"" -c '{0} {1} ; {2}'",
 			                      command,
 			                      args,
 			                      extra_commands,
-			                      EscapeDir (dir),
-			                      title);
+			                      EscapeDir (dir));
 		}
 
 		private static string GnomeTerminalOpenFolderRunner (string dir) {
@@ -265,6 +282,10 @@ namespace MonoDevelop.Platform
 
 		private static string XtermOpenFolderRunner (string dir) {
 			return string.Format(@" -e bash -c ""cd {0}""", EscapeDir(dir));
+		}
+
+		private static string Xfce4TerminalOpenFolderRunner (string dir) {
+			return string.Format(@" --working-directory=""{0}""", EscapeDir(dir));
 		}
 
 		private static string KdeTerminalOpenFolderRunner (string dir) {
@@ -320,6 +341,11 @@ namespace MonoDevelop.Platform
 				preferred_runner = KdeTerminalRunner;
 				preferedOpenFolderRunner = KdeTerminalOpenFolderRunner;
 			}
+			else if ((Environment.GetEnvironmentVariable ("XDG_CURRENT_DESKTOP") ?? string.Empty).IndexOf("XFCE", StringComparison.OrdinalIgnoreCase) > -1) {
+				preferred_terminal = "xfce4-terminal";
+				preferred_runner = Xfce4TerminalRunner;
+				preferedOpenFolderRunner = Xfce4TerminalOpenFolderRunner;
+			} 
 			else {
 				preferred_terminal = fallback_terminal;
 				preferred_runner = fallback_runner;

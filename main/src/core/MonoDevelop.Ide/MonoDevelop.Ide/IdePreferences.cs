@@ -33,6 +33,7 @@ using MonoDevelop.Ide.Fonts;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Editor.Highlighting;
 using System.Linq;
+using MonoDevelop.Ide.RoslynServices.Options;
 
 namespace MonoDevelop.Ide
 {
@@ -63,11 +64,20 @@ namespace MonoDevelop.Ide
 		Compact,
 		VeryCompact
 	}
-	
+
+	public enum OnStartupBehaviour
+	{
+		ShowStartWindow,
+		LoadPreviousSolution,
+		EmptyEnvironment
+	}
+
 	public class IdePreferences
 	{
+		internal RoslynPreferences Roslyn { get; }
 		internal IdePreferences ()
 		{
+			Roslyn = new RoslynPreferences ();
 		}
 
 		public readonly ConfigurationProperty<bool> EnableInstrumentation = Runtime.Preferences.EnableInstrumentation;
@@ -87,6 +97,7 @@ namespace MonoDevelop.Ide
 		public readonly ConfigurationProperty<ShowMessageBubbles> ShowMessageBubbles = ConfigurationProperty.Create ("MonoDevelop.Ide.NewShowMessageBubbles", MonoDevelop.Ide.ShowMessageBubbles.ForErrorsAndWarnings);
 
 		public readonly ConfigurationProperty<TargetRuntime> DefaultTargetRuntime = new DefaultTargetRuntimeProperty ();
+
 		class DefaultTargetRuntimeProperty: ConfigurationProperty<TargetRuntime>
 		{
 			ConfigurationProperty<string> defaultTargetRuntimeText = ConfigurationProperty.Create ("MonoDevelop.Ide.DefaultTargetRuntime", "__current");
@@ -115,7 +126,7 @@ namespace MonoDevelop.Ide
 		public readonly ConfigurationProperty<string> UserInterfaceLanguage = Runtime.Preferences.UserInterfaceLanguage;
 		public readonly ConfigurationProperty<string> UserInterfaceThemeName = ConfigurationProperty.Create ("MonoDevelop.Ide.UserInterfaceTheme", Platform.IsLinux ? "" : "Light");
 		public readonly ConfigurationProperty<WorkbenchCompactness> WorkbenchCompactness = ConfigurationProperty.Create ("MonoDevelop.Ide.WorkbenchCompactness", MonoDevelop.Ide.WorkbenchCompactness.Normal);
-		public readonly ConfigurationProperty<bool> LoadPrevSolutionOnStartup = ConfigurationProperty.Create ("SharpDevelop.LoadPrevProjectOnStartup", false);
+		public readonly ConfigurationProperty<OnStartupBehaviour> StartupBehaviour = ConfigurationProperty.Create ("MonoDevelop.Ide.StartupBehaviour", OnStartupBehaviour.ShowStartWindow);
 		public readonly ConfigurationProperty<bool> CreateFileBackupCopies = ConfigurationProperty.Create ("SharpDevelop.CreateBackupCopy", false);
 		public readonly ConfigurationProperty<bool> LoadDocumentUserProperties = ConfigurationProperty.Create ("SharpDevelop.LoadDocumentProperties", true);
 		public readonly ConfigurationProperty<bool> EnableDocumentSwitchDialog = ConfigurationProperty.Create ("MonoDevelop.Core.Gui.EnableDocumentSwitchDialog", true);

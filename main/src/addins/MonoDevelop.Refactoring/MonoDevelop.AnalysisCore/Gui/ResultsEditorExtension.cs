@@ -90,18 +90,27 @@ namespace MonoDevelop.AnalysisCore.Gui
 				return;
 			enabled = false;
 			diagService.DiagnosticsUpdated -= OnDiagnosticsUpdated;
+			diagService = null;
 			CancelUpdateTimout ();
 			AnalysisOptions.AnalysisEnabled.Changed -= AnalysisOptionsChanged;
-			foreach (var queue in markers) {
-				while (queue.Value.Count > 0)
-					Editor.RemoveMarker (queue.Value.Dequeue ());
-			}
+			RemoveAllMarkers ();
 			disposed = true;
 			base.Dispose ();
 		}
+
+		void RemoveAllMarkers ()
+		{
+			foreach (var markerQueue in markers) {
+				foreach (var marker in markerQueue.Value) {
+					Editor.RemoveMarker (marker);
+				}
+				PutBackCachedList (markerQueue.Value);
+			}
+			markers.Clear ();
+		}
 		
 		bool enabled;
-		
+
 		public bool Enabled {
 			get { return enabled; }
 			set {
@@ -212,13 +221,14 @@ namespace MonoDevelop.AnalysisCore.Gui
 			
 			if (e.DocumentId != cad.Id || e.ProjectId != cad.Project.Id)
 				return;
-
 			var token = CancelUpdateTimeout (e.Id);
 			var ad = new AnalysisDocument (Editor, DocumentContext);
 			try {
 				var result = await CodeDiagnosticRunner.Check (ad, token, e.Diagnostics).ConfigureAwait (false);
-				var updater = new ResultsUpdater (this, result, e.Id, token);
-				updater.Update ();
+				if (result is IReadOnlyList<Result> resultList) {
+					var updater = new ResultsUpdater (this, resultList, e.Id, token);
+					updater.Update ();
+				}
 			} catch (Exception) {
 			}
 		}
@@ -246,19 +256,40 @@ namespace MonoDevelop.AnalysisCore.Gui
 			}
 		}
 
+		const int MaxCacheSize = 10;
+		Queue<List<IGenericTextSegmentMarker>> listCache = new Queue<List<IGenericTextSegmentMarker>> ();
 
-		class ResultsUpdater 
+		List<IGenericTextSegmentMarker> GetCachedList ()
+		{
+			if (listCache.Count == 0)
+				return new List<IGenericTextSegmentMarker> ();
+			return listCache.Dequeue ();
+		}
+
+		void PutBackCachedList (List<IGenericTextSegmentMarker> list)
+		{
+			list.Clear ();
+			if (listCache.Count < MaxCacheSize)
+				listCache.Enqueue (list);
+		}
+
+		class ResultsUpdater
 		{
 			readonly ResultsEditorExtension ext;
 			readonly CancellationToken cancellationToken;
-			
+
 			//the number of markers at the head of the queue that need tp be removed
-			int oldMarkers;
-			IEnumerator<Result> enumerator;
+			int oldMarkerIndex;
+			List<IGenericTextSegmentMarker> oldMarkers;
+
+			int curResult = 0;
+			IReadOnlyList<Result> results;
+
+			List<IGenericTextSegmentMarker> newMarkers;
 			ImmutableArray<QuickTask>.Builder builder;
 			object id;
-			
-			public ResultsUpdater (ResultsEditorExtension ext, IEnumerable<Result> results, object resultsId, CancellationToken cancellationToken)
+
+			public ResultsUpdater (ResultsEditorExtension ext, IReadOnlyList<Result> results, object resultsId, CancellationToken cancellationToken)
 			{
 				if (ext == null)
 					throw new ArgumentNullException ("ext");
@@ -268,23 +299,24 @@ namespace MonoDevelop.AnalysisCore.Gui
 				id = resultsId;
 				this.cancellationToken = cancellationToken;
 
-				Queue<IGenericTextSegmentMarker> oldMarkers;
 				if (resultsId != null) {
-					if (!ext.markers.TryGetValue (id, out oldMarkers))
-						ext.markers [id] = oldMarkers = new Queue<IGenericTextSegmentMarker> ();
-					this.oldMarkers = oldMarkers.Count;
+					ext.markers.TryGetValue (id, out oldMarkers);
 				}
 				
 				builder = ImmutableArray<QuickTask>.Empty.ToBuilder ();
-				enumerator = results.GetEnumerator ();
+				this.results = results;
+				newMarkers = ext.GetCachedList ();
+				Debug.Assert (newMarkers != null);
 			}
-			
+
 			public void Update ()
 			{
 				if (cancellationToken.IsCancellationRequested)
 					return;
 				if (id != null)
-					ext.tasks.Remove (id);
+					lock (ext.tasks) {
+						ext.tasks.Remove (id);
+					}
 				GLib.Idle.Add (IdleHandler);
 			}
 
@@ -317,72 +349,105 @@ namespace MonoDevelop.AnalysisCore.Gui
 			//in order to to block the GUI thread, we batch them in UPDATE_COUNT
 			bool IdleHandler ()
 			{
-				if (cancellationToken.IsCancellationRequested)
-					return false;
-				var editor = ext.Editor;
-				if (editor == null)
-					return false;
-
-				if (id == null) {
-					foreach (var markerQueue in ext.markers) {
-						while (markerQueue.Value.Count != 0)
-							editor.RemoveMarker (markerQueue.Value.Dequeue ());
-					}
-					ext.markers.Clear ();
-					ext.tasks.Clear ();
-					ext.OnTasksUpdated (EventArgs.Empty);
-					return false;
-				}
-
-				//clear the old results out at the same rate we add in the new ones
-				for (int i = 0; oldMarkers > 0 && i < UPDATE_COUNT; i++) {
-					if (cancellationToken.IsCancellationRequested)
+				try {
+					var editor = ext.Editor;
+					if (editor == null)
 						return false;
-					editor.RemoveMarker (ext.markers [id].Dequeue ());
-					oldMarkers--;
-				}
-
-				//add in the new markers
-				for (int i = 0; i < UPDATE_COUNT; i++) {
-					if (!enumerator.MoveNext ()) {
-						ext.tasks [id] = builder.ToImmutable ();
+					if (id == null) {
+						ext.RemoveAllMarkers ();
+						lock (ext.tasks)
+							ext.tasks.Clear ();
 						ext.OnTasksUpdated (EventArgs.Empty);
 						return false;
 					}
-					if (cancellationToken.IsCancellationRequested)
+
+					if (cancellationToken.IsCancellationRequested) {
+						FinishUpdateRun ();
 						return false;
-					var currentResult = (Result)enumerator.Current;
-					if (currentResult.InspectionMark != IssueMarker.None) {
-						int start = currentResult.Region.Start;
-						int end = currentResult.Region.End;
-						if (start > end)
-							continue;
-
-						// In case a diagnostic has a 0 length span, force it to 1.
-						if (start == end)
-							end = end + 1;
-						
-						var marker = TextMarkerFactory.CreateGenericTextSegmentMarker (editor, GetSegmentMarkerEffect (currentResult.InspectionMark), TextSegment.FromBounds (start, end));
-						marker.Tag = currentResult;
-						marker.IsVisible = currentResult.Underline;
-
-						if (currentResult.InspectionMark != IssueMarker.GrayOut) {
-							marker.Color = GetColor (editor, currentResult);
-							marker.IsVisible &= currentResult.Level != DiagnosticSeverity.Hidden;
-						}
-						editor.AddMarker (marker);
-						ext.markers [id].Enqueue (marker);
 					}
-					builder.Add (new QuickTask (currentResult.Message, currentResult.Region.Start, currentResult.Level));
+
+					//clear the old results out at the same rate we add in the new ones
+					if (oldMarkers != null) {
+						for (int i = 0; oldMarkerIndex < oldMarkers.Count && i < UPDATE_COUNT; i++) {
+							var oldMarker = oldMarkers [oldMarkerIndex++];
+
+							var oldResult = (Result)oldMarker.Tag;
+							if (oldResult != null && curResult < results.Count) {
+								Result currentResult = results [curResult];
+								if (currentResult.Equals (oldResult, oldMarker.Offset)) {
+									oldMarker.Tag = currentResult;
+									newMarkers.Add (oldMarker);
+									if (oldResult.QuickTask != null) {
+										currentResult.QuickTask = oldResult.QuickTask;
+										builder.Add (currentResult.QuickTask);
+									}
+									curResult++;
+									continue;
+								}
+							}
+							editor.RemoveMarker (oldMarker);
+						}
+					}
+
+					//add in the new markers
+					for (int i = 0; i < UPDATE_COUNT; i++) {
+						if (curResult >= results.Count) {
+							FinishUpdateRun ();
+							return false;
+						}
+						var currentResult = results [curResult++];
+						if (currentResult.InspectionMark != IssueMarker.None) {
+							int start = currentResult.Region.Start;
+							int end = currentResult.Region.End;
+							if (start > end)
+								continue;
+
+							// In case a diagnostic has a 0 length span, force it to 1.
+							if (start == end)
+								end = end + 1;
+
+							var marker = TextMarkerFactory.CreateGenericTextSegmentMarker (editor, GetSegmentMarkerEffect (currentResult.InspectionMark), TextSegment.FromBounds (start, end));
+							marker.Tag = currentResult;
+							marker.IsVisible = currentResult.Underline;
+
+							if (currentResult.InspectionMark != IssueMarker.GrayOut) {
+								marker.Color = GetColor (editor, currentResult);
+								marker.IsVisible &= currentResult.Level != DiagnosticSeverity.Hidden;
+							}
+							editor.AddMarker (marker);
+							newMarkers.Add (marker);
+						}
+						builder.Add (currentResult.QuickTask = new QuickTask (currentResult.Message, currentResult.Region.Start, currentResult.Level));
+					}
+					return true;
+				} catch (Exception ex) {
+					LoggingService.LogInternalError ("Error while ResutsUpdater.IdleHandler", ex);
+					return false;
 				}
-				
-				return true;
+			}
+
+			void FinishUpdateRun ()
+			{
+				var editor = ext.Editor;
+				// remove remaining old markers
+				if (oldMarkers != null) {
+					while (oldMarkerIndex < oldMarkers.Count) {
+						editor.RemoveMarker (oldMarkers [oldMarkerIndex]);
+						oldMarkerIndex++;
+					}
+					ext.PutBackCachedList (oldMarkers);
+					oldMarkers = null;
+				}
+				ext.markers [id] = newMarkers;
+				lock (ext.tasks)
+					ext.tasks [id] = builder.ToImmutable ();
+				ext.OnTasksUpdated (EventArgs.Empty);
 			}
 		}
-		
+
 		//all markers known to be in the editor
 		// Roslyn groups diagnostics by their provider. In this case, we rely on the id passed in to group markers by their id.
-		Dictionary<object, Queue<IGenericTextSegmentMarker>> markers = new Dictionary<object, Queue<IGenericTextSegmentMarker>> ();
+		Dictionary<object, List<IGenericTextSegmentMarker>> markers = new Dictionary<object, List<IGenericTextSegmentMarker>> ();
 		Dictionary<object, CancellationTokenSource> cancellations = new Dictionary<object, CancellationTokenSource> ();
 		
 		const int UPDATE_COUNT = 20;
@@ -409,7 +474,7 @@ namespace MonoDevelop.AnalysisCore.Gui
 		}
 
 		#region IQuickTaskProvider implementation
-		Dictionary<object, ImmutableArray<QuickTask>> tasks = new Dictionary<object, ImmutableArray<QuickTask>> ();
+		readonly Dictionary<object, ImmutableArray<QuickTask>> tasks = new Dictionary<object, ImmutableArray<QuickTask>>();
 
 		public event EventHandler TasksUpdated;
 
@@ -419,10 +484,22 @@ namespace MonoDevelop.AnalysisCore.Gui
 			if (handler != null)
 				handler (this, e);
 		}
-		
+
 		public ImmutableArray<QuickTask> QuickTasks {
 			get {
-				return tasks.SelectMany(x => x.Value).AsImmutable ();
+				Runtime.AssertMainThread ();
+
+				lock (tasks) {
+					int capacity = 0;
+					foreach (var task in tasks) {
+						capacity += task.Value.Length;
+					}
+					var builder = ArrayBuilder<QuickTask>.GetInstance (capacity);
+					foreach (var task in tasks) {
+						builder.AddRange (task.Value);
+					}
+					return builder.ToImmutableAndFree ();
+				}
 			}
 		}
 		

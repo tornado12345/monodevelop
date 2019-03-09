@@ -26,24 +26,24 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Diagnostics;
-using System.Text.RegularExpressions;
 using System.Text;
-
-using MonoDevelop.Projects;
-using MonoDevelop.Core;
-using MonoDevelop.Core.Execution;
-using MonoDevelop.Core.Assemblies;
-using MonoDevelop.CSharp.Project;
+using System.Text.RegularExpressions;
 using System.Threading;
+
+using MonoDevelop.Core;
+using MonoDevelop.Core.Assemblies;
+using MonoDevelop.Core.Execution;
+using MonoDevelop.CSharp.Project;
 using MonoDevelop.Ide;
-using MonoDevelop.Core.ProgressMonitoring;
+using MonoDevelop.Projects;
 
 
 namespace MonoDevelop.CSharp
 {
+	[Obsolete]
 	static class CSharpBindingCompilerManager
 	{	
 		static void AppendQuoted (StringBuilder sb, string option, string val)
@@ -167,7 +167,7 @@ namespace MonoDevelop.CSharp
 				}
 			}
 
-			if (alreadyAddedReference.Any (reference => SystemAssemblyService.ContainsReferenceToSystemRuntime (reference))) {
+			if (alreadyAddedReference.Any (reference => SystemAssemblyService.RequiresFacadeAssembliesAsync (reference).WaitAndGetResult (monitor.CancellationToken))) {
 				LoggingService.LogInfo ("Found PCLv2 assembly.");
 				var facades = runtime.FindFacadeAssembliesForPCL (project.TargetFramework);
 				foreach (var facade in facades)

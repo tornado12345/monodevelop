@@ -41,6 +41,8 @@ using MonoDevelop.Ide.Gui.Content;
 using MonoDevelop.Ide.Editor.Extension;
 using MonoDevelop.Ide.Fonts;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Text;
 
 namespace MonoDevelop.Debugger
 {
@@ -58,7 +60,7 @@ namespace MonoDevelop.Debugger
 
 		protected Label ExceptionMessageLabel { get; private set; }
 
-		protected Label ExceptionHelpLinkLabel { get; private set; }
+		protected Button ExceptionHelpLinkButton { get; private set; }
 
 		protected Label ExceptionTypeLabel { get; private set; }
 
@@ -103,8 +105,8 @@ namespace MonoDevelop.Debugger
 
 			ExceptionTypeLabel = new Label { Xalign = 0.0f, Selectable = true, CanFocus = false };
 			ExceptionMessageLabel = new Label { Wrap = true, Xalign = 0.0f, Selectable = true, CanFocus = false };
-			ExceptionHelpLinkLabel = new Label { Wrap = true, Xalign = 0.0f, Selectable = true, CanFocus = false, UseMarkup = true, LineWrapMode = Pango.WrapMode.Char };
-			ExceptionHelpLinkLabel.Name = "exception_help_link_label";
+			ExceptionHelpLinkButton = new Button { HasFocus = true, Xalign = 0, Relief = ReliefStyle.None, BorderWidth = 0 };
+			ExceptionHelpLinkButton.Name = "exception_help_link_label";
 			Gtk.Rc.ParseString (@"style ""exception-help-link-label""
 {
 	GtkWidget::link-color = ""#ffffff""
@@ -112,21 +114,26 @@ namespace MonoDevelop.Debugger
 }
 widget ""*.exception_help_link_label"" style ""exception-help-link-label""
 ");
-			ExceptionHelpLinkLabel.ModifyBase (StateType.Prelight, new Gdk.Color (119, 130, 140));
+			var textColor = Styles.ExceptionCaughtDialog.HeaderTextColor.ToGdkColor ();
+			var headerColor = Styles.ExceptionCaughtDialog.HeaderBackgroundColor.ToGdkColor ();
 
-			ExceptionHelpLinkLabel.SetLinkHandler ((str) => DesktopService.ShowUrl (str));
-			ExceptionTypeLabel.ModifyFg (StateType.Normal, new Gdk.Color (255, 255, 255));
-			ExceptionMessageLabel.ModifyFg (StateType.Normal, new Gdk.Color (255, 255, 255));
-			ExceptionHelpLinkLabel.ModifyFg (StateType.Normal, new Gdk.Color (255, 255, 255));
+			ExceptionHelpLinkButton.ModifyBg (StateType.Selected, headerColor);
+
+			ExceptionHelpLinkButton.Clicked += ExceptionHelpLinkLabel_Clicked;
+			ExceptionHelpLinkButton.KeyPressEvent += EventBoxLink_KeyPressEvent;
+
+			ExceptionTypeLabel.ModifyFg (StateType.Normal, textColor);
+			ExceptionMessageLabel.ModifyFg (StateType.Normal, textColor);
+			ExceptionHelpLinkButton.ModifyFg (StateType.Normal, textColor);
 
 			if (Platform.IsWindows) {
 				ExceptionTypeLabel.ModifyFont (Pango.FontDescription.FromString ("bold 19"));
 				ExceptionMessageLabel.ModifyFont (Pango.FontDescription.FromString ("10"));
-				ExceptionHelpLinkLabel.ModifyFont (Pango.FontDescription.FromString ("10"));
+				ExceptionHelpLinkButton.ModifyFont (Pango.FontDescription.FromString ("10"));
 			} else {
 				ExceptionTypeLabel.ModifyFont (Pango.FontDescription.FromString ("21"));
 				ExceptionMessageLabel.ModifyFont (Pango.FontDescription.FromString ("12"));
-				ExceptionHelpLinkLabel.ModifyFont (Pango.FontDescription.FromString ("12"));
+				ExceptionHelpLinkButton.ModifyFont (Pango.FontDescription.FromString ("12"));
 			}
 
 			//Force rendering of background with EventBox
@@ -137,8 +144,13 @@ widget ""*.exception_help_link_label"" style ""exception-help-link-label""
 			leftVBox.PackStart (icon, false, false, (uint)(Platform.IsWindows ? 5 : 0)); // as we change frame.BorderWidth below, we need to compensate
 
 			rightVBox.PackStart (ExceptionTypeLabel, false, false, (uint)(Platform.IsWindows ? 0 : 2));
+
+			var exceptionHContainer = new HBox ();
+			exceptionHContainer.PackStart (ExceptionHelpLinkButton, false, false, 0);
+			exceptionHContainer.PackStart (new Fixed (), true, true, 0);
+
 			rightVBox.PackStart (ExceptionMessageLabel, true, true, (uint)(Platform.IsWindows ? 6 : 5));
-			rightVBox.PackStart (ExceptionHelpLinkLabel, false, false, 2);
+			rightVBox.PackStart (exceptionHContainer, false, false, 2);
 
 			hBox.PackStart (leftVBox, false, false, (uint)(Platform.IsWindows ? 5 : 0)); // as we change frame.BorderWidth below, we need to compensate
 			hBox.PackStart (rightVBox, true, true, (uint)(Platform.IsWindows ? 5 : 10));
@@ -151,19 +163,27 @@ widget ""*.exception_help_link_label"" style ""exception-help-link-label""
 
 			eventBox.Add (frame);
 			eventBox.ShowAll ();
-			eventBox.ModifyBg (StateType.Normal, new Gdk.Color (119, 130, 140));
+			eventBox.ModifyBg (StateType.Normal, headerColor);
 
 			return eventBox;
 		}
+
+		void ExceptionHelpLinkLabel_Clicked (object sender, EventArgs e) => DesktopService.ShowUrl (exceptionHelpLink);
+
+		void EventBoxLink_KeyPressEvent (object o, KeyPressEventArgs args)
+		{ 
+			if (args.Event.Key == Gdk.Key.KP_Enter || args.Event.Key == Gdk.Key.KP_Space)
+				DesktopService.ShowUrl (exceptionHelpLink);
+		}
+
+		void EventBoxLink_ExceptionHelpLink (object o, ButtonPressEventArgs args) => DesktopService.ShowUrl (exceptionHelpLink);
 
 		protected override void OnSizeAllocated (Gdk.Rectangle allocation)
 		{
 			base.OnSizeAllocated (allocation);
 			ExceptionMessageLabel.WidthRequest = rightVBox.Allocation.Width;
-			ExceptionHelpLinkLabel.WidthRequest = rightVBox.Allocation.Width;
 			if (vboxAroundInnerExceptionMessage != null) {
 				InnerExceptionMessageLabel.WidthRequest = vboxAroundInnerExceptionMessage.Allocation.Width;
-				InnerExceptionHelpLinkLabel.WidthRequest = vboxAroundInnerExceptionMessage.Allocation.Width;
 			}
 		}
 
@@ -176,6 +196,7 @@ widget ""*.exception_help_link_label"" style ""exception-help-link-label""
 			ExceptionValueTreeView.AllowExpanding = true;
 			ExceptionValueTreeView.AllowPinning = false;
 			ExceptionValueTreeView.AllowEditing = false;
+			ExceptionValueTreeView.CanFocus = true;
 			ExceptionValueTreeView.AllowAdding = false;
 			ExceptionValueTreeView.RulesHint = true;
 			ExceptionValueTreeView.ModifyFont (Pango.FontDescription.FromString (Platform.IsWindows ? "9" : "11"));
@@ -185,6 +206,7 @@ widget ""*.exception_help_link_label"" style ""exception-help-link-label""
 
 			var scrolled = new ScrolledWindow {
 				HeightRequest = 180,
+				CanFocus = true,
 				HscrollbarPolicy = PolicyType.Automatic,
 				VscrollbarPolicy = PolicyType.Automatic
 			};
@@ -226,7 +248,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			expander.Child = widget;
 			expander.Spacing = 0;
 			expander.Show ();
-			expander.CanFocus = false;
+			expander.CanFocus = true;
 			expander.UseMarkup = true;
 			expander.Expanded = true;
 			expander.Activated += Expander_Activated;
@@ -395,7 +417,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 
 		Label InnerExceptionTypeLabel;
 		Label InnerExceptionMessageLabel;
-		Label InnerExceptionHelpLinkLabel;
+		Button InnerExceptionHelpLinkButton;
 
 		Widget CreateInnerExceptionMessage ()
 		{
@@ -421,22 +443,37 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			InnerExceptionMessageLabel.Xalign = 0;
 			InnerExceptionMessageLabel.ModifyFont (Pango.FontDescription.FromString (Platform.IsWindows ? "9" : "11"));
 
-			InnerExceptionHelpLinkLabel = new Label ();
-			InnerExceptionHelpLinkLabel.UseMarkup = true;
-			InnerExceptionHelpLinkLabel.Wrap = true;
-			InnerExceptionHelpLinkLabel.LineWrapMode = Pango.WrapMode.Char;
-			InnerExceptionHelpLinkLabel.Selectable = true;
-			InnerExceptionHelpLinkLabel.CanFocus = false;
-			InnerExceptionHelpLinkLabel.Xalign = 0;
-			InnerExceptionHelpLinkLabel.ModifyFont (Pango.FontDescription.FromString (Platform.IsWindows ? "9" : "11"));
-			InnerExceptionHelpLinkLabel.SetLinkHandler ((str) => DesktopService.ShowUrl (str));
+			InnerExceptionHelpLinkButton = new Button {
+				CanFocus = true,
+				BorderWidth = 0,
+				Relief = ReliefStyle.Half,
+				Xalign = 0
+			};
+			InnerExceptionHelpLinkButton.ModifyFont (Pango.FontDescription.FromString (Platform.IsWindows ? "9" : "11"));
+			InnerExceptionHelpLinkButton.KeyPressEvent += InnerExceptionHelpLinkLabel_KeyPressEvent;
+			InnerExceptionHelpLinkButton.Clicked += InnerExceptionHelpLinkLabel_Pressed;
+
+			InnerExceptionHelpLinkButton.ModifyBg (StateType.Selected, Styles.ExceptionCaughtDialog.TreeSelectedBackgroundColor.ToGdkColor ());
 
 			vboxAroundInnerExceptionMessage.PackStart (hbox, false, true, 0);
 			vboxAroundInnerExceptionMessage.PackStart (InnerExceptionMessageLabel, true, true, 10);
-			vboxAroundInnerExceptionMessage.PackStart (InnerExceptionHelpLinkLabel, true, true, 2);
+
+			var innerExceptionHContainer = new HBox ();
+
+			innerExceptionHContainer.PackStart (InnerExceptionHelpLinkButton, false, false, 0);
+			innerExceptionHContainer.PackStart (new Fixed (), true, true, 0);
+
+			vboxAroundInnerExceptionMessage.PackStart (innerExceptionHContainer, true, true, 2);
 			hboxMain.PackStart (vboxAroundInnerExceptionMessage, true, true, 10);
 			hboxMain.ShowAll ();
 			return hboxMain;
+		}
+
+		void InnerExceptionHelpLinkLabel_Pressed (object sender, EventArgs e) => DesktopService.ShowUrl (innerExceptionHelpLink);
+		void InnerExceptionHelpLinkLabel_KeyPressEvent (object o, KeyPressEventArgs args)
+		{
+			if (args.Event.Key == Gdk.Key.KP_Enter || args.Event.Key == Gdk.Key.KP_Space)
+				DesktopService.ShowUrl (innerExceptionHelpLink);
 		}
 
 		TreeStore InnerExceptionsStore;
@@ -602,13 +639,18 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 				InnerExceptionTypeLabel.Markup = "<b>" + GLib.Markup.EscapeText (ex.Type) + "</b>";
 				InnerExceptionMessageLabel.Text = ex.Message;
 				if (!string.IsNullOrEmpty (ex.HelpLink)) {
-					InnerExceptionHelpLinkLabel.Markup = GetHelpLinkMarkup (ex);
-					InnerExceptionHelpLinkLabel.Show ();
+					InnerExceptionHelpLinkButton.Label = GettextCatalog.GetString ("Read More…");
+					innerExceptionHelpLink = ex.HelpLink;
+					InnerExceptionHelpLinkButton.Show ();
 				} else {
-					InnerExceptionHelpLinkLabel.Hide ();
+					innerExceptionHelpLink = string.Empty;
+					InnerExceptionHelpLinkButton.Hide ();
 				}
 			}
 		}
+
+		string innerExceptionHelpLink;
+		string exceptionHelpLink;
 
 		void UpdateDisplay ()
 		{
@@ -618,18 +660,14 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			ExceptionTypeLabel.Text = exception.Type;
 			ExceptionMessageLabel.Text = exception.Message ?? string.Empty;
 			if (!string.IsNullOrEmpty (exception.HelpLink)) {
-				ExceptionHelpLinkLabel.Show ();
-				ExceptionHelpLinkLabel.Markup = GetHelpLinkMarkup(exception);
+				ExceptionHelpLinkButton.Show ();
+				exceptionHelpLink = exception.HelpLink;
+				ExceptionHelpLinkButton.Label = GettextCatalog.GetString ("More information");
 			} else {
-				ExceptionHelpLinkLabel.Hide ();
+				ExceptionHelpLinkButton.Hide ();
 			}
 
 			UpdateSelectedException (exception);
-		}
-
-		internal static string GetHelpLinkMarkup (ExceptionInfo exception)
-		{
-			return $"<a href=\"{System.Security.SecurityElement.Escape (exception.HelpLink)}\">{GettextCatalog.GetString ("More information")}</a>";
 		}
 
 		void ExceptionChanged (object sender, EventArgs e)
@@ -730,32 +768,40 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			}
 		}
 
-		protected override bool OnKeyReleaseEvent (Gdk.EventKey evnt)
+		protected override bool OnKeyPressEvent (Gdk.EventKey evnt)
 		{
 			if (evnt.Key == Gdk.Key.Escape) {
 				this.Destroy ();
 				return true;
 			}
-			return base.OnKeyReleaseEvent (evnt);
+			return base.OnKeyPressEvent (evnt);
 		}
 	}
 
-	class StackFrameCellRenderer : CellRenderer
+	class StackFrameCellRenderer : CellRendererText
 	{
 		const int Padding = 6;
 
 		public readonly Pango.Context Context;
-		public ExceptionStackFrame Frame;
+		ExceptionStackFrame frame;
 		public bool IsUserCode;
-		public string Markup;
+		public new string Markup;
 		Pango.FontDescription font = Pango.FontDescription.FromString (Platform.IsWindows ? "9" : "11");
+
+		public ExceptionStackFrame Frame {
+			get { return frame; }
+			set {
+				frame = value;
+				Text = value.DisplayText;
+			}
+		}
 
 		public StackFrameCellRenderer (Pango.Context ctx)
 		{
 			Context = ctx;
 		}
 
-		string GetMethodMarkup (bool selected)
+		string GetMethodMarkup (bool selected, string foregroundColor)
 		{
 			if (Markup != null)
 				return $"<span foreground='{Styles.ExceptionCaughtDialog.ExternalCodeTextColor.ToHexString (false)}'>{Markup}</span>";
@@ -767,30 +813,28 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 
 			var markup = $"<b>{GLib.Markup.EscapeText (methodName)}</b> {GLib.Markup.EscapeText (parameters)}";
 
-			if (selected)
-				markup = $"<span foreground='#FFFFFF'>{markup}</span>";
-			else {
-				var textColor = IsUserCode ? Ide.Gui.Styles.BaseForegroundColor.ToHexString (false) : Styles.ExceptionCaughtDialog.ExternalCodeTextColor.ToHexString (false);
-				markup = $"<span foreground='{textColor}'>{markup}</span>";
+			if (string.IsNullOrEmpty (foregroundColor)) {
+				return markup;
 			}
-
-			return markup;
+			return $"<span foreground='{foregroundColor}'>{markup}</span>";
 		}
 
-		string GetFileMarkup (bool selected)
+		string GetFileMarkup (bool selected, string foregroundColor)
 		{
 			if (Frame == null || string.IsNullOrEmpty (Frame.File)) {
 				return "";
 			}
 
-			var markup = string.Format ("<span foreground='{0}'>{1}", selected ? "#FFFFFF" : Styles.ExceptionCaughtDialog.LineNumberTextColor.ToHexString (false), GLib.Markup.EscapeText (Path.GetFileName (Frame.File)));
+			var markup = GLib.Markup.EscapeText (Path.GetFileName (Frame.File));
 			if (Frame.Line > 0) {
 				markup += ":" + Frame.Line;
 				if (Frame.Column > 0)
 					markup += "," + Frame.Column;
 			}
-			markup += "</span>";
-			return markup;
+			if (string.IsNullOrEmpty (foregroundColor)) {
+				return markup;
+			}
+			return $"<span foreground='{foregroundColor}'>{markup}</span>";
 		}
 
 		public override void GetSize (Widget widget, ref Gdk.Rectangle cell_area, out int x_offset, out int y_offset, out int width, out int height)
@@ -798,7 +842,11 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			using (var layout = new Pango.Layout (Context)) {
 				Pango.Rectangle ink, logical;
 				layout.FontDescription = font;
-				layout.SetMarkup (GetMethodMarkup (false));
+
+				var selected = false;
+				var foregroundColor = Styles.GetStackFrameForegroundHexColor (selected, IsUserCode);
+
+				layout.SetMarkup (GetMethodMarkup (selected, foregroundColor));
 				layout.GetPixelExtents (out ink, out logical);
 
 				height = logical.Height;
@@ -811,10 +859,20 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 		protected override void Render (Gdk.Drawable window, Widget widget, Gdk.Rectangle background_area, Gdk.Rectangle cell_area, Gdk.Rectangle expose_area, CellRendererState flags)
 		{
 			using (var cr = Gdk.CairoHelper.Create (window)) {
+				if (!widget.HasFocus) {
+					cr.Rectangle (background_area.ToCairoRect ());
+					cr.SetSourceColor (Styles.ObjectValueTreeDisabledBackgroundColor);
+					cr.Fill ();
+				}
+
 				Pango.Rectangle ink, logical;
 				using (var layout = new Pango.Layout (Context)) {
 					layout.FontDescription = font;
-					layout.SetMarkup (GetFileMarkup ((flags & CellRendererState.Selected) != 0));
+
+					var selected = (flags & CellRendererState.Selected) != 0;
+					var foregroundColor = Styles.GetStackFrameForegroundHexColor (selected, IsUserCode);
+
+					layout.SetMarkup (GetFileMarkup (selected, foregroundColor));
 					layout.GetPixelExtents (out ink, out logical);
 					var width = widget.Allocation.Width;
 					cr.Translate (width - logical.Width - 10, cell_area.Y);
@@ -822,7 +880,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 
 					cr.IdentityMatrix ();
 
-					layout.SetMarkup (GetMethodMarkup ((flags & CellRendererState.Selected) != 0));
+					layout.SetMarkup (GetMethodMarkup (selected, foregroundColor));
 					layout.Width = (int)((width - logical.Width - 35) * Pango.Scale.PangoScale);
 					layout.Ellipsize = Pango.EllipsizeMode.Middle;
 					cr.Translate (cell_area.X + 10, cell_area.Y);
@@ -868,7 +926,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 				dialog.TransientFor = IdeApp.Workbench.RootWindow;
 				dialog.Show ();
 				MessageService.PlaceDialog (dialog, IdeApp.Workbench.RootWindow);
-				dialog.Destroyed += Dialog_Destroyed;;
+				dialog.Destroyed += Dialog_Destroyed;
 			}
 		}
 
@@ -1095,12 +1153,19 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 	{
 		public override bool KeyPress (KeyDescriptor descriptor)
 		{
-			if (descriptor.SpecialKey == SpecialKey.Escape && DebuggingService.ExceptionCaughtMessage != null &&
+			if (DebuggingService.ExceptionCaughtMessage != null &&
 				!DebuggingService.ExceptionCaughtMessage.IsMinimized &&
 				DebuggingService.ExceptionCaughtMessage.File.CanonicalPath == new FilePath (DocumentContext.Name).CanonicalPath) {
 
-				DebuggingService.ExceptionCaughtMessage.ShowMiniButton ();
-				return true;
+				if (descriptor.SpecialKey == SpecialKey.Escape) {
+					DebuggingService.ExceptionCaughtMessage.ShowMiniButton ();
+					return true;
+				}
+
+				if (descriptor.SpecialKey == SpecialKey.Return) {
+					DebuggingService.ExceptionCaughtMessage.ShowDialog ();
+					return false;
+				}
 			}
 
 			return base.KeyPress (descriptor);

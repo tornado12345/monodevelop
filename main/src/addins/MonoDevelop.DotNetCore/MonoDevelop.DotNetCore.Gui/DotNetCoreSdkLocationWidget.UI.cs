@@ -80,6 +80,14 @@ namespace MonoDevelop.DotNetCore.Gui
 			locationBox.PackStart (locationLabel, false, false);
 
 			locationFileSelector = new CustomFileSelector ();
+			locationFileSelector.TextEntry.SetCommonAccessibilityAttributes (
+				"DotNetCoreSdkLocationWidget.Location",
+				locationLabel.Text,
+				GettextCatalog.GetString ("Enter the .NET Core SDK location"));
+			locationFileSelector.BrowseButton.SetCommonAccessibilityAttributes (
+				"DotNetCoreSdkLocationWidget.Browse",
+				GettextCatalog.GetString ("Browse"),
+				GettextCatalog.GetString ("Select a folder for the .NET Core SDK location"));
 			locationBox.PackStart (locationFileSelector, true, true);
 
 			// .NET Core SDK section.
@@ -148,7 +156,7 @@ namespace MonoDevelop.DotNetCore.Gui
 
 		void UpdateCommandLineIconAccessibility (bool found)
 		{
-			sdkFoundIcon.SetCommonAccessibilityAttributes (
+			commandLineFoundIcon.SetCommonAccessibilityAttributes (
 				"DotNetCoreCommandLineFoundImage",
 				found ? GettextCatalog.GetString ("A Tick") : GettextCatalog.GetString ("A Cross"),
 				found ? GettextCatalog.GetString ("The .NET Core command line was found") : GettextCatalog.GetString ("The .NET Core command line was not found"));
@@ -171,9 +179,9 @@ namespace MonoDevelop.DotNetCore.Gui
 		class CustomFileSelector : Widget
 		{
 			TextEntry entry;
+			Button browseButton;
 			FileDialog dialog;
 			string currentFolder;
-			bool enableFileChangedEvent;
 			string title;
 
 			public CustomFileSelector ()
@@ -183,11 +191,19 @@ namespace MonoDevelop.DotNetCore.Gui
 				entry.Changed += EntryChanged;
 				box.PackStart (entry, true);
 
-				var browseButton = new Button ("…");
+				browseButton = new Button ("…");
 				box.PackStart (browseButton);
 				browseButton.Clicked += BrowseButtonClicked;
 
 				Content = box;
+			}
+
+			internal TextEntry TextEntry {
+				get { return entry; }
+			}
+
+			internal Button BrowseButton {
+				get { return browseButton; }
 			}
 
 			public string CurrentFolder {

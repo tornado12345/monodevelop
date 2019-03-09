@@ -87,6 +87,7 @@ namespace MonoDevelop.Ide.Gui
 		public static readonly IconId OpenResourceFolder = "md-open-resource-folder";
 		public static readonly IconId Options = "md-preferences";
 		public static readonly IconId OutputIcon = "md-output-icon";
+		internal static readonly IconId Parser = "md-parser";
 		public static readonly IconId PasteIcon = Gtk.Stock.Paste;
 		public static readonly IconId PreView = Gtk.Stock.PrintPreview;
 		public static readonly IconId PrevWindowIcon = Gtk.Stock.GoBack;
@@ -159,6 +160,7 @@ namespace MonoDevelop.Ide.Gui
 		public static readonly IconId MessageLog = "md-message-log";
 		public static readonly IconId SortAlphabetically = "md-sort-alphabetically";
 		public static readonly IconId GroupByCategory = "md-group-by-category";
+		public static readonly IconId CompactDisplay = "md-compact-display";
 		public static readonly IconId Help = "md-help";
 		public static readonly IconId Add = "md-add";
 		public static readonly IconId Clear = "md-clear";
@@ -169,5 +171,16 @@ namespace MonoDevelop.Ide.Gui
 		public static readonly IconId PadUpload = "md-pad-upload";
 		public static readonly IconId PadDeviceDeployment = "md-pad-device-deployment";
 		public static readonly IconId PadExecute = "md-pad-execute";
+		public static readonly IconId BuildSolution = "build-solution";
+		public static readonly IconId BuildProject = "build-project";
+		public static readonly IconId BuildError = "build-error";
+		public static readonly IconId BuildErrorSmall = "build-error-small";
+		public static readonly IconId BuildTarget = "build-target";
+		public static readonly IconId BuildTaskSuccess = "build-task-success";
+		public static readonly IconId BuildTaskFailed = "build-task-failed";
+		public static readonly IconId BuildWarning = "build-warning";
+		public static readonly IconId BuildWarningSmall = "build-warning-small";
+		public static readonly IconId BuildExpand = "build-expand";
+		public static readonly IconId BuildCollapse = "build-collapse";
 	}
 }

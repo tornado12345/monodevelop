@@ -29,7 +29,6 @@ using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Schema;
 using MonoDevelop.Ide.CodeCompletion;
-using MonoDevelop.Xml.Editor;
 
 namespace MonoDevelop.Xml.Completion
 {
@@ -67,16 +66,6 @@ namespace MonoDevelop.Xml.Completion
 		}
 		
 		/// <summary>
-		/// Creates completion data from the schema passed in 
-		/// via the reader object.
-		/// </summary>
-		public XmlSchemaCompletionData(XmlTextReader reader)
-		{
-			reader.XmlResolver = null;
-			ReadSchema(reader);
-		}
-		
-		/// <summary>
 		/// Creates the completion data from the specified schema file.
 		/// </summary>
 		public XmlSchemaCompletionData (string fileName) : this (String.Empty, fileName)
@@ -98,7 +87,7 @@ namespace MonoDevelop.Xml.Completion
 			this.baseUri = baseUri;
 			
 			if (!lazyLoadFile)
-				using (StreamReader reader = new StreamReader (fileName, true))
+				using (var reader = new StreamReader (fileName, true))
 					ReadSchema (baseUri, reader);
 		}
 		
@@ -134,15 +123,7 @@ namespace MonoDevelop.Xml.Completion
 		/// </summary>
 		public static string GetUri(string fileName)
 		{
-			string uri = String.Empty;
-			
-			if (fileName != null) {
-				if (fileName.Length > 0) {
-					uri = String.Concat("file:///", fileName.Replace('\\', '/'));
-				}
-			}
-			
-			return uri;
+			return string.IsNullOrEmpty (fileName) ? "" : new Uri (fileName).AbsoluteUri;
 		}
 		
 		#region ILazilyLoadedProvider implementation
@@ -159,18 +140,19 @@ namespace MonoDevelop.Xml.Completion
 		public Task EnsureLoadedAsync ()
 		{
 			if (loaded)
-				return Task.FromResult (0);
+				return Task.CompletedTask;
 
 			return Task.Run (() => {
 				if (schema == null)
-					using (StreamReader reader = new StreamReader (fileName, true))
+					using (var reader = new StreamReader (fileName, true))
 						ReadSchema (baseUri, reader);
 
 				//TODO: should we evaluate unresolved imports against other registered schemas?
 				//will be messy because we'll have to re-evaluate if any schema is added, removed or changes
 				//maybe we should just force users to use schemaLocation in their includes
-				var sset = new XmlSchemaSet ();
-				sset.XmlResolver = new LocalOnlyXmlResolver ();
+				var sset = new XmlSchemaSet {
+					XmlResolver = new LocalOnlyXmlResolver ()
+				};
 				sset.Add (schema);
 				sset.ValidationEventHandler += SchemaValidation;
 				sset.Compile ();
@@ -473,7 +455,7 @@ namespace MonoDevelop.Xml.Completion
 		void ReadSchema (XmlReader reader)
 		{
 			try {
-				schema = XmlSchema.Read (reader, new ValidationEventHandler(SchemaValidation));			
+				schema = XmlSchema.Read (reader, SchemaValidation);
 				namespaceUri = schema.TargetNamespace;
 			} finally {
 				reader.Close ();
@@ -482,13 +464,20 @@ namespace MonoDevelop.Xml.Completion
 		
 		void ReadSchema (string baseUri, TextReader reader)
 		{
-			XmlTextReader xmlReader = new XmlTextReader(baseUri, reader);
-			
-			// The default resolve can cause exceptions loading 
+			// The default resolve can cause exceptions loading
 			// xhtml1-strict.xsd because of the referenced dtds. It also has the
 			// possibility of blocking on referenced remote URIs.
 			// Instead we only resolve local xsds.
-			xmlReader.XmlResolver = new LocalOnlyXmlResolver ();
+
+			var xmlReader = XmlReader.Create (
+				reader,
+				new XmlReaderSettings {
+					XmlResolver = new LocalOnlyXmlResolver (),
+					DtdProcessing = DtdProcessing.Ignore,
+					ValidationType = ValidationType.None
+				},
+				baseUri
+			);
 			ReadSchema (xmlReader);
 		}			
 			
@@ -523,13 +512,11 @@ namespace MonoDevelop.Xml.Completion
 		
 		void GetChildElementCompletionData (XmlCompletionDataList data, XmlSchemaComplexType complexType, string prefix)
 		{
-			var sequence = complexType.Particle as XmlSchemaSequence;
-			if (sequence != null) {
+			if (complexType.Particle is XmlSchemaSequence sequence) {
 				GetChildElementCompletionData (data, sequence.Items, prefix);
 				return;
 			}
-			var choice = complexType.Particle as XmlSchemaChoice;
-			if (choice != null) {
+			if (complexType.Particle is XmlSchemaChoice choice) {
 				GetChildElementCompletionData (data, choice.Items, prefix);
 				return;
 			}

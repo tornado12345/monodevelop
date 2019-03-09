@@ -35,6 +35,7 @@ using MonoDevelop.Projects.MSBuild.Conditions;
 using Microsoft.Build.Exceptions;
 using Microsoft.Build.Framework;
 using Microsoft.Build.BackEnd;
+using System.Collections.Immutable;
 
 namespace MonoDevelop.Projects.MSBuild
 {
@@ -246,17 +247,13 @@ namespace MonoDevelop.Projects.MSBuild
 			context.InitEvaluation (pi.Project);
 			var objects = pi.Project.GetAllObjects ();
 
-			if (!string.IsNullOrEmpty (pi.Project.Sdk)) {
+			string[] implicitSdks = pi.Project.GetImplicitlyImportedSdks ();
+			if (implicitSdks.Length > 0) {
 				var rootProject = pi.GetRootMSBuildProject ();
-				var sdkPaths = pi.Project.Sdk
-				                 .Split (sdkPathSeparator, StringSplitOptions.RemoveEmptyEntries)
-				                 .Select (s => s.Trim ())
-				                 .Where (s => s.Length > 0)
-				                 .ToList ();
 
-				objects = sdkPaths.Select (sdkPath => new MSBuildImport { Sdk = sdkPath, Project = "Sdk.props" })
-				                  .Concat (objects)
-				                  .Concat (sdkPaths.Select (sdkPath => new MSBuildImport { Sdk = sdkPath, Project = "Sdk.targets" }));
+				objects = implicitSdks.Select (sdkPath => new MSBuildImport { Sdk = sdkPath, Project = "Sdk.props" })
+				                      .Concat (objects)
+				                      .Concat (implicitSdks.Select (sdkPath => new MSBuildImport { Sdk = sdkPath, Project = "Sdk.targets" }));
 			}
 
 			// If there is a .user project file load it using a fake import item added at the end of the objects list
@@ -265,7 +262,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 			objects = objects.ToList ();
 
-			LogBeginEvaluationStage (context, "Evaluating Properies");
+			LogBeginEvaluationStage (context, "Evaluating Properties");
 			LogBeginEvalProject (context, pi);
 
 			EvaluateObjects (pi, context, objects, false);
@@ -403,7 +400,7 @@ namespace MonoDevelop.Projects.MSBuild
 				AddUpdateToGlobInclude (project, item, update, regex);
 				var rootProject = project.GetRootMSBuildProject ();
 				foreach (var f in GetIncludesForWildcardFilePath (rootProject, update)) {
-					var fileName = rootProject.BaseDirectory.Combine (f);
+					var fileName = rootProject.BaseDirectory.Combine (f.Replace ('\\', '/'));
 					context.SetItemContext (update, fileName, null);
 					UpdateEvaluatedItemInAllProjects (project, context, item, f, trueCond, it);
 				}
@@ -550,7 +547,7 @@ namespace MonoDevelop.Projects.MSBuild
 			if (IsIncludeTransform (include)) {
 				// This is a transform
 				List<MSBuildItemEvaluated> evalItems;
-				var transformExp = include.Substring (2, include.Length - 3);
+				var transformExp = include.AsSpan (2, include.Length - 3);
 				if (ExecuteTransform (project, context, item, transformExp, out evalItems)) {
 					foreach (var newItem in evalItems) {
 						project.EvaluatedItemsIgnoringCondition.Add (newItem);
@@ -583,7 +580,7 @@ namespace MonoDevelop.Projects.MSBuild
 			}
 		}
 
-		bool ExecuteTransform (ProjectInfo project, MSBuildEvaluationContext context, MSBuildItem item, string transformExp, out List<MSBuildItemEvaluated> items)
+		bool ExecuteTransform (ProjectInfo project, MSBuildEvaluationContext context, MSBuildItem item, ReadOnlySpan<char> transformExp, out List<MSBuildItemEvaluated> items)
 		{
 			bool ignoreMetadata = false;
 
@@ -656,7 +653,7 @@ namespace MonoDevelop.Projects.MSBuild
 			return true;
 		}
 
-		internal static bool ExecuteStringTransform (List<MSBuildItemEvaluated> evaluatedItemsCollection, MSBuildEvaluationContext context, string transformExp, out string items)
+		internal static bool ExecuteStringTransform (List<MSBuildItemEvaluated> evaluatedItemsCollection, MSBuildEvaluationContext context, ReadOnlySpan<char> transformExp, out string items)
 		{
 			// This method works mostly like ExecuteTransform, but instead of returning a list of items, it returns a string as result.
 			// Since there is no need to create full blown evaluated items, it can be more efficient than ExecuteTransform.
@@ -712,7 +709,7 @@ namespace MonoDevelop.Projects.MSBuild
 			return true;
 		}
 
-		static bool ParseTransformExpression (MSBuildEvaluationContext context, string include, out string itemName, out string expression, out string itemFunction, out object [] itemFunctionArgs)
+		static bool ParseTransformExpression (MSBuildEvaluationContext context, ReadOnlySpan<char> include, out string itemName, out string expression, out string itemFunction, out object [] itemFunctionArgs)
 		{
 			// This method parses the transforms and extracts: the name of the item list to transform, the whole transform expression (or null if there isn't). If the expression can be
 			// parsed as an item funciton, then it returns the function name and the list of arguments. Otherwise those parameters are null.
@@ -721,57 +718,33 @@ namespace MonoDevelop.Projects.MSBuild
 			itemFunction = null;
 			itemFunctionArgs = null;
 		
-			int i = include.IndexOf ("->", StringComparison.Ordinal);
+			int i = include.IndexOf ("->".AsSpan (), StringComparison.Ordinal);
 			if (i == -1) {
-				itemName = include.Trim ();
+				itemName = include.Trim ().ToString ();
 				return itemName.Length > 0;
 			}
-			itemName = include.Substring (0, i).Trim ();
+			itemName = include.Slice (0, i).Trim ().ToString ();
 			if (itemName.Length == 0)
 				return false;
 			
-			expression = include.Substring (i + 2).Trim ();
-			if (expression.Length > 1 && expression[0]=='\'' && expression[expression.Length - 1] == '\'') {
-				expression = expression.Substring (1, expression.Length - 2);
+			var expressionSpan = include.Slice (i + 2).Trim ();
+			if (expressionSpan.Length > 1 && expressionSpan [0]=='\'' && expressionSpan [expressionSpan.Length - 1] == '\'') {
+				expression = expressionSpan.Slice (1, expressionSpan.Length - 2).ToString ();
 				return true;
 			}
-			i = expression.IndexOf ('(');
+			expression = expressionSpan.ToString ();
+			i = expressionSpan.IndexOf ('(');
 			if (i == -1)
 				return true;
 
-			var func = expression.Substring (0, i).Trim ();
+			var func = expressionSpan.Slice (0, i).Trim ().ToString ();
 			if (knownItemFunctions.Contains (func)) {
 				itemFunction = func;
 				i++;
-				context.EvaluateParameters (expression, ref i, out itemFunctionArgs);
+				context.EvaluateParameters (expressionSpan, ref i, out itemFunctionArgs);
 				return true;
 			}
 			return true;
-		}
-
-		static bool ReadItemFunctionArg (string include, ref int i, out string arg)
-		{
-			arg = null;
-			if (!SkipWhitespace (include, ref i))
-				return false;
-			var quote = include [i];
-			if (quote == ')')
-				return true;
-			if (quote != '"' && quote != '\'')
-				return false;
-			int k = include.IndexOf (quote, ++i);
-			if (k == -1)
-				return false;
-			arg = include.Substring (i, k - i);
-			i = k + 1;
-			return SkipWhitespace (include, ref i);
-		}
-
-		static bool SkipWhitespace (string include, ref int i)
-		{
-			while (i < include.Length && char.IsWhiteSpace (include [i]))
-				i++;
-			return i < include.Length;
 		}
 
 		static bool ExecuteTransformIncludeItemFunction (MSBuildEvaluationContext context, MSBuildItemEvaluated item, string itemFunction, object [] itemFunctionArgs, out string evaluatedInclude, out bool skip)
@@ -798,7 +771,7 @@ namespace MonoDevelop.Projects.MSBuild
 			}
 			if (knownStringItemFunctions.Contains (itemFunction)) {
 				object res;
-				if (context.EvaluateMember (itemFunction, typeof (string), itemFunction, item.Include, itemFunctionArgs, out res)) {
+				if (context.EvaluateMember (itemFunction.AsSpan (), typeof (string), itemFunction, item.Include, itemFunctionArgs, out res)) {
 					evaluatedInclude = res.ToString ();
 					return true;
 				}
@@ -975,10 +948,10 @@ namespace MonoDevelop.Projects.MSBuild
 			exclude = exclude.Replace ('/', '\\').Replace (@"\\", @"\");
 			var sb = StringBuilderCache.Allocate ();
 			foreach (var ep in exclude.Split (new char [] { ';' }, StringSplitOptions.RemoveEmptyEntries)) {
-				var ex = ep.Trim ();
+				var ex = ep.AsSpan ().Trim ();
 				if (excludeDirectoriesOnly) {
-					if (ex.EndsWith (@"\**", StringComparison.OrdinalIgnoreCase))
-						ex = ex.Substring (0, ex.Length - 3);
+					if (ex.EndsWith (@"\**".AsSpan (), StringComparison.OrdinalIgnoreCase))
+						ex = ex.Slice (0, ex.Length - 3);
 					else
 						continue;
 				}
@@ -1220,6 +1193,8 @@ namespace MonoDevelop.Projects.MSBuild
 			if (!File.Exists (file))
 				return;
 
+			context.AddImport (file);
+
 			var pref = LoadProject (context, file);
 			project.ReferencedProjects.Add (pref);
 
@@ -1244,6 +1219,8 @@ namespace MonoDevelop.Projects.MSBuild
 				
 				project.Properties [p.Key] = p.Value;
 			}
+
+			context.RemoveImport (file);
 		}
 
 		void Evaluate (ProjectInfo project, MSBuildEvaluationContext context, MSBuildChoose choose, bool evalItems)
@@ -1272,7 +1249,7 @@ namespace MonoDevelop.Projects.MSBuild
 				project.Targets.Add (newTarget);
 		}
 
-		System.Collections.Immutable.ImmutableDictionary<string, ConditionExpression> conditionCache = System.Collections.Immutable.ImmutableDictionary<string, ConditionExpression>.Empty;
+		ImmutableDictionary<string, ConditionExpression> conditionCache = ImmutableDictionary<string, ConditionExpression>.Empty;
 		bool SafeParseAndEvaluate (ProjectInfo project, MSBuildEvaluationContext context, string condition, bool collectConditionedProperties = false, string customEvalBasePath = null)
 		{
 			try {
@@ -1282,11 +1259,7 @@ namespace MonoDevelop.Projects.MSBuild
 				context.CustomFullDirectoryName = customEvalBasePath;
 
 				try {
-					ConditionExpression ce;
-					if (!conditionCache.TryGetValue (condition, out ce)) {
-						ce = ConditionParser.ParseCondition (condition);
-						conditionCache = conditionCache.SetItem (condition, ce);
-					}
+					ConditionExpression ce = ImmutableInterlocked.GetOrAdd (ref conditionCache, condition, key => ConditionParser.ParseCondition (key));
 
 					if (collectConditionedProperties)
 						ce.CollectConditionProperties (project.ConditionedProperties);

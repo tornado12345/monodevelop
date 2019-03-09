@@ -82,7 +82,7 @@ namespace MonoDevelop.Ide.Commands
 		protected override void Run ()
 		{
 			var dlg = new OpenFileDialog (GettextCatalog.GetString ("File to Open"), MonoDevelop.Components.FileChooserAction.Open) {
-				TransientFor = IdeApp.Workbench.RootWindow,
+				TransientFor = DesktopService.GetFocusedTopLevelWindow (),
 				ShowEncodingSelector = true,
 				ShowViewerSelector = true,
 			};
@@ -110,7 +110,7 @@ namespace MonoDevelop.Ide.Commands
 		protected override void Run ()
 		{
 			using (var dlg = new NewFileDialog (null, null)) // new file seems to fail if I pass the project IdeApp.ProjectOperations.CurrentSelectedProject
-				MessageService.ShowCustomDialog (dlg, IdeApp.Workbench.RootWindow);
+				MessageService.ShowCustomDialog (dlg, DesktopService.GetFocusedTopLevelWindow ());
 		}
 	}
 
@@ -132,7 +132,7 @@ namespace MonoDevelop.Ide.Commands
 	{
 		protected override void Run ()
 		{
-			IdeApp.ProjectOperations.NewSolution ();
+			IdeApp.ProjectOperations.NewSolution ().Ignore ();
 		}
 	}
 	
@@ -141,7 +141,7 @@ namespace MonoDevelop.Ide.Commands
 	{
 		protected override void Run ()
 		{
-			IdeApp.ProjectOperations.NewSolution ("MonoDevelop.Workspace");
+			IdeApp.ProjectOperations.NewSolution ("MonoDevelop.Workspace").Ignore ();
 		}
 	}
 

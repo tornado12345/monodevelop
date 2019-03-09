@@ -57,8 +57,11 @@ namespace Mono.TextEditor
 	{
 
 		TextEditorData textEditorData;
+
+		TextEditorKeyPressTimings keyPressTimings;
 		
 		protected IconMargin       iconMargin;
+		protected QuickFixMargin   quickFixMargin;
 		protected ActionMargin     actionMargin;
 		protected GutterMargin     gutterMargin;
 		protected FoldMarkerMargin foldMarkerMargin;
@@ -209,7 +212,7 @@ namespace Mono.TextEditor
 		
 		protected virtual void HAdjustmentValueChanged ()
 		{
-			HideTooltip (false);
+			HideTooltip ();
 			double value = this.textEditorData.HAdjustment.Value;
 			if (value != System.Math.Round (value)) {
 				value = System.Math.Round (value);
@@ -231,7 +234,7 @@ namespace Mono.TextEditor
 		
 		protected virtual void VAdjustmentValueChanged ()
 		{
-			HideTooltip (false);
+			HideTooltip ();
 			textViewMargin.HideCodeSegmentPreviewWindow ();
 			double value = this.textEditorData.VAdjustment.Value;
 			if (value != System.Math.Round (value)) {
@@ -305,6 +308,8 @@ namespace Mono.TextEditor
 
 		internal TextArea (TextDocument doc, ITextEditorOptions options, EditMode initialMode)
 		{
+			keyPressTimings = new TextEditorKeyPressTimings (doc);
+
 			GtkWorkarounds.FixContainerLeak (this);
 			this.Events = EventMask.PointerMotionMask | EventMask.ButtonPressMask | EventMask.ButtonReleaseMask | EventMask.EnterNotifyMask | EventMask.LeaveNotifyMask | EventMask.VisibilityNotifyMask | EventMask.FocusChangeMask | EventMask.ScrollMask | EventMask.KeyPressMask | EventMask.KeyReleaseMask;
 			base.CanFocus = true;
@@ -360,6 +365,15 @@ namespace Mono.TextEditor
 				Accessible.AddAccessibleElement (iconMargin.Accessible);
 			}
 
+			quickFixMargin = new QuickFixMargin (editor);
+			if (quickFixMargin.Accessible != null) {
+				quickFixMargin.Accessible.Label = GettextCatalog.GetString ("Quick Fix Margin");
+				quickFixMargin.Accessible.Help = GettextCatalog.GetString ("Quick fix margin contains the context menu popup for code actions and fixes");
+				quickFixMargin.Accessible.Identifier = "TextArea.QuickFixMargin";
+				quickFixMargin.Accessible.GtkParent = this;
+				Accessible.AddAccessibleElement (quickFixMargin.Accessible);
+			}
+
 			gutterMargin = new GutterMargin (editor);
 			if (gutterMargin.Accessible != null) {
 				gutterMargin.Accessible.Label = GettextCatalog.GetString ("Line Numbers");
@@ -396,6 +410,7 @@ namespace Mono.TextEditor
 
 			margins.Add (iconMargin);
 			margins.Add (gutterMargin);
+			margins.Add (quickFixMargin);
 			margins.Add (actionMargin);
 			margins.Add (foldMarkerMargin);
 
@@ -507,18 +522,26 @@ namespace Mono.TextEditor
 					preeditOffset = Caret.Offset;
 					preeditLine = Caret.Line;
 				}
-				if (UpdatePreeditLineHeight ())
+				if (UpdatePreeditLineHeight ()) {
 					QueueDraw ();
+				} else {
+					this.textViewMargin.ForceInvalidateLine (preeditLine);
+					this.textEditorData.Document.CommitLineUpdate (preeditLine);
+				}
 			} else {
+				if (preeditOffset < 0)
+					return;
 				preeditOffset = -1;
 				preeditString = null;
 				preeditAttrs = null;
 				preeditCursorCharIndex = 0;
-				if (UpdatePreeditLineHeight ())
+				if (UpdatePreeditLineHeight ()) {
 					QueueDraw ();
+				} else {
+					this.textViewMargin.ForceInvalidateLine (preeditLine);
+					this.textEditorData.Document.CommitLineUpdate (preeditLine);
+				}
 			}
-			this.textViewMargin.ForceInvalidateLine (preeditLine);
-			this.textEditorData.Document.CommitLineUpdate (preeditLine);
 		}
 
 		internal bool UpdatePreeditLineHeight ()
@@ -547,6 +570,7 @@ namespace Mono.TextEditor
 		void CaretPositionChanged (object sender, DocumentLocationEventArgs args) 
 		{
 			HideTooltip ();
+			textViewMargin.HideCodeSegmentPreviewWindow ();
 			ResetIMContext ();
 			
 			if (Caret.AutoScrollToCaret && HasFocus)
@@ -658,7 +682,7 @@ namespace Mono.TextEditor
 
 		void CommitString (string str)
 		{
-			if (!IsRealized || !IsFocus)
+			if (!IsRealized || !IsFocus || String.IsNullOrEmpty(str))
 				return;
 
 			for (int i = 0; i < str.Length; i++) {
@@ -843,7 +867,7 @@ namespace Mono.TextEditor
 
 				if (tipWindow != null && currentTooltipProvider != null) {
 					if (!currentTooltipProvider.IsInteractive (textEditorData.Parent, tipWindow))
-						DelayedHideTooltip ();
+						DelayedHideTooltip (TooltipCloseReason.TextAreaLeft);
 				} else {
 					HideTooltip ();
 				}
@@ -999,6 +1023,12 @@ namespace Mono.TextEditor
 		{
 			if (popupWindow != null)
 				popupWindow.Destroy ();
+
+			if (keyPressTimings != null) {
+				keyPressTimings.ReportTimings (Document, Options);
+				keyPressTimings = null;
+			}
+
 			this.Options = null;
 			Gtk.Key.SnooperRemove (snooperID);
 			HideTooltip ();
@@ -1033,6 +1063,7 @@ namespace Mono.TextEditor
 			iconMargin = null;
 			actionMargin = null;
 			foldMarkerMargin = null;
+			quickFixMargin = null;
 			gutterMargin = null;
 			textViewMargin = null;
 			margins = null;
@@ -1093,8 +1124,6 @@ namespace Mono.TextEditor
 		{
 			if (isDisposed || logicalLine > LineCount || logicalLine < DocumentLocation.MinLine)
 				return;
-
-			textViewMargin.RemoveCachedLine(logicalLine);
 
 			double y = LineToY (logicalLine) - this.textEditorData.VAdjustment.Value;
 			double h = GetLineHeight (logicalLine);
@@ -1238,63 +1267,86 @@ namespace Mono.TextEditor
 
 		protected override bool OnKeyPressEvent (Gdk.EventKey evt)
 		{
-			if (currentFocus == FocusMargin.TextView) {
-				Gdk.Key key;
-				Gdk.ModifierType mod;
-				KeyboardShortcut[] accels;
-				GtkWorkarounds.MapKeys (evt, out key, out mod, out accels);
-				//HACK: we never call base.OnKeyPressEvent, so implement the popup key manually
-				if (key == Gdk.Key.Menu || (key == Gdk.Key.F10 && mod.HasFlag (ModifierType.ShiftMask))) {
-					OnPopupMenu ();
-					return true;
+			try {
+				if (currentFocus == FocusMargin.TextView) {
+					keyPressTimings.StartTimer (evt);
+					return HandleTextKey (evt);
+				} else if (currentFocus != FocusMargin.None) {
+					return HandleMarginKeyCommand (evt);
 				}
 
-				if (key == Gdk.Key.Tab && mod.HasFlag (ModifierType.Mod1Mask)) {
-					currentFocus = FocusMargin.None;
-					return FocusNextMargin (Gtk.DirectionType.TabForward);
-				}
-
-				uint keyVal = (uint)key;
-				CurrentMode.SelectValidShortcut (accels, out key, out mod);
-				if (key == Gdk.Key.F1 && (mod & (ModifierType.ControlMask | ModifierType.ShiftMask)) == ModifierType.ControlMask) {
-					var p = LocationToPoint (Caret.Location);
-					ShowTooltip (Gdk.ModifierType.None, Caret.Offset, p.X, p.Y);
-					return true;
-				}
-				if (key == Gdk.Key.F2 && textViewMargin.IsCodeSegmentPreviewWindowShown) {
-					textViewMargin.OpenCodeSegmentEditor ();
-					return true;
-				}
-				
-				//FIXME: why are we doing this?
-				if ((key == Gdk.Key.space || key == Gdk.Key.parenleft || key == Gdk.Key.parenright) && (mod & Gdk.ModifierType.ShiftMask) == Gdk.ModifierType.ShiftMask)
-					mod = Gdk.ModifierType.None;
-				
-				uint unicodeChar = Gdk.Keyval.ToUnicode (keyVal);
-				
-				if (CurrentMode.WantsToPreemptIM || CurrentMode.PreemptIM (key, unicodeChar, mod)) {
-					ResetIMContext ();
-					//FIXME: should call base.OnKeyPressEvent when SimulateKeyPress didn't handle the event
-					SimulateKeyPress (key, unicodeChar, mod);
-					return true;
-				}
-				bool filter = IMFilterKeyPress (evt, key, unicodeChar, mod);
-				if (filter) {
-					imContextNeedsReset = false;
-					ResetIMContext ();
-					return true;
-				}
-
-				//FIXME: OnIMProcessedKeyPressEvent should return false when it didn't handle the event
-				if (editor.OnIMProcessedKeyPressEvent (key, unicodeChar, mod))
-					return true;
-			} else if (currentFocus != FocusMargin.None) {
-				return HandleMarginKeyCommand (evt);
+				return base.OnKeyPressEvent (evt);
+			} catch (Exception ex) {
+				LoggingService.LogError ("Error in OnKeyPressEvent", ex);
+				return false;
 			}
+		}
+
+		Stopwatch extensionKeyPressTimer = new Stopwatch ();
+		bool HandleTextKey (EventKey evt)
+		{
+			Gdk.Key key;
+			Gdk.ModifierType mod;
+			KeyboardShortcut[] accels;
+			GtkWorkarounds.MapKeys (evt, out key, out mod, out accels);
+			//HACK: we never call base.OnKeyPressEvent, so implement the popup key manually
+			if (key == Gdk.Key.Menu || (key == Gdk.Key.F10 && mod.HasFlag (ModifierType.ShiftMask))) {
+				OnPopupMenu ();
+				keyPressTimings.EndTimer ();
+				return true;
+			}
+
+			if (key == Gdk.Key.Tab && mod.HasFlag (ModifierType.Mod1Mask)) {
+				currentFocus = FocusMargin.None;
+				keyPressTimings.EndTimer ();
+				return FocusNextMargin (Gtk.DirectionType.TabForward);
+			}
+
+			uint keyVal = (uint)key;
+			CurrentMode.SelectValidShortcut (accels, out key, out mod);
+			if (key == Gdk.Key.F1 && (mod & (ModifierType.ControlMask | ModifierType.ShiftMask)) == ModifierType.ControlMask) {
+				ShowQuickInfo ();
+				keyPressTimings.EndTimer ();
+				return true;
+			}
+			if (key == Gdk.Key.F2 && textViewMargin.IsCodeSegmentPreviewWindowShown) {
+				textViewMargin.OpenCodeSegmentEditor ();
+				keyPressTimings.EndTimer ();
+				return true;
+			}
+
+			//FIXME: why are we doing this?
+			if ((key == Gdk.Key.space || key == Gdk.Key.parenleft || key == Gdk.Key.parenright) && (mod & Gdk.ModifierType.ShiftMask) == Gdk.ModifierType.ShiftMask)
+				mod = Gdk.ModifierType.None;
+
+			uint unicodeChar = Gdk.Keyval.ToUnicode (keyVal);
+
+			if (CurrentMode.WantsToPreemptIM || CurrentMode.PreemptIM (key, unicodeChar, mod)) {
+				ResetIMContext ();
+				//FIXME: should call base.OnKeyPressEvent when SimulateKeyPress didn't handle the event
+				SimulateKeyPress (key, unicodeChar, mod);
+				keyPressTimings.EndTimer ();
+				return true;
+			}
+			bool filter = IMFilterKeyPress (evt, key, unicodeChar, mod);
+			if (filter) {
+				imContextNeedsReset = false;
+				ResetIMContext ();
+				return true;
+			}
+
+			//FIXME: OnIMProcessedKeyPressEvent should return false when it didn't handle the event
+			// Don't need to end the timer because the key will be drawn onscreen and the timer will end then
+			extensionKeyPressTimer.Restart ();
+			if (editor.OnIMProcessedKeyPressEvent (key, unicodeChar, mod)) {
+				keyPressTimings.AddExtensionKeypressTime (extensionKeyPressTimer.Elapsed);
+				return true;
+			}
+			keyPressTimings.AddExtensionKeypressTime (extensionKeyPressTimer.Elapsed);
 
 			return base.OnKeyPressEvent (evt);
 		}
-		
+
 		bool HandleMarginKeyCommand (EventKey evnt)
 		{
 			var cm = GetMargin (currentFocus);
@@ -1339,10 +1391,14 @@ namespace Mono.TextEditor
 		{
 			if (overChildWidget)
 				return true;
+			var result = base.OnButtonPressEvent (e);
 
 			pressPositionX = e.X;
 			pressPositionY = e.Y;
 			base.IsFocus = true;
+			// If there is anything in the preedit buffer, commit it otherwise text
+			// selection may have the wrong offsets.
+			CommitPreedit ();
 			
 
 			if (lastTime != e.Time) {// filter double clicks
@@ -1364,10 +1420,15 @@ namespace Mono.TextEditor
 						return true;
 					}
 				}
-				if (margin != null) 
-					margin.MousePressed (new MarginMouseEventArgs (textEditorData.Parent, e, e.Button, e.X - startPos, e.Y, e.State));
+				if (margin != null) {
+					try {
+						margin.MousePressed (new MarginMouseEventArgs (textEditorData.Parent, e, e.Button, e.X - startPos, e.Y, e.State));
+ 					} catch (Exception ex) {
+						LoggingService.LogInternalError ("Exception while margin mouse press.", ex);
+					}
+				}
 			}
-			return base.OnButtonPressEvent (e);
+			return result;
 		}
 		
 		bool DoClickedPopupMenu (Gdk.EventButton e)
@@ -1625,7 +1686,7 @@ namespace Mono.TextEditor
 					dragContents.CopyData (textEditorData);
 					DragContext context = Gtk.Drag.Begin (this, ClipboardActions.CopyOperation.TargetList, DragAction.Move | DragAction.Copy, 1, e);
 					if (!Platform.IsMac) {
-						CodeSegmentPreviewWindow window = new CodeSegmentPreviewWindow (textEditorData.Parent, true, textEditorData.SelectionRange, 300, 300);
+						var window = new CodeSegmentPreviewWindow (textEditorData.Parent, true, textEditorData.SelectionRange);
 						Gtk.Drag.SetIconWidget (context, window, 0, 0);
 					}
 					selection = MainSelection;
@@ -1696,7 +1757,7 @@ namespace Mono.TextEditor
 				}
 			}
 
-			var location = textViewMargin.PointToLocation (x - startPos, y, snapCharacters: true);
+			var location = textViewMargin.PointToLocation (x - startPos, y);
 			if (oldMargin != margin && oldMargin != null)
 				oldMargin.MouseLeft ();
 
@@ -1747,7 +1808,7 @@ namespace Mono.TextEditor
 			IsMouseTrapped = false;
 			if (tipWindow != null && currentTooltipProvider != null) {
 				if (!currentTooltipProvider.IsInteractive (textEditorData.Parent, tipWindow)) {
-					DelayedHideTooltip ();
+					DelayedHideTooltip (TooltipCloseReason.TextAreaLeft);
 				} else {
 					currentTooltipProvider.TakeMouseControl (textEditorData.Parent, tipWindow);
 				}
@@ -1786,9 +1847,13 @@ namespace Mono.TextEditor
 				return gutterMargin;
 			}
 		}
-		
+
 		public Margin IconMargin {
 			get { return iconMargin; }
+		}
+
+		public QuickFixMargin QuickFixMargin {
+			get { return quickFixMargin; }
 		}
 
 		public ActionMargin ActionMargin {
@@ -2199,10 +2264,10 @@ namespace Mono.TextEditor
 				// Ensure that the correct line height is set.
 				if (line != null) {
 					var wrapper = textViewMargin.GetLayout (line);
+					TextViewLines?.Add (logicalLineNumber, line, wrapper);
 					if (wrapper.IsUncached)
 						wrapper.Dispose ();
 				}
-				TextViewLines?.Add (logicalLineNumber, line);
 				double lineHeight = GetLineHeight (line);
 				foreach (var margin in this.margins) {
 					if (!margin.IsVisible)
@@ -2232,7 +2297,7 @@ namespace Mono.TextEditor
 				foreach (var drawer in margin.MarginDrawer)
 					drawer.Draw (cr, cairoRectangle);
 			}
-			
+			RaiseLayoutChanged ();
 			if (setLongestLine) 
 				SetHAdjustment ();
 		}
@@ -2258,6 +2323,7 @@ namespace Mono.TextEditor
 #if DEBUG_EXPOSE
 		DateTime started = DateTime.Now;
 #endif
+		Stopwatch timingsWatch = new Stopwatch ();
 		protected override bool OnExposeEvent (Gdk.EventExpose e)
 		{
 			if (this.isDisposed)
@@ -2269,6 +2335,7 @@ namespace Mono.TextEditor
 				GLib.ExceptionManager.RaiseUnhandledException (ex, false);
 			}
 
+			keyPressTimings.EndTimer (true);
 			return base.OnExposeEvent (e);
 		}
 
@@ -2284,11 +2351,11 @@ namespace Mono.TextEditor
 				
 				cr.LineWidth = Options.Zoom;
 				textViewCr.LineWidth = Options.Zoom;
-				textViewCr.Rectangle (textViewMargin.XOffset, 0, Allocation.Width - textViewMargin.XOffset, Allocation.Height);
-				textViewCr.Clip ();
-				
+
+				timingsWatch.Restart ();
 				RenderMargins (cr, textViewCr, cairoArea);
-			
+				keyPressTimings.AddMarginDrawingTime (timingsWatch.Elapsed);
+							
 #if DEBUG_EXPOSE
 				Console.WriteLine ("{0} expose {1},{2} {3}x{4}", (long)(DateTime.Now - started).TotalMilliseconds,
 					e.Area.X, e.Area.Y, e.Area.Width, e.Area.Height);
@@ -2297,16 +2364,22 @@ namespace Mono.TextEditor
 					textViewMargin.ResetCaretBlink (200);
 					requestResetCaretBlink = false;
 				}
-				
+
+				timingsWatch.Restart ();
 				foreach (Animation animation in actors) {
 					animation.Drawer.Draw (cr);
 				}
-				
+				keyPressTimings.AddAnimationDrawingTime (timingsWatch.Elapsed);
+
+
 				OnPainted (new PaintEventArgs (cr, cairoArea));
 			}
 
-			if (Caret.IsVisible)
+			if (Caret.IsVisible) {
+				timingsWatch.Restart ();
 				textViewMargin.DrawCaret (e.Window, Allocation);
+				keyPressTimings.AddCaretDrawingTime (timingsWatch.Elapsed);
+			}
 		}
 
 		protected virtual void OnPainted (PaintEventArgs e)
@@ -3114,12 +3187,12 @@ namespace Mono.TextEditor
 		void ShowTooltip (Gdk.ModifierType modifierState, DocumentLocation location)
 		{
 			if (mx < TextViewMargin.TextStartPosition) {
-				HideTooltip ();
+				HideTooltip (TooltipCloseReason.MouseMove);
 				return;
 			}
 
 			if (location.IsEmpty) {
-				HideTooltip ();
+				HideTooltip (TooltipCloseReason.MouseMove);
 				return;
 			}
 
@@ -3138,6 +3211,14 @@ namespace Mono.TextEditor
 
 		public void ShowQuickInfo ()
 		{
+			int caretOffset = Caret.Offset;
+			foreach (var shownFolding in textViewMargin.GetFoldRectangles (Caret.Line)) {
+				if (shownFolding.Value.Offset == caretOffset || shownFolding.Value.EndOffset == caretOffset) {
+					textViewMargin.ShowCodeSegmentPreviewTooltip (shownFolding.Value.Segment, shownFolding.Key, 0);
+					return;
+				}
+			}
+
 			var p = LocationToPoint (Caret.Location);
 			ShowTooltip (Gdk.ModifierType.None, Caret.Offset, p.X, p.Y, 0);
 		}
@@ -3157,7 +3238,7 @@ namespace Mono.TextEditor
 					return;
 			}
 			if (tipItem != null && !tipItem.IsInvalid () && !tipItem.Contains (offset)) 
-				HideTooltip ();
+				HideTooltip (TooltipCloseReason.MouseMove);
 			nextTipX = xloc;
 			nextTipY = yloc;
 			nextTipOffset = offset;
@@ -3244,32 +3325,34 @@ namespace Mono.TextEditor
 			tipWindow = tooltipWindow;
 		}
 		
-		public void HideTooltip (bool checkMouseOver = true)
+		public void HideTooltip (TooltipCloseReason reason = TooltipCloseReason.Force)
 		{
 			CancelScheduledHide ();
 			CancelScheduledShow ();
 			
 			if (tipWindow != null) {
-//				if (checkMouseOver && tipWindow.GdkWindow != null) {
-//					// Don't hide the tooltip window if the mouse pointer is inside it.
-//					int x, y, w, h;
-//					Gdk.ModifierType m;
-//					tipWindow.GdkWindow.GetPointer (out x, out y, out m);
-//					tipWindow.GdkWindow.GetSize (out w, out h);
-//					if (x >= 0 && y >= 0 && x < w && y < h)
-//						return;
-//				}
-				tipWindow.Dispose ();
-				tipWindow = null;
-				tipItem = null;
+				//				if (checkMouseOver && tipWindow.GdkWindow != null) {
+				//					// Don't hide the tooltip window if the mouse pointer is inside it.
+				//					int x, y, w, h;
+				//					Gdk.ModifierType m;
+				//					tipWindow.GdkWindow.GetPointer (out x, out y, out m);
+				//					tipWindow.GdkWindow.GetSize (out w, out h);
+				//					if (x >= 0 && y >= 0 && x < w && y < h)
+				//						return;
+				//				}
+
+				if (currentTooltipProvider.TryCloseTooltipWindow (tipWindow, reason)) {
+					tipWindow = null;
+					tipItem = null;
+				}
 			}
 		}
 		
-		void DelayedHideTooltip ()
+		void DelayedHideTooltip (TooltipCloseReason reason)
 		{
 			CancelScheduledHide ();
 			tipHideTimeoutId = GLib.Timeout.Add (300, delegate {
-				HideTooltip ();
+				HideTooltip (reason);
 				tipHideTimeoutId = 0;
 				return false;
 			});
@@ -3296,6 +3379,11 @@ namespace Mono.TextEditor
 		void OnDocumentStateChanged (object s, TextChangeEventArgs args)
 		{
 			HideTooltip ();
+			if (editor.Document.SyntaxMode is ISyntaxHighlighting2 sh2) {
+				if (sh2.IsUpdatingOnTextChange)
+					return;
+			}
+
 			for (int i = 0; i < args.TextChanges.Count; ++i) {
 				var change = args.TextChanges[i];
 				var start = editor.Document.OffsetToLineNumber (change.NewOffset);
@@ -3578,6 +3666,12 @@ namespace Mono.TextEditor
 		}
 		
 		internal List<MonoTextEditor.EditorContainerChild> containerChildren = new List<MonoTextEditor.EditorContainerChild> ();
+		internal event EventHandler LayoutChanged;
+
+		internal void RaiseLayoutChanged ()
+		{
+			LayoutChanged?.Invoke (this, EventArgs.Empty);
+		}
 
 		public void AddTopLevelWidget (Gtk.Widget widget, int x, int y)
 		{

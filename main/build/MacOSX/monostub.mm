@@ -255,17 +255,16 @@ run_md_bundle (NSString *appDir, NSArray *arguments)
 static void
 correct_locale(void)
 {
-	NSString *preferredLanguage;
+	NSString *preferredLanguage = [[[NSBundle mainBundle] preferredLocalizations] firstObject];
 
-	preferredLanguage = [[NSLocale preferredLanguages] objectAtIndex: 0];
 	// Apply fixups such as zh_HANS/HANT -> zh_CN/TW
 	// Strip other languages of remainder so we choose a generic culture.
-	if ([preferredLanguage caseInsensitiveCompare:@"zh-hans"] == NSOrderedSame)
+	if ([preferredLanguage hasPrefix:@"zh-Hans"])
 		preferredLanguage = @"zh_CN";
-	else if ([preferredLanguage caseInsensitiveCompare:@"zh-hant"] == NSOrderedSame)
+	else if ([preferredLanguage hasPrefix:@"zh-Hant"])
 		preferredLanguage = @"zh_TW";
-	else
-		preferredLanguage = [[preferredLanguage componentsSeparatedByString:@"-"] objectAtIndex:0];
+
+	preferredLanguage = [preferredLanguage stringByReplacingOccurrencesOfString:@"-" withString:@"_"];
 
 	setenv("MONODEVELOP_STUB_LANGUAGE", [preferredLanguage UTF8String], 1);
 	setenv("LANGUAGE", [preferredLanguage UTF8String], 1);
@@ -327,8 +326,7 @@ int main (int argc, char **argv)
 	run_md_bundle_if_needed(appDir, argc, argv);
 
 	// can be overridden with plist string MonoMinVersion
-	NSString *req_mono_version = @"5.10.0.171";
-	NSString *req_mono_version_stable = @"5.8.0.130"; // remove this when not needed anymore
+	NSString *req_mono_version = @"5.18.0.244";
 
 	// can be overridden with either plist bool MonoUseSGen or MONODEVELOP_USE_SGEN env
 	bool use_sgen = YES;
@@ -351,6 +349,12 @@ int main (int argc, char **argv)
 	}
 
 	setenv ("MONO_GC_PARAMS", "major=marksweep-conc,nursery-size=8m", 0);
+#if HYBRID_SUSPEND_ABORT
+	setenv ("MONO_SLEEP_ABORT_LIMIT", "5000", 0);
+#endif
+
+	// To be removed: https://github.com/mono/monodevelop/issues/6326
+	setenv ("MONO_THREADS_SUSPEND", "preemptive", 0);
 
   NSString *exePath;
   char **extra_argv;
@@ -450,12 +454,8 @@ int main (int argc, char **argv)
 	// Check mono > 5.10 first, then check > 5.8 and < 5.9. Otherwise it falls
 	// into the broken range of [5.9.0 5.10.0.123]
 	if (!check_mono_version (mono_version, [req_mono_version UTF8String])) {
-		if (check_mono_version (mono_version, [req_mono_version_stable UTF8String])) {
-			if (check_mono_version (mono_version, "5.9.0")) {
-				NSString *msg = [NSString stringWithFormat:@"This application requires a newer version (%s+) of the Mono framework.", [req_mono_version UTF8String]];
-				exit_with_message ((char *)[msg UTF8String], argv[0]);
-			}
-		}
+		NSString *msg = [NSString stringWithFormat:@"This application requires a newer version (%s+) of the Mono framework.", [req_mono_version UTF8String]];
+		exit_with_message ((char *)[msg UTF8String], argv[0]);
 	}
 
 	extra_argv = get_mono_env_options (&extra_argc);

@@ -1,9 +1,16 @@
 <ExtensionModel>
 	<Runtime>
+		<Import assembly="Microsoft.VisualStudio.CodingConventions.dll" />
+		<Import assembly="Microsoft.VisualStudio.Composition.dll" />
 		<Import assembly="Microsoft.VisualStudio.CoreUtility.dll" />
+		<Import assembly="Microsoft.VisualStudio.Language.dll" />
+		<Import assembly="Microsoft.VisualStudio.Language.Intellisense.dll" />
+		<Import assembly="Microsoft.VisualStudio.Language.StandardClassification.dll" />
 		<Import assembly="Microsoft.VisualStudio.Text.Data.dll" />
 		<Import assembly="Microsoft.VisualStudio.Text.Logic.dll" />
 		<Import assembly="Microsoft.VisualStudio.Text.UI.dll" />
+		<Import assembly="Microsoft.VisualStudio.Threading.dll" />
+		<Import assembly="Microsoft.VisualStudio.Validation.dll" />
 	</Runtime>
 	
 	<!-- Extension ponts -->
@@ -143,11 +150,6 @@
 		<Description>Addins can register own fonts to be configured.</Description>
 		<ExtensionNode name="Font" type="MonoDevelop.Ide.Fonts.FontDescriptionCodon"/>
 	</ExtensionPoint>
-		
-	<ExtensionPoint path = "/MonoDevelop/Ide/FeedbackService" name = "Feedback reporting service">
-		<Description>Provides the webservice url to which MonoDevelop will send user feedback.</Description>
-		<ExtensionNode name="Service" type="MonoDevelop.Ide.Extensions.ServiceUrlExtensionNode" />
-	</ExtensionPoint>
 	
 	<ExtensionPoint path = "/MonoDevelop/Ide/CodeFormatters" name = "Code formatters">
 		<ExtensionNode name="Formatter" type="MonoDevelop.Ide.CodeFormatting.CodeFormatterExtensionNode" />
@@ -252,6 +254,7 @@
 	
 	<Extension path = "/MonoDevelop/Core/SystemInformation">
 		<Class class = "MonoDevelop.Ide.IdeVersionInfo" />
+		<Class class = "MonoDevelop.Ide.RuntimeVersionInfo" />
 	</Extension>
 
 	<Extension path = "/MonoDevelop/Ide/DisplayBindings">
@@ -315,6 +318,7 @@
 	<Extension path = "/MonoDevelop/Ide/TextEditorExtensions">
 		<Class id="InitialStep" class = "MonoDevelop.Ide.Editor.Extension.TextEditorExtensionMarker" />
 		<Class id="MidStep" class = "MonoDevelop.Ide.Editor.Extension.TextEditorExtensionMarker" />
+		<Class class = "MonoDevelop.Ide.Editor.Extension.EditorFormattingServiceTextEditorExtension" />
 		<Class class = "MonoDevelop.Ide.Editor.Extension.BraceMatcherTextEditorExtension" />
 		<Class class = "MonoDevelop.Ide.Editor.Extension.DefaultCommandTextEditorExtension" />
 		<Class class = "MonoDevelop.Ide.Editor.Extension.FoldingTextEditorExtension" />
@@ -378,7 +382,6 @@
 		<Migration sourceVersion="2.6+" kind="Config" path="MonoDevelop-tools.xml" />
 		<Migration sourceVersion="2.6+" kind="Config" path="EditingLayout.xml" />
 		<Migration sourceVersion="2.6+" kind="LocalConfig" path="RecentlyUsed.xml" />
-		<Migration sourceVersion="2.6+" kind="LocalConfig" path="Feedback.xml" />
 	</Extension>
 
 	<Extension path = "/MonoDevelop/Core/WebCertificateProvider">
@@ -402,10 +405,6 @@
 		<Class class = "MonoDevelop.Ide.GettingStarted.GettingStartedProjectExtension"/>
 	</Extension>
 
-	<Extension path="/MonoDevelop/Ide/TypeService/PlatformMefHostServices">
-		<Assembly file="Microsoft.VisualStudio.Text.Logic.dll"/>
-	</Extension>
-
 	<Extension path="/MonoDevelop/Ide/Composition">
 		<Assembly file="Microsoft.CodeAnalysis.CSharp.EditorFeatures.dll"/>
 		<Assembly file="Microsoft.CodeAnalysis.EditorFeatures.dll"/>
@@ -418,6 +417,7 @@
 		<Assembly file="Microsoft.CodeAnalysis.VisualBasic.Features.dll" />
 		<Assembly file="Microsoft.CodeAnalysis.VisualBasic.Workspaces.dll" />
 		<Assembly file="MonoDevelop.Ide.dll"/>
+		<Assembly file="Microsoft.CodeAnalysis.VisualBasic.EditorFeatures.dll"/>
 		<Assembly file="Microsoft.VisualStudio.Text.Implementation.dll"/>
 		<Assembly file="Microsoft.VisualStudio.Text.Logic.dll"/>
 		<Assembly file="Microsoft.VisualStudio.Text.UI.dll"/>

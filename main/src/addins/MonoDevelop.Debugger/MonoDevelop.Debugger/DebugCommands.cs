@@ -36,6 +36,8 @@ using MonoDevelop.Projects;
 using MonoDevelop.Ide;
 using System.Linq;
 using System.IO;
+using MonoDevelop.Core.Execution;
+using MonoDevelop.Ide.Commands;
 
 namespace MonoDevelop.Debugger
 {
@@ -77,11 +79,18 @@ namespace MonoDevelop.Debugger
 			return IdeApp.ProjectOperations.CurrentSelectedSolution ?? IdeApp.ProjectOperations.CurrentSelectedBuildTarget;
 		}
 
-		protected override void Run ()
+		protected async override void Run ()
 		{
 			if (DebuggingService.IsPaused) {
 				DebuggingService.Resume ();
 				return;
+			}
+
+			if (!IdeApp.ProjectOperations.CurrentRunOperation.IsCompleted) {
+				if (!MessageService.Confirm (GettextCatalog.GetString ("An application is already running. Do you want to stop it?"), AlertButton.Stop))
+					return;
+				StopHandler.StopBuildOperations ();
+				await IdeApp.ProjectOperations.CurrentRunOperation.Task;
 			}
 
 			if (IdeApp.Workspace.IsOpen) {
@@ -97,16 +106,23 @@ namespace MonoDevelop.Debugger
 				info.Enabled = false;
 				return;
 			}
+
 			if (DebuggingService.IsPaused) {
 				info.Enabled = true;
 				info.Text = GettextCatalog.GetString ("_Continue Debugging");
 				info.Description = GettextCatalog.GetString ("Continue the execution of the application");
 				return;
 			}
+
 			if (DebuggingService.IsDebugging) {
 				info.Enabled = false;
 				return;
 			}
+
+			if ((IdeApp.Workspace.IsOpen) && (!IdeApp.ProjectOperations.CurrentRunOperation.IsCompleted))
+				info.Text = GettextCatalog.GetString ("Restart With Debugging");
+			else
+				info.Text = GettextCatalog.GetString ("Start Debugging");
 
 			var target = GetRunTarget ();
 			info.Enabled = target != null && IdeApp.ProjectOperations.CanDebug (target);
@@ -126,6 +142,11 @@ namespace MonoDevelop.Debugger
 		{
 			IBuildTarget target = IdeApp.ProjectOperations.CurrentSelectedBuildTarget;
 			info.Enabled = target != null && !(target is Workspace) && IdeApp.ProjectOperations.CanDebug (target);
+
+			if (target is Solution)
+				info.Text = GettextCatalog.GetString ("Start Debugging Solution");
+			else if (target is Project)
+				info.Text = GettextCatalog.GetString ("Start Debugging Project");
 		}
 	}
 	
@@ -423,6 +444,7 @@ namespace MonoDevelop.Debugger
 		protected override void Update (CommandInfo info)
 		{
 			info.Visible = DebuggingService.IsFeatureSupported (DebuggerFeatures.Disassembly);
+			info.Enabled = IdeApp.Workspace.IsOpen;
 		}
 	}
 	
@@ -476,7 +498,7 @@ namespace MonoDevelop.Debugger
 		protected override void Update (CommandInfo info)
 		{
 			info.Visible = DebuggingService.IsFeatureSupported (DebuggerFeatures.Breakpoints);
-			info.Enabled = !DebuggingService.Breakpoints.IsReadOnly;
+			info.Enabled = !DebuggingService.Breakpoints.IsReadOnly && IdeApp.Workspace.IsOpen;
 		}
 	}
 
@@ -496,7 +518,7 @@ namespace MonoDevelop.Debugger
 		protected override void Update (CommandInfo info)
 		{
 			info.Visible = DebuggingService.IsFeatureSupported (DebuggerFeatures.Breakpoints);
-			info.Enabled = !DebuggingService.Breakpoints.IsReadOnly;
+			info.Enabled = !DebuggingService.Breakpoints.IsReadOnly && IdeApp.Workspace.IsOpen;
 		}
 	}
 
@@ -516,7 +538,7 @@ namespace MonoDevelop.Debugger
 		protected override void Update (CommandInfo info)
 		{
 			info.Visible = DebuggingService.IsFeatureSupported (DebuggerFeatures.Catchpoints);
-			info.Enabled = !DebuggingService.Breakpoints.IsReadOnly;
+			info.Enabled = !DebuggingService.Breakpoints.IsReadOnly && IdeApp.Workspace.IsOpen;
 		}
 	}
 
@@ -528,6 +550,11 @@ namespace MonoDevelop.Debugger
 			if (breakpointsPad != null) {
 				breakpointsPad.BringToFront ();
 			}
+		}
+
+		protected override void Update (CommandInfo info)
+		{
+			info.Enabled = IdeApp.Workspace.IsOpen;
 		}
 	}
 

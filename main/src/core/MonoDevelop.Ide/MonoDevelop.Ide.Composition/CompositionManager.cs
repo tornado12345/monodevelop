@@ -89,18 +89,22 @@ namespace MonoDevelop.Ide.Composition
 		/// <summary>
 		/// Returns an instance of type T that is exported by some composition part. The instance is shared (singleton).
 		/// </summary>
-		public static T GetExportedValue<T> ()
-		{
-			return Instance.ExportProvider.GetExportedValue<T> ();
-		}
+		public static T GetExportedValue<T> () => Instance.ExportProvider.GetExportedValue<T> ();
 
 		/// <summary>
-		/// Returns all instance of type T that are exported by some composition part. The instances are shared (singletons).
+		/// Returns all instances of type T that are exported by some composition part. The instances are shared (singletons).
 		/// </summary>
-		public static IEnumerable<T> GetExportedValues<T> ()
-		{
-			return Instance.ExportProvider.GetExportedValues<T> ();
-		}
+		public static IEnumerable<T> GetExportedValues<T> () => Instance.ExportProvider.GetExportedValues<T> ();
+
+		/// <summary>
+		/// Returns a lazy holding the instance of type T that is exported by some composition part. The instance is shared (singleton).
+		/// </summary>
+		public static Lazy<T> GetExport<T> () => new Lazy<T> (() => Instance.ExportProvider.GetExportedValue<T> ());
+
+		/// <summary>
+		/// Returns a lazy holding all instances of type T that are exported by some composition part. The instances are shared (singletons).
+		/// </summary>
+		public static Lazy<IEnumerable<T>> GetExports<T> () => new Lazy<IEnumerable<T>> (() => Instance.ExportProvider.GetExportedValues<T> ());
 
 		public RuntimeComposition RuntimeComposition { get; private set; }
 		public IExportProviderFactory ExportProviderFactory { get; private set; }
@@ -119,38 +123,58 @@ namespace MonoDevelop.Ide.Composition
 			return compositionManager;
 		}
 
-		const string cacheEnabledVar = "MONODEVELOP_ENABLE_MEF_CACHE";
-		static bool cacheEnabled = !string.IsNullOrEmpty (Environment.GetEnvironmentVariable (cacheEnabledVar));
 		async Task InitializeInstanceAsync ()
 		{
-			var assemblies = ReadAssembliesFromAddins ();
-			var caching = new Caching (assemblies);
+			var timings = new Dictionary<string, long> ();
+			var metadata = new CompositionLoadMetadata (timings);
 
-			// Try to use cached MEF data
-			if (cacheEnabled && caching.CanUse ()) {
-				RuntimeComposition = await TryCreateRuntimeCompositionFromCache (caching);
+			using (var timer = Counters.CompositionLoad.BeginTiming (metadata)) {
+				var fullTimer = System.Diagnostics.Stopwatch.StartNew ();
+				var stepTimer = System.Diagnostics.Stopwatch.StartNew ();
+
+				var mefAssemblies = ReadAssembliesFromAddins (timer);
+				timings ["ReadFromAddins"] = stepTimer.ElapsedMilliseconds;
+				stepTimer.Restart ();
+
+				var caching = new Caching (mefAssemblies);
+
+				// Try to use cached MEF data
+
+				var canUse = metadata.ValidCache = caching.CanUse ();
+				if (canUse) {
+					LoggingService.LogInfo ("Creating MEF composition from cache");
+					RuntimeComposition = await TryCreateRuntimeCompositionFromCache (caching);
+				}
+				timings ["LoadFromCache"] = stepTimer.ElapsedMilliseconds;
+				stepTimer.Restart ();
+
+				// Otherwise fallback to runtime discovery.
+				if (RuntimeComposition == null) {
+					LoggingService.LogInfo ("Creating MEF composition from runtime");
+					var (runtimeComposition, catalog) = await CreateRuntimeCompositionFromDiscovery (caching, timer);
+					RuntimeComposition = runtimeComposition;
+
+					CachedComposition cacheManager = new CachedComposition ();
+					caching.Write (RuntimeComposition, catalog, cacheManager).Ignore ();
+				}
+				timings ["LoadRuntimeComposition"] = stepTimer.ElapsedMilliseconds;
+				stepTimer.Restart ();
+
+				ExportProviderFactory = RuntimeComposition.CreateExportProviderFactory ();
+				ExportProvider = ExportProviderFactory.CreateExportProvider ();
+				HostServices = MefV1HostServices.Create (ExportProvider.AsExportProvider ());
+				ExportProviderV1 = NetFxAdapters.AsExportProvider (ExportProvider);
+
+				timings ["CreateServices"] = stepTimer.ElapsedMilliseconds;
+				metadata.Duration = fullTimer.ElapsedMilliseconds;
 			}
-
-			// Otherwise fallback to runtime discovery.
-			if (RuntimeComposition == null) {
-				RuntimeComposition = await CreateRuntimeCompositionFromDiscovery (caching);
-
-				CachedComposition cacheManager = new CachedComposition ();
-				caching.Write (RuntimeComposition, cacheManager).Ignore ();
-			}
-
-			ExportProviderFactory = RuntimeComposition.CreateExportProviderFactory ();
-			ExportProvider = ExportProviderFactory.CreateExportProvider ();
-			HostServices = MefV1HostServices.Create (ExportProvider.AsExportProvider ());
-			ExportProviderV1 = NetFxAdapters.AsExportProvider (ExportProvider);
 		}
 
 		internal static async Task<RuntimeComposition> TryCreateRuntimeCompositionFromCache (Caching caching)
 		{
-			CachedComposition cacheManager = new CachedComposition ();
+			var cacheManager = new CachedComposition ();
 
 			try {
-				using (Counters.CompositionCache.BeginTiming ())
 				using (var cacheStream = caching.OpenCacheStream ()) {
 					return await cacheManager.LoadRuntimeCompositionAsync (cacheStream, StandardResolver);
 				}
@@ -161,75 +185,74 @@ namespace MonoDevelop.Ide.Composition
 			return null;
 		}
 
-		internal static async Task<RuntimeComposition> CreateRuntimeCompositionFromDiscovery (Caching caching)
+		internal static async Task<(RuntimeComposition, ComposableCatalog)> CreateRuntimeCompositionFromDiscovery (Caching caching, ITimeTracker timer = null)
 		{
-			using (var timer = Counters.CompositionDiscovery.BeginTiming ()) {
-				var parts = await Discovery.CreatePartsAsync (caching.Assemblies);
-				timer.Trace ("Composition parts discovered");
+			var parts = await Discovery.CreatePartsAsync (caching.MefAssemblies);
+			timer?.Trace ("Composition parts discovered");
 
-				ComposableCatalog catalog = ComposableCatalog.Create (StandardResolver)
-					.WithCompositionService ()
-					.WithDesktopSupport ()
-					.AddParts (parts);
+			ComposableCatalog catalog = ComposableCatalog.Create (StandardResolver)
+				.WithCompositionService ()
+				.AddParts (parts);
 
-				var discoveryErrors = catalog.DiscoveredParts.DiscoveryErrors;
-				if (!discoveryErrors.IsEmpty) {
-					foreach (var error in discoveryErrors) {
-						LoggingService.LogInfo ("MEF discovery error", error);
-					}
-
-					// throw new ApplicationException ("MEF discovery errors");
+			var discoveryErrors = catalog.DiscoveredParts.DiscoveryErrors;
+			if (!discoveryErrors.IsEmpty) {
+				foreach (var error in discoveryErrors) {
+					LoggingService.LogInfo ("MEF discovery error", error);
 				}
 
-				CompositionConfiguration configuration = CompositionConfiguration.Create (catalog);
-
-				if (!configuration.CompositionErrors.IsEmpty) {
-					// capture the errors in an array for easier debugging
-					var errors = configuration.CompositionErrors.SelectMany (e => e).ToArray ();
-					foreach (var error in errors) {
-						LoggingService.LogInfo ("MEF composition error: " + error.Message);
-					}
-
-					// For now while we're still transitioning to VSMEF it's useful to work
-					// even if the composition has some errors. TODO: re-enable this.
-					//configuration.ThrowOnErrors ();
-				}
-
-				timer.Trace ("Composition configured");
-
-				var runtimeComposition = RuntimeComposition.CreateRuntimeComposition (configuration);
-				return runtimeComposition;
+				// throw new ApplicationException ("MEF discovery errors");
 			}
+
+			CompositionConfiguration configuration = CompositionConfiguration.Create (catalog);
+
+			if (!configuration.CompositionErrors.IsEmpty) {
+				// capture the errors in an array for easier debugging
+				var errors = configuration.CompositionErrors.SelectMany (e => e).ToArray ();
+				foreach (var error in errors) {
+					LoggingService.LogInfo ("MEF composition error: " + error.Message);
+				}
+
+				// For now while we're still transitioning to VSMEF it's useful to work
+				// even if the composition has some errors. TODO: re-enable this.
+				//configuration.ThrowOnErrors ();
+			}
+			timer?.Trace ("Composition configured");
+
+			var runtimeComposition = RuntimeComposition.CreateRuntimeComposition (configuration);
+			timer?.Trace ("Composition created");
+
+			return (runtimeComposition, catalog);
 		}
 
-		internal static HashSet<Assembly> ReadAssembliesFromAddins ()
+		internal static HashSet<Assembly> ReadAssembliesFromAddins (ITimeTracker<CompositionLoadMetadata> timer = null)
 		{
-			using (var timer = Counters.CompositionAddinLoad.BeginTiming ()) {
-				HashSet<Assembly> assemblies = new HashSet<Assembly> ();
-				ReadAssemblies (assemblies, "/MonoDevelop/Ide/TypeService/PlatformMefHostServices", timer);
-				ReadAssemblies (assemblies, "/MonoDevelop/Ide/TypeService/MefHostServices", timer);
-				ReadAssemblies (assemblies, "/MonoDevelop/Ide/Composition", timer);
-				return assemblies;
-			}
+			var readAssemblies = new HashSet<Assembly> ();
 
-			void ReadAssemblies (HashSet<Assembly> assemblies, string extensionPath, ITimeTracker timer)
+			timer?.Trace ("Start: reading assemblies");
+			ReadAssemblies (readAssemblies, "/MonoDevelop/Ide/TypeService/PlatformMefHostServices");
+			ReadAssemblies (readAssemblies, "/MonoDevelop/Ide/TypeService/MefHostServices");
+			ReadAssemblies (readAssemblies, "/MonoDevelop/Ide/Composition");
+			timer?.Trace ("Start: end reading assemblies");
+
+			return readAssemblies;
+
+			void ReadAssemblies (HashSet<Assembly> assemblies, string extensionPath)
 			{
 				foreach (var node in AddinManager.GetExtensionNodes (extensionPath)) {
 					if (node is AssemblyExtensionNode assemblyNode) {
 						try {
 							string id = assemblyNode.Addin.Id;
-							timer.Trace ("Start: " + id);
+							string assemblyName = assemblyNode.FileName;
 							// Make sure the add-in that registered the assembly is loaded, since it can bring other
 							// other assemblies required to load this one
+
 							AddinManager.LoadAddin (null, id);
 
 							var assemblyFilePath = assemblyNode.Addin.GetFilePath (assemblyNode.FileName);
-							var assembly = Runtime.SystemAssemblyService.LoadAssemblyFrom (assemblyFilePath);
+							var assembly = Runtime.LoadAssemblyFrom (assemblyFilePath);
 							assemblies.Add (assembly);
-
-							timer.Trace ("Loaded: " + id);
 						} catch (Exception e) {
-							LoggingService.LogError ("Composition can't load assembly " + assemblyNode.FileName, e);
+							LoggingService.LogError ("Composition can't load assembly: " + assemblyNode.FileName, e);
 						}
 					}
 				}

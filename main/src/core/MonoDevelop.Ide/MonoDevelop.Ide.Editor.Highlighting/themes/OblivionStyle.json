@@ -1,6 +1,6 @@
 {
 	"name": "Oblivion",
-	"version": "1.2.4",
+	"version": "1.2.5",
 	"description": "‘...where the soul at last is lost in utter peace’",
 	"originator": "Xamarin Inc. (http://xamarin.com)",
 
@@ -69,7 +69,7 @@
 		{ "name": "Quick Diff(Dirty)", "color": "butter2" },
 		{ "name": "Quick Diff(Changed)", "color": "chameleon2" },
 
-		{ "name": "Brace Matching(Rectangle)", "color": "#5b9bc1", "secondcolor": "#5b9bc1" },
+		{ "name": "Brace Matching(Rectangle)", "color": "#55789e", "secondcolor": "#55789e" },
 		{ "name": "Usages(Rectangle)", "color": "#527F99", "secondcolor": "#527F99", "bordercolor": "#527F99" },
 		{ "name": "Changing usages(Rectangle)", "color": "#996E75", "secondcolor": "#996E75", "bordercolor": "#996E75" },
 
@@ -154,7 +154,7 @@
 		{ "name": "Html Element Name", "fore": "plum1" },
 		{ "name": "Html Entity", "fore": "skyblue1" },
 		{ "name": "Html Operator", "fore": "aluminium2" },
-		{ "name": "Html Server-Side Script", "fore": "butter2", "back": "black" },
+		{ "name": "Html Server-Side Script", "fore": "black", "back": "#d2d295" },
 		{ "name": "Html Tag Delimiter", "fore": "aluminium2" },
 		{ "name": "Razor Code", "fore": "aluminium2", "back": "aluminium7" },
 
@@ -186,7 +186,7 @@
 		{ "name": "Keyword(Declaration)", "fore": "plum1" },
 		{ "name": "Keyword(Parameter)", "fore": "white" },
 		{ "name": "Keyword(Operator Declaration)", "fore": "plum1" },
-		{ "name": "Keyword(Other)", "fore": "white" },
+		{ "name": "Keyword(Other)", "fore": "plum1" },
 
 		{ "name": "User Types", "fore": "chameleon1" },
 		{ "name": "User Types(Enums)", "fore": "chameleon1" },

@@ -37,13 +37,14 @@ using MonoDevelop.Ide.Gui;
 using MonoDevelop.Core;
 using System.Threading.Tasks;
 using MonoDevelop.Ide.Projects;
+using System.Collections.Generic;
 
 namespace MonoDevelop.Ide.Projects
 {
 	partial class GtkNewProjectDialogBackend : INewProjectDialogBackend
 	{
 		INewProjectDialogController controller;
-		Menu popupMenu;
+		Xwt.Menu popupMenu;
 		bool isLastPressedKeySpace;
 
 		public GtkNewProjectDialogBackend ()
@@ -52,12 +53,13 @@ namespace MonoDevelop.Ide.Projects
 
 			// Set up the list store so the test framework can work out the correct columns
 			SemanticModelAttribute modelAttr = new SemanticModelAttribute ("templateCategoriesListStore__Name", "templateCategoriesListStore__Icon", "templateCategoriesListStore__Category");
-			TypeDescriptor.AddAttributes (templateCategoriesListStore, modelAttr);
+			TypeDescriptor.AddAttributes (templateCategoriesTreeStore, modelAttr);
 			modelAttr = new SemanticModelAttribute ("templateListStore__Name", "templateListStore__Icon", "templateListStore__Template");
-			TypeDescriptor.AddAttributes (templatesListStore, modelAttr);
+			TypeDescriptor.AddAttributes (templatesTreeStore, modelAttr);
 
 			templateCategoriesTreeView.Selection.Changed += TemplateCategoriesTreeViewSelectionChanged;
 			templateCategoriesTreeView.Selection.SelectFunction = TemplateCategoriesTreeViewSelection;
+
 			templatesTreeView.Selection.Changed += TemplatesTreeViewSelectionChanged;
 			templatesTreeView.ButtonPressEvent += TemplatesTreeViewButtonPressed;
 			templatesTreeView.Selection.SelectFunction = TemplatesTreeViewSelection;
@@ -96,7 +98,7 @@ namespace MonoDevelop.Ide.Projects
 
 		public void ShowDialog ()
 		{
-			MessageService.ShowCustomDialog (this);
+			MessageService.ShowCustomDialog (this, DesktopService.GetFocusedTopLevelWindow ());
 		}
 
 		public void CloseDialog ()
@@ -148,23 +150,24 @@ namespace MonoDevelop.Ide.Projects
 
 		void HandlePopup (SolutionTemplate template, uint eventTime)
 		{
-			if (popupMenu == null) {
-				popupMenu = new Menu ();
-				popupMenu.AttachToWidget (this, null);
-			}
-			ClearPopupMenuItems ();
-			AddLanguageMenuItems (popupMenu, template);
-			popupMenu.ModifyBg (StateType.Normal, Styles.NewProjectDialog.TemplateLanguageButtonBackground.ToGdkColor ());
-			popupMenu.ShowAll ();
-
-			MenuPositionFunc posFunc = (Menu m, out int x, out int y, out bool pushIn) => {
+			var engine = Platform.IsMac ? Xwt.Toolkit.NativeEngine : Xwt.Toolkit.CurrentEngine;
+			var xwtParent = Xwt.Toolkit.CurrentEngine.WrapWidget (templatesTreeView);
+			engine.Invoke (() => {
+				if (popupMenu == null) {
+					popupMenu = new Xwt.Menu ();
+				}
+				ClearPopupMenuItems ();
+				AddLanguageMenuItems (popupMenu, template);
 				Gdk.Rectangle rect = languageCellRenderer.GetLanguageRect ();
-				Gdk.Rectangle screenRect = GtkUtil.ToScreenCoordinates (templatesTreeView, templatesTreeView.GdkWindow, rect);
-				x = screenRect.X;
-				y = screenRect.Bottom;
-				pushIn = false;
-			};
-			popupMenu.Popup (null, null, posFunc, 0, eventTime);
+
+				try {
+					popupMenu.Popup (xwtParent, rect.X, rect.Bottom);
+				} catch {
+					// popup at mouse position if the toolkit is not supported
+					popupMenu.Popup ();
+				}
+
+			});
 		}
 
 		[GLib.ConnectBefore]
@@ -201,9 +204,7 @@ namespace MonoDevelop.Ide.Projects
 
 		void ClearPopupMenuItems ()
 		{
-			foreach (Widget widget in popupMenu.Children) {
-				widget.Destroy ();
-			}
+			popupMenu.Items.Clear ();
 		}
 
 		void PerformShowMenu (object sender, EventArgs args)
@@ -216,17 +217,18 @@ namespace MonoDevelop.Ide.Projects
 			HandlePopup (template, Gdk.EventHelper.GetTime (null));
 		}
 
-		void AddLanguageMenuItems (Menu menu, SolutionTemplate template)
+		void AddLanguageMenuItems (Xwt.Menu menu, SolutionTemplate template)
 		{
 			foreach (string language in template.AvailableLanguages.OrderBy (item => item)) {
-				var menuItem = new MenuItem (language);
-				menuItem.Activated += (o, e) => {
+				var menuItem = new Xwt.MenuItem (language);
+				menuItem.Accessible.Label = LanguageCellRenderer.GetAccessibleLanguageName (language);
+				menuItem.Clicked += (o, e) => {
 					languageCellRenderer.SelectedLanguage = language;
 					controller.SelectedLanguage = language;
 					templatesTreeView.QueueDraw ();
 					ShowSelectedTemplate ();
 				};
-				menu.Append (menuItem);
+				menu.Items.Add (menuItem);
 			}
 		}
 
@@ -281,7 +283,7 @@ namespace MonoDevelop.Ide.Projects
 		protected override void OnDestroyed ()
 		{
 			if (popupMenu != null) {
-				popupMenu.Destroy ();
+				popupMenu.Dispose ();
 				popupMenu = null;
 			}
 
@@ -311,7 +313,7 @@ namespace MonoDevelop.Ide.Projects
 			Xwt.Drawing.Image icon = GetIcon ("md-recent", IconSize.Menu);
 			categoryTextRenderer.CategoryIconWidth = (int)icon.Width;
 
-			templateCategoriesListStore.AppendValues (
+			templateCategoriesTreeStore.AppendValues (
 				Core.GettextCatalog.GetString ("Recently used"),
 				icon,
 				null);
@@ -322,19 +324,21 @@ namespace MonoDevelop.Ide.Projects
 			Xwt.Drawing.Image icon = GetIcon (category.IconId ?? "md-platform-other", IconSize.Menu);
 			categoryTextRenderer.CategoryIconWidth = (int)icon.Width;
 
-			templateCategoriesListStore.AppendValues (
+			var iter = templateCategoriesTreeStore.AppendValues (
 				MarkupTopLevelCategoryName (category.Name),
 				icon,
 				category);
 
 			foreach (TemplateCategory subCategory in category.Categories) {
-				AddSubTemplateCategory (subCategory);
+				AddSubTemplateCategory (iter, subCategory);
 			}
+			templateCategoriesTreeView.ExpandAll ();
 		}
 
-		void AddSubTemplateCategory (TemplateCategory category)
+		void AddSubTemplateCategory (TreeIter iter, TemplateCategory category)
 		{
-			templateCategoriesListStore.AppendValues (
+			templateCategoriesTreeStore.AppendValues (
+				iter,
 				GLib.Markup.EscapeText (category.Name),
 				null,
 				category);
@@ -366,14 +370,14 @@ namespace MonoDevelop.Ide.Projects
 
 		void ClearSelectedCategoryInformation ()
 		{
-			templatesListStore.Clear ();
+			templatesTreeStore.Clear ();
 		}
 
 		TemplateCategory GetSelectedTemplateCategory ()
 		{
 			TreeIter item;
 			if (templateCategoriesTreeView.Selection.GetSelected (out item)) {
-				return templateCategoriesListStore.GetValue (item, TemplateCategoryColumn) as TemplateCategory;
+				return templateCategoriesTreeStore.GetValue (item, TemplateCategoryColumn) as TemplateCategory;
 			}
 			return null;
 		}
@@ -383,38 +387,42 @@ namespace MonoDevelop.Ide.Projects
 			templateTextRenderer.RenderRecentTemplate = false;
 			languageCellRenderer.RenderRecentTemplate = false;
 			foreach (TemplateCategory subCategory in category.Categories) {
-				templatesListStore.AppendValues (
+				var iter = templatesTreeStore.AppendValues (
 					MarkupTopLevelCategoryName (subCategory.Name),
 					null,
 					null);
 
 				foreach (SolutionTemplate template in subCategory.Templates) {
 					if (template.HasProjects || controller.IsNewSolution) {
-						templatesListStore.AppendValues (
+						templatesTreeStore.AppendValues (
+							iter,
 							template.Name,
 							GetIcon (template.IconId, IconSize.Dnd),
 							template);
 					}
 				}
 			}
+			templatesTreeView.ExpandAll ();
 		}
 
 		void ShowRecentTemplates ()
 		{
 			templateTextRenderer.RenderRecentTemplate = true;
 			languageCellRenderer.RenderRecentTemplate = true;
-			templatesListStore.AppendValues (
+			var iter = templatesTreeStore.AppendValues (
 				MarkupTopLevelCategoryName (Core.GettextCatalog.GetString ("Recently used templates")),
 				null,
 				null);
 			foreach (SolutionTemplate template in controller.RecentTemplates) {
 				if (template.HasProjects || controller.IsNewSolution) {
-					templatesListStore.AppendValues (
+					templatesTreeStore.AppendValues (
+						iter,
 						controller.GetCategoryPathText (template),
 						GetIcon (template.IconId, IconSize.Dnd),
 						template);
 				}
 			}
+			templatesTreeView.ExpandAll ();
 		}
 
 		static Xwt.Drawing.Image GetIcon (string id, IconSize size)
@@ -443,7 +451,7 @@ namespace MonoDevelop.Ide.Projects
 		{
 			TreeIter item;
 			if (templatesTreeView.Selection.GetSelected (out item)) {
-				return templatesListStore.GetValue (item, TemplateColumn) as SolutionTemplate;
+				return templatesTreeStore.GetValue (item, TemplateColumn) as SolutionTemplate;
 			}
 			return null;
 		}
@@ -485,26 +493,22 @@ namespace MonoDevelop.Ide.Projects
 		{
 			TreeIter iter = TreeIter.Zero;
 			// recent templates entry is always the first one and has no category assigned to it
-			if (templateCategoriesListStore.GetIterFirst (out iter) && templateCategoriesListStore.GetValue (iter, TemplateCategoryColumn) == null) {
+			if (templateCategoriesTreeStore.GetIterFirst (out iter) && templateCategoriesTreeStore.GetValue (iter, TemplateCategoryColumn) == null) {
 				templateCategoriesTreeView.Selection.SelectIter (iter);
-				TreePath path = templateCategoriesListStore.GetPath (iter);
+				TreePath path = templateCategoriesTreeStore.GetPath (iter);
 				templateCategoriesTreeView.ScrollToCell (path, null, true, 1, 0);
 			}
 		}
 
 		void SelectFirstSubTemplateCategory ()
 		{
-			TreeIter iter = TreeIter.Zero;
-			if (!templateCategoriesListStore.GetIterFirst (out iter)) {
-				return;
-			}
+			var iters = WalkTree (templateCategoriesTreeStore, TreeIter.Zero);
 
-			// select the first second level (IsTopLevel == false) category
-			while (templateCategoriesListStore.IterNext (ref iter)) {
-				var currentCategory = templateCategoriesListStore.GetValue (iter, TemplateCategoryColumn) as TemplateCategory;
+			foreach (var iter in iters) {
+				var currentCategory = templateCategoriesTreeStore.GetValue (iter, TemplateCategoryColumn) as TemplateCategory;
 				if (currentCategory?.IsTopLevel == false) {
 					templateCategoriesTreeView.Selection.SelectIter (iter);
-					TreePath path = templateCategoriesListStore.GetPath (iter);
+					TreePath path = templateCategoriesTreeStore.GetPath (iter);
 					templateCategoriesTreeView.ScrollToCell (path, null, true, 1, 0);
 					break;
 				}
@@ -513,34 +517,48 @@ namespace MonoDevelop.Ide.Projects
 
 		void SelectTemplateCategory (TemplateCategory category)
 		{
-			TreeIter iter = TreeIter.Zero;
-			if (!templateCategoriesListStore.GetIterFirst (out iter)) {
-				return;
-			}
+			var iters = WalkTree (templateCategoriesTreeStore, TreeIter.Zero);
 
-			while (templateCategoriesListStore.IterNext (ref iter)) {
-				var currentCategory = templateCategoriesListStore.GetValue (iter, TemplateCategoryColumn) as TemplateCategory;
+			foreach (var iter in iters) {
+				var currentCategory = templateCategoriesTreeStore.GetValue (iter, TemplateCategoryColumn) as TemplateCategory;
 				if (currentCategory == category) {
 					templateCategoriesTreeView.Selection.SelectIter (iter);
-					TreePath path = templateCategoriesListStore.GetPath (iter);
+					TreePath path = templateCategoriesTreeStore.GetPath (iter);
 					templateCategoriesTreeView.ScrollToCell (path, null, true, 1, 0);
 					break;
 				}
 			}
 		}
 
-		void SelectTemplate (SolutionTemplate template)
+		IEnumerable<TreeIter> WalkTree (TreeStore model, TreeIter iter)
 		{
-			TreeIter iter = TreeIter.Zero;
-			if (!templatesListStore.GetIterFirst (out iter)) {
-				return;
+			if (iter.Equals(TreeIter.Zero)) {
+				if (!model.GetIterFirst (out TreeIter first)) {
+					yield break;
+				}
+				iter = first;
 			}
 
-			while (templatesListStore.IterNext (ref iter)) {
-				var currentTemplate = templatesListStore.GetValue (iter, TemplateColumn) as SolutionTemplate;
+			do {
+				yield return iter;
+				if (model.IterHasChild (iter)) {
+					if (model.IterChildren (out TreeIter childIter, iter))
+						foreach (var node in WalkTree (model, childIter))
+							yield return node;
+				}
+
+			} while (model.IterNext (ref iter));
+		}
+
+		void SelectTemplate (SolutionTemplate template)
+		{
+			var iters = WalkTree (templatesTreeStore, TreeIter.Zero);
+
+			foreach (var iter in iters) {
+				var currentTemplate = templatesTreeStore.GetValue (iter, TemplateColumn) as SolutionTemplate;
 				if (currentTemplate == template) {
 					templatesTreeView.Selection.SelectIter (iter);
-					TreePath path = templatesListStore.GetPath (iter);
+					TreePath path = templatesTreeStore.GetPath (iter);
 					templatesTreeView.ScrollToCell (path, null, true, 1, 0);
 					break;
 				}
@@ -549,8 +567,8 @@ namespace MonoDevelop.Ide.Projects
 
 		void SelectFirstTemplate ()
 		{
-			TreeIter iter = TreeIter.Zero;
-			if (templatesListStore.IterNthChild (out iter, 1)) {
+			// first child of first iter
+			if (templatesTreeStore.GetIterFromString (out TreeIter iter, "0:0")) {
 				templatesTreeView.Selection.SelectIter (iter);
 			}
 		}

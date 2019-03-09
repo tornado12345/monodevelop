@@ -87,7 +87,8 @@ namespace MonoDevelop.Ide.Commands
 		SelectActiveConfiguration,
 		SelectActiveRuntime,
 		EditSolutionItem,
-		Unload
+		Unload,
+		SetStartupProjects
 	}
 
 	internal class SolutionOptionsHandler : CommandHandler
@@ -128,6 +129,40 @@ namespace MonoDevelop.Ide.Commands
 		protected override void Run ()
 		{
 			IdeApp.ProjectOperations.ShowOptions (IdeApp.ProjectOperations.CurrentSelectedObject);
+		}
+	}
+
+	internal class SetStartupProjectsHandler : CommandHandler
+	{
+		protected override void Update (CommandInfo info)
+		{
+			info.Enabled = IdeApp.ProjectOperations.CurrentSelectedSolution?.GetAllProjects ()?.Skip (1)?.Any () ?? false;
+		}
+
+		protected override void Run ()
+		{
+			var sol = IdeApp.ProjectOperations.CurrentSelectedSolution;
+			if (sol != null) {
+				MultiItemSolutionRunConfiguration config = null;
+				if (!sol.MultiStartupRunConfigurations.Any ()) {
+					Xwt.Toolkit.NativeEngine.Invoke (() => {
+						using (var dlg = new NewSolutionRunConfigurationDialog ()) {
+							if (dlg.Run ().Id == "create") {
+								config = new MultiItemSolutionRunConfiguration (dlg.RunConfigurationName, dlg.RunConfigurationName);
+								sol.MultiStartupRunConfigurations.Add (config);
+								sol.StartupConfiguration = config;
+							}
+						}
+					});
+				} else {
+					config = sol.MultiStartupRunConfigurations.FirstOrDefault ();
+				}
+
+				// Show run configurations dialog
+				if (config != null) {
+					IdeApp.ProjectOperations.ShowRunConfiguration (sol, config);
+				}
+			}
 		}
 	}
 
@@ -301,6 +336,11 @@ namespace MonoDevelop.Ide.Commands
 		{
 			IBuildTarget buildTarget = IdeApp.ProjectOperations.CurrentSelectedBuildTarget;
 			info.Enabled = ((buildTarget != null) && (!(buildTarget is Workspace)) && IdeApp.ProjectOperations.CanExecute (buildTarget));
+
+			if (buildTarget is Solution)
+				info.Text = GettextCatalog.GetString ("Run Solution");
+			else if (buildTarget is Project)
+				info.Text = GettextCatalog.GetString ("Run Project");
 		}
 
 		protected override void Run ()

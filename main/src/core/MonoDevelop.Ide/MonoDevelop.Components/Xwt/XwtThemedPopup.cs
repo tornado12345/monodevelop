@@ -28,6 +28,7 @@ using System.Linq;
 using Xwt;
 using Xwt.Backends;
 using Xwt.Drawing;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Components
 {
@@ -54,7 +55,13 @@ namespace MonoDevelop.Components
 		{
 			base.Content = container = new XwtPopoverCanvas ();
 			BackgroundColor = Xwt.Drawing.Colors.Transparent;
+#if MAC
+			// background rendering of undecorated windows is broken in HighSierra and previous versions
+			if (MacSystemInformation.OsVersion <= MacSystemInformation.HighSierra)
+				Decorated = true;
+#else
 			Decorated = true;
+#endif
 			Theme.TargetPosition = CurrentPosition;
 		}
 
@@ -129,8 +136,13 @@ namespace MonoDevelop.Components
 			return false;
 		}
 
+		internal bool IgnoreRepositionWindow { get; set; }
 		public override void RepositionWindow (Rectangle? newTargetRect = default (Rectangle?))
 		{
+			if (IgnoreRepositionWindow) {
+				return;
+			}
+
 			if (!HasParent)
 				return;
 

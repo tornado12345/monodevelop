@@ -35,22 +35,23 @@ namespace MonoDevelop.DotNetCore
 {
 	public static class DotNetCoreSdk
 	{
+		static readonly Version DotNetCoreVersion2_1 = new Version (2, 1, 0);
+
 		static DotNetCoreSdk ()
 		{
 			var sdkPaths = new DotNetCoreSdkPaths ();
-			sdkPaths.FindMSBuildSDKsPath ();
-
+			sdkPaths.ResolveSDK ();
 			Update (sdkPaths);
 		}
 
-		internal static void Update (DotNetCoreSdkPaths sdkPaths)
+		internal static void Update (DotNetCoreSdkPaths dotNetCoreSdkPaths)
 		{
-			RegisterProjectImportSearchPath (MSBuildSDKsPath, sdkPaths.MSBuildSDKsPath);
+			RegisterProjectImportSearchPath (MSBuildSDKsPath, dotNetCoreSdkPaths.MSBuildSDKsPath);
 
-			MSBuildSDKsPath = sdkPaths.MSBuildSDKsPath;
-			SdkRootPath = sdkPaths.SdkRootPath;
+			MSBuildSDKsPath = dotNetCoreSdkPaths.MSBuildSDKsPath;
+			SdkRootPath = dotNetCoreSdkPaths.SdkRootPath;
 			IsInstalled = !string.IsNullOrEmpty (MSBuildSDKsPath);
-			Versions = sdkPaths.SdkVersions ?? Array.Empty<DotNetCoreVersion> ();
+			Versions = dotNetCoreSdkPaths.SdkVersions ?? Array.Empty<DotNetCoreVersion> ();
 
 			if (!IsInstalled)
 				LoggingService.LogInfo (".NET Core SDK not found.");
@@ -80,12 +81,11 @@ namespace MonoDevelop.DotNetCore
 		{
 		}
 
-		internal static DotNetCoreSdkPaths FindSdkPaths (string sdk)
+		internal static DotNetCoreSdkPaths FindSdkPaths (string[] sdks)
 		{
 			var sdkPaths = new DotNetCoreSdkPaths ();
-			sdkPaths.MSBuildSDKsPath = MSBuildSDKsPath;
-			sdkPaths.FindSdkPaths (sdk);
-
+			sdkPaths.ResolveSDK ();
+			sdkPaths.FindSdkPaths (sdks);
 			return sdkPaths;
 		}
 
@@ -116,8 +116,8 @@ namespace MonoDevelop.DotNetCore
 			if (versions.Any (sdkVersion => IsSupported (projectFramework, projectFrameworkVersion, sdkVersion)))
 				return true;
 
-			// .NET Core 1.x is supported by the MSBuild .NET Core SDKs if they are installed with Mono.
-			if (projectFrameworkVersion.Major == 1)
+			// .NET Core <= 2.1 is supported by the MSBuild .NET Core SDKs if they are installed with Mono.
+			if (projectFrameworkVersion <= DotNetCoreVersion2_1)
 				return msbuildSdksInstalled;
 
 			return false;

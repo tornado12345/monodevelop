@@ -75,7 +75,7 @@ namespace MonoDevelop.Ide.Editor
 			DefaultSourceEditorOptions.Instance.Changed += UpdateTextEditorOptions;
 			textEditorImpl.ViewContent.ContentNameChanged += ViewContent_ContentNameChanged;
 			textEditorImpl.ViewContent.DirtyChanged += ViewContent_DirtyChanged; 
-
+			textEditor.Options = DefaultSourceEditorOptions.Instance.Create ();
 		}
 
 		protected override void OnContentNameChanged ()
@@ -83,9 +83,8 @@ namespace MonoDevelop.Ide.Editor
 			base.OnContentNameChanged ();
 			if (ContentName != textEditorImpl.ContentName && !string.IsNullOrEmpty (textEditorImpl.ContentName))
 				AutoSave.RemoveAutoSaveFile (textEditorImpl.ContentName);
-			if (textEditorImpl.ContentName != null)
-				EditorConfigService.RemoveEditConfigContext (textEditorImpl.ContentName);
-			textEditorImpl.ContentName = this.ContentName;
+			if (ContentName != null) // Happens when a file is converted to an untitled file, but even in that case the text editor should be associated with the old location, otherwise typing can be messed up due to change of .editconfig settings etc.
+				textEditor.FileName = ContentName;
 			if (this.WorkbenchWindow?.Document != null)
 				textEditor.InitializeExtensionChain (this.WorkbenchWindow.Document);
 			UpdateTextEditorOptions (null, null);
@@ -112,9 +111,12 @@ namespace MonoDevelop.Ide.Editor
 			InformAutoSave ();
 		}
 
+		CancellationTokenSource editorOptionsUpdateCancellationSource;
 		void UpdateTextEditorOptions (object sender, EventArgs e)
 		{
-			UpdateStyleParent (Project, textEditor.MimeType);
+			editorOptionsUpdateCancellationSource?.Cancel ();
+			editorOptionsUpdateCancellationSource = new CancellationTokenSource ();
+			UpdateStyleParent (Project, textEditor.MimeType, editorOptionsUpdateCancellationSource.Token).Ignore ();
 		}
 
 		uint autoSaveTimer = 0;
@@ -149,7 +151,7 @@ namespace MonoDevelop.Ide.Editor
 				policyContainer.PolicyChanged -= HandlePolicyChanged;
 		}
 
-		async Task UpdateStyleParent (MonoDevelop.Projects.Project styleParent, string mimeType)
+		async Task UpdateStyleParent (MonoDevelop.Projects.Project styleParent, string mimeType, CancellationToken token)
 		{
 			RemovePolicyChangeHandler ();
 
@@ -163,22 +165,20 @@ namespace MonoDevelop.Ide.Editor
 			else
 				policyContainer = MonoDevelop.Projects.Policies.PolicyService.DefaultPolicies;
 			var currentPolicy = policyContainer.Get<TextStylePolicy> (mimeTypes);
-
 			policyContainer.PolicyChanged += HandlePolicyChanged;
+			((DefaultSourceEditorOptions)textEditor.Options).UpdateStylePolicy (currentPolicy);
 
-			var context = await EditorConfigService.GetEditorConfigContext (textEditor.FileName, default (CancellationToken));
+			var context = await EditorConfigService.GetEditorConfigContext (textEditor.FileName, token);
 			if (context == null)
 				return;
-			var options = DefaultSourceEditorOptions.Instance.WithTextStyle (currentPolicy);
-			options.SetContext (context);
-			textEditor.Options = options;
+			((DefaultSourceEditorOptions)textEditor.Options).SetContext (context);
 		}
 
 		void HandlePolicyChanged (object sender, MonoDevelop.Projects.Policies.PolicyChangedEventArgs args)
 		{
 			var mimeTypes = DesktopService.GetMimeTypeInheritanceChain (textEditor.MimeType);
 			var currentPolicy = policyContainer.Get<TextStylePolicy> (mimeTypes);
-			textEditor.Options = DefaultSourceEditorOptions.Instance.WithTextStyle (currentPolicy);
+			((DefaultSourceEditorOptions)textEditor.Options).UpdateStylePolicy (currentPolicy);
 		}
 
 		void CancelDocumentParsedUpdate ()
@@ -193,24 +193,29 @@ namespace MonoDevelop.Ide.Editor
 		{
 			if (string.IsNullOrEmpty (text)) 
 				return;
-			ParsedDocument parsedDocument = null;
 
-			var foldingParser = TypeSystemService.GetFoldingParser (textEditor.MimeType);
-			if (foldingParser != null) {
-				parsedDocument = foldingParser.Parse (textEditor.FileName, text);
-			} else {
-				var normalParser = TypeSystemService.GetParser (textEditor.MimeType);
-				if (normalParser != null) {
-					parsedDocument = await normalParser.Parse(
-						new TypeSystem.ParseOptions {
-							FileName = textEditor.FileName,
-							Content = new StringTextSource(text),
-							Project = Project
-						});
+			try {
+				ParsedDocument parsedDocument = null;
+
+				var foldingParser = TypeSystemService.GetFoldingParser (textEditor.MimeType);
+				if (foldingParser != null) {
+					parsedDocument = foldingParser.Parse (textEditor.FileName, text);
+				} else {
+					var normalParser = TypeSystemService.GetParser (textEditor.MimeType);
+					if (normalParser != null) {
+						parsedDocument = await normalParser.Parse(
+							new TypeSystem.ParseOptions {
+								FileName = textEditor.FileName,
+								Content = new StringTextSource(text),
+								Project = Project
+							});
+					}
 				}
-			}
-			if (parsedDocument != null) {
-				await FoldingTextEditorExtension.UpdateFoldings (textEditor, parsedDocument, textEditor.CaretLocation, true);
+				if (parsedDocument != null) {
+					await FoldingTextEditorExtension.UpdateFoldings (textEditor, parsedDocument, textEditor.CaretLocation, true);
+				}
+			} catch (Exception e) {
+				LoggingService.LogError ("Error running first time fold update", e);
 			}
 		}
 
@@ -346,7 +351,7 @@ namespace MonoDevelop.Ide.Editor
 			base.Dispose ();
 
 			isDisposed = true;
-			EditorConfigService.RemoveEditConfigContext (textEditor.FileName);
+			EditorConfigService.RemoveEditConfigContext (textEditor.FileName).Ignore ();
 			CancelDocumentParsedUpdate ();
 			textEditorImpl.ViewContent.DirtyChanged -= HandleDirtyChanged;
 			textEditor.MimeTypeChanged -= UpdateTextEditorOptions;
@@ -356,6 +361,7 @@ namespace MonoDevelop.Ide.Editor
 
 			DefaultSourceEditorOptions.Instance.Changed -= UpdateTextEditorOptions;
 			RemovePolicyChangeHandler ();
+			editorOptionsUpdateCancellationSource?.Cancel ();
 			RemoveAutoSaveTimer ();
 			textEditor.Dispose ();
 		}
@@ -370,8 +376,10 @@ namespace MonoDevelop.Ide.Editor
 		}
 
 		#endregion
-	
 
-
+		public override void GrabFocus ()
+		{
+			textEditor.GrabFocus ();
+		}
 	}
 }

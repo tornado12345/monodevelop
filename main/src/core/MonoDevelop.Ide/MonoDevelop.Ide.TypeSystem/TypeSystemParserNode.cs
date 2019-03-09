@@ -30,6 +30,7 @@ using System.Linq;
 using MonoDevelop.Core.StringParsing;
 using MonoDevelop.Core;
 using MonoDevelop.Projects;
+using Microsoft.CodeAnalysis;
 
 namespace MonoDevelop.Ide.TypeSystem
 {
@@ -82,24 +83,6 @@ namespace MonoDevelop.Ide.TypeSystem
 					return true;
 			}
 			return false;
-		}
-
-		public static bool IsCompileableFile(ProjectFile file, out Microsoft.CodeAnalysis.SourceCodeKind sck)
-		{
-			var ext = file.FilePath.Extension;
-			if (FilePath.PathComparer.Equals (ext, ".cs")) {
-				sck = Microsoft.CodeAnalysis.SourceCodeKind.Regular;
-			} else if (FilePath.PathComparer.Equals (ext, ".sketchcs"))
-				sck = Microsoft.CodeAnalysis.SourceCodeKind.Script;
-			else {
-				sck = default (Microsoft.CodeAnalysis.SourceCodeKind);
-				return false;
-			}
-			return
-				file.BuildAction == MonoDevelop.Projects.BuildAction.Compile ||
-				file.BuildAction == ApiDefinitionBuildAction ||
-				file.BuildAction == "BundleResource" ||
-				file.BuildAction == "BMacInputs";
 		}
 	}
 }

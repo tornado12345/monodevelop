@@ -272,10 +272,10 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			}
 			else if (dataObject is SolutionFolderFileNode) {
 				var sff = (SolutionFolderFileNode)dataObject;
-				sff.Parent.Files.Remove (sff.FileName);
+				sff.Parent.Files.Remove (sff.Path);
 
 				await IdeApp.ProjectOperations.SaveAsync (sff.Parent.ParentSolution);
-				source = ((SolutionFolderFileNode)dataObject).FileName;
+				source = ((SolutionFolderFileNode)dataObject).Path;
 				sourceProject = null;
 				what = null;
 			} else
@@ -424,7 +424,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		}
 		
 		[CommandHandler (ProjectCommands.AddNewFiles)]
-		public async void AddNewFileToProject()
+		public void AddNewFileToProject()
 		{
 			Project project = (Project) CurrentNode.GetParentDataItem (typeof(Project), true);
 			if (!IdeApp.ProjectOperations.CreateProjectFile (project, GetFolderPath (CurrentNode.DataItem))) {
@@ -433,13 +433,11 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			CurrentNode.Expanded = true;
 			if (IdeApp.Workbench.ActiveDocument != null)
 				IdeApp.Workbench.ActiveDocument.Window.SelectWindow ();
-			await IdeApp.ProjectOperations.SaveAsync (project);
 		}
 		
 		void OnFileInserted (ITreeNavigator nav)
 		{
 			nav.Selected = true;
-			Tree.StartLabelEdit ();
 		}
 
 		///<summary>Imports files and folders from a target folder into the current folder</summary>
@@ -546,28 +544,24 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		[CommandHandler (ProjectCommands.NewFolder)]
 		public async void AddNewFolder ()
 		{
-			Project project = CurrentNode.GetParentDataItem (typeof(Project), true) as Project;
-			
-			string baseFolderPath = GetFolderPath (CurrentNode.DataItem);
-			string directoryName = Path.Combine (baseFolderPath, GettextCatalog.GetString("New Folder"));
-			int index = -1;
+			// Expand the project node before adding the file to the project. This fixes a problem where if the
+			// project node is collapsed and Refresh was used the project node would not expand and the new folder
+			// node would not be selected.
+			CurrentNode.Expanded = true;
 
-			if (Directory.Exists(directoryName)) {
-				while (Directory.Exists(directoryName + (++index + 1))) ;
-			}
-			
-			if (index >= 0) {
-				directoryName += index + 1;
-			}
-			
-			Directory.CreateDirectory (directoryName);
-			
-			ProjectFile newFolder = new ProjectFile (directoryName);
+			var project = CurrentNode.GetParentDataItem (typeof (Project), true) as Project;
+			string baseFolderPath = GetFolderPath (CurrentNode.DataItem);
+
+			FilePath folder = await NewFolderDialog.Open (baseFolderPath);
+
+			if (folder.IsNull)
+				return;
+
+			var newFolder = new ProjectFile (folder);
 			newFolder.Subtype = Subtype.Directory;
 			project.Files.Add (newFolder);
 
-			CurrentNode.Expanded = true;
-			Tree.AddNodeInsertCallback (new ProjectFolder (directoryName, project), new TreeNodeCallback (OnFileInserted));
+			Tree.AddNodeInsertCallback (new ProjectFolder (folder, project), new TreeNodeCallback (OnFileInserted));
 
 			await IdeApp.ProjectOperations.SaveAsync (project);
 		}

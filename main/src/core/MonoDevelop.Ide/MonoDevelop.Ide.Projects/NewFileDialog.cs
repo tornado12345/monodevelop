@@ -61,19 +61,20 @@ namespace MonoDevelop.Ide.Projects
 		Project[] projectRefs;
 
 		Project parentProject;
+		SolutionFolder parentSolutionFolder;
 		string basePath;
 
 		string userEditedEntryText = null;
 		string previousDefaultEntryText = null;
 
-		public NewFileDialog (Project parentProject, string basePath)
+		public NewFileDialog (Project parentProject, string basePath, SolutionFolder parentSolutionFolder = null)
 		{
 			Build ();
 			this.parentProject = parentProject;
+			this.parentSolutionFolder = parentSolutionFolder;
 			this.basePath = basePath;
 
 			BorderWidth = 6;
-			TransientFor = IdeApp.Workbench.RootWindow;
 			HasSeparator = false;
 
 			InitializeComponents ();
@@ -531,7 +532,8 @@ namespace MonoDevelop.Ide.Projects
 				}
 
 				try {
-					if (!await item.Create (project, project, path, titem.Language, filename))
+					var policyParent = (SolutionFolderItem)project ?? (SolutionFolderItem)parentSolutionFolder;
+					if (!await item.Create (policyParent, project, parentSolutionFolder, path, titem.Language, filename))
 						return;
 				} catch (Exception ex) {
 					LoggingService.LogError ("Error creating file", ex);
@@ -540,7 +542,10 @@ namespace MonoDevelop.Ide.Projects
 				}
 
 				if (project != null)
-					IdeApp.ProjectOperations.SaveAsync (project);
+					IdeApp.ProjectOperations.SaveAsync (project).Ignore ();
+
+				if (parentSolutionFolder != null)
+					IdeApp.ProjectOperations.SaveAsync (parentSolutionFolder.ParentSolution).Ignore ();
 
 				if (OnOked != null)
 					OnOked (null, null);
@@ -548,7 +553,6 @@ namespace MonoDevelop.Ide.Projects
 				Destroy ();
 			}
 		}
-
 
 		/// <summary>
 		///  Represents a new file template
@@ -658,7 +662,7 @@ namespace MonoDevelop.Ide.Projects
 			labelTemplateTitle.Text = string.Empty;
 			
 			Project[] projects = null;
-			if (parentProject == null)
+			if (parentProject == null && parentSolutionFolder == null)
 				projects = IdeApp.Workspace.GetAllProjects ().ToArray ();
 
 			if (projects != null && projects.Length > 0) {
@@ -850,7 +854,7 @@ namespace MonoDevelop.Ide.Projects
 			
 			public void Add (TemplateItem templateItem)
 			{
-				string name = GLib.Markup.EscapeText (GettextCatalog.GetString (templateItem.Name));
+				string name = GLib.Markup.EscapeText (templateItem.Name);
 				if (!string.IsNullOrEmpty (templateItem.Language))
 					name += "\n<span foreground='darkgrey'><small>" + templateItem.Language + "</small></span>";
 				string icon = templateItem.Template.Icon;

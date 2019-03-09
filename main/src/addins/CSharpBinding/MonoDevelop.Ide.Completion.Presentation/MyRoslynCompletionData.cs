@@ -56,7 +56,7 @@ namespace MonoDevelop.Ide.Completion.Presentation
 
 		public CompletionItem CompletionItem { get; private set; }
 
-		public CompletionItemRules Rules { get { return CompletionItem.Rules; } }
+		public override CompletionItemRules Rules { get { return CompletionItem.Rules; } }
 
 		public override string DisplayText {
 			get {
@@ -173,7 +173,9 @@ namespace MonoDevelop.Ide.Completion.Presentation
 			}
 			else {
 				markup.AppendTaggedText (theme, taggedParts.Take (i));
-				markup.Append ("<span font='" + FontService.SansFontName + "' size='small'>");
+				markup.Append ("<span font='");
+				markup.Append (FontService.SansFontName);
+				markup.Append ("' size='small'>");
 				markup.AppendLine ();
 				markup.AppendLine ();
 				markup.AppendTaggedText (theme, taggedParts.Skip (i + 1), 0, 50);

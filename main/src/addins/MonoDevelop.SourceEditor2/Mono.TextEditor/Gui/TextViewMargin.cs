@@ -54,7 +54,7 @@ namespace Mono.TextEditor
 	partial class TextViewMargin : Margin
 	{
 		readonly MonoTextEditor textEditor;
-		Pango.TabArray tabArray;
+
 		Pango.Layout markerLayout, defaultLayout;
 		Pango.FontDescription markerLayoutFont;
 		Pango.Layout[] eolMarkerLayout;
@@ -62,9 +62,6 @@ namespace Mono.TextEditor
 
 		internal double charWidth;
 		bool isMonospacedFont;
-		SpanUpdateListener spanUpdateListener;
-
-		internal SpanUpdateListener SpanUpdater { get => spanUpdateListener; }
 
 		double LineHeight {
 			get {
@@ -298,7 +295,6 @@ namespace Mono.TextEditor
 			}
 
 			this.textEditor = textEditor;
-			spanUpdateListener = new SpanUpdateListener (textEditor);
 			textEditor.Document.TextChanged += HandleTextReplaced;
 			textEditor.HighlightSearchPatternChanged += TextEditor_HighlightSearchPatternChanged;
 			textEditor.GetTextEditorData ().SearchChanged += HandleSearchChanged;
@@ -314,8 +310,10 @@ namespace Mono.TextEditor
 
 		void HandleSyntaxModeChanged(object sender, EventArgs e)
 		{
-			PurgeLayoutCache ();
-			textEditor.Document.CommitUpdateAll ();
+			Runtime.RunInMainThread (() => {
+				PurgeLayoutCache ();
+				textEditor.Document.CommitUpdateAll ();
+			});
 		}
 
 		void TextEditor_HighlightSearchPatternChanged (object sender, EventArgs e)
@@ -517,23 +515,22 @@ namespace Mono.TextEditor
 		}
 
 		System.ComponentModel.BackgroundWorker searchPatternWorker;
-		static Cursor xtermCursor = new Cursor(CursorType.Xterm);
-		static Cursor xtermCursorInverted;
-		static Cursor textLinkCursor = new Cursor (CursorType.Hand1);
-
-		static TextViewMargin()
-		{
+		Lazy<Cursor> xtermCursor = new Lazy<Cursor> (() => new Cursor (CursorType.Xterm));
+		Lazy<Cursor> xtermCursorInverted = new Lazy<Cursor> (() => {
 #if MAC
 			var img = OSXEditor.IBeamCursorImage;
 			if (img != null) {
-				xtermCursorInverted = new Cursor(xtermCursor.Display, (InvertCursorPixbuf (img.ToPixbuf())), (int)img.Width / 2, (int)img.Height / 2);
+				return new Cursor(Display.Default, (InvertCursorPixbuf (img.ToPixbuf())), (int)img.Width / 2, (int)img.Height / 2);
 			} else {
-				xtermCursorInverted = xtermCursor;
+				return new Cursor (CursorType.Xterm);
 			}
 #else
-			xtermCursorInverted = xtermCursor;
+			return new Cursor (CursorType.Xterm);
 #endif
-		}
+		});
+
+		Lazy<Cursor> textLinkCursor = new Lazy<Cursor> (() => new Cursor (CursorType.Hand1));
+
 
 		unsafe static Pixbuf InvertCursorPixbuf(Pixbuf src)
 		{
@@ -615,9 +612,9 @@ namespace Mono.TextEditor
 			markerLayout.FontDescription = markerLayoutFont;
 
 			// Gutter font may be bigger
-			GetFontMetrics(textEditor.Options.GutterFont, textEditor.Options.GutterFontName, out double gutterFontLineHeight, out double fontCharWidth, out underlinePosition, out underLineThickness);
-			GetFontMetrics(textEditor.Options.Font, textEditor.Options.FontName, out double fontLineHeight, out fontCharWidth, out underlinePosition, out underLineThickness);
-			this.textEditor.GetTextEditorData().LineHeight = fontLineHeight;
+			GetFontMetrics (textEditor.Options.GutterFont, out double gutterFontLineHeight, out double fontCharWidth, out underlinePosition, out underLineThickness);
+			GetFontMetrics (textEditor.Options.Font, out double fontLineHeight, out fontCharWidth, out underlinePosition, out underLineThickness);
+			this.textEditor.GetTextEditorData ().LineHeight = fontLineHeight;
 			this.charWidth = fontCharWidth;
 
 			var family = textEditor.PangoContext.Families.FirstOrDefault (f => f.Name == textEditor.Options.Font.Family);
@@ -630,10 +627,10 @@ namespace Mono.TextEditor
 			textEditor.LineHeight = System.Math.Max (1, LineHeight);
 
 			if (eolMarkerLayout == null) {
-				eolMarkerLayout = new Pango.Layout[markerTexts.Length];
-				eolMarkerLayoutRect = new Pango.Rectangle[markerTexts.Length];
+				eolMarkerLayout = new Pango.Layout [markerTexts.Length];
+				eolMarkerLayoutRect = new Pango.Rectangle [markerTexts.Length];
 				for (int i = 0; i < eolMarkerLayout.Length; i++)
-					eolMarkerLayout[i] = PangoUtil.CreateLayout (textEditor);
+					eolMarkerLayout [i] = PangoUtil.CreateLayout (textEditor);
 			}
 
 			var font = textEditor.Options.Font.Copy ();
@@ -651,55 +648,45 @@ namespace Mono.TextEditor
 				eolMarkerLayoutRect [i] = tRect;
 			}
 
-			if (tabArray != null) {
-				tabArray.Dispose ();
-				tabArray = null;
-			}
-
-			var tabWidthLayout = PangoUtil.CreateLayout (textEditor, (new string (' ', textEditor.Options.TabSize)));
-			tabWidthLayout.Alignment = Pango.Alignment.Left;
-			tabWidthLayout.FontDescription = textEditor.Options.Font;
-			int tabWidth, h;
-			tabWidthLayout.GetSize (out tabWidth, out h);
-			tabWidthLayout.Dispose ();
-			tabArray = new Pango.TabArray (1, false);
-			tabArray.SetTab (0, Pango.TabAlign.Left, tabWidth);
-
 			textEditor.UpdatePreeditLineHeight ();
 
 			DisposeLayoutDict ();
 			caretX = caretY = -LineHeight;
-			base.cursor = GetDefaultTextCursor();
+			base.cursor = GetDefaultTextCursor ();
 		}
 
 		void DisposeGCs ()
 		{
-			ShowTooltip (TextSegment.Invalid, Gdk.Rectangle.Zero);
+			ShowCodeSegmentPreviewTooltip (TextSegment.Invalid, Gdk.Rectangle.Zero);
 		}
 
 		int underlinePosition, underLineThickness;
 		public int UnderlinePosition => underlinePosition;
 		public int UnderLineThickness => underLineThickness;
 
-		void GetFontMetrics(Pango.FontDescription font, string fontName, out double lineHeight, out double charWidth, out int underlinePosition, out int underLineThickness)
+		void GetFontMetrics (Pango.FontDescription font, out double lineHeight, out double charWidth, out int underlinePosition, out int underLineThickness)
 		{
 			using (var metrics = textEditor.PangoContext.GetMetrics(font, textEditor.PangoContext.Language)) {
 #if MAC
-				double baseHeight;
-				if (fontName != null) {
-					baseHeight = OSXEditor.GetLineHeight(fontName) * textEditor.Options.Zoom;
-				} else {
-					baseHeight = (metrics.Ascent + metrics.Descent) / Pango.Scale.PangoScale;
+				try {
+					lineHeight = System.Math.Ceiling (0.5 + OSXEditor.GetLineHeight(font.ToString ()));
+					if (lineHeight < 0)
+						lineHeight = GetLineHeight (metrics);
+				} catch (Exception e) {
+					LoggingService.LogError ("Error while getting the macOS font metrics for " + font, e);
+					lineHeight = GetLineHeight (metrics);
 				}
-				lineHeight = System.Math.Ceiling (0.5 + baseHeight);
 #else
-				lineHeight = System.Math.Ceiling(0.5 + (metrics.Ascent + metrics.Descent) / Pango.Scale.PangoScale);
+				lineHeight = GetLineHeight (metrics);
 #endif
 				underlinePosition = metrics.UnderlinePosition;
 				underLineThickness = metrics.UnderlineThickness;
 				charWidth = metrics.ApproximateCharWidth / Pango.Scale.PangoScale;
 			}
 		}
+
+		static double GetLineHeight (Pango.FontMetrics metrics) => System.Math.Ceiling (0.5 + (metrics.Ascent + metrics.Descent) / Pango.Scale.PangoScale);
+
 		public override void Dispose ()
 		{
 			CancelCodeSegmentTooltip ();
@@ -728,16 +715,42 @@ namespace Mono.TextEditor
 					marker.Dispose ();
 				eolMarkerLayout = null;
 			}
-			if (spanUpdateListener != null) {
-				spanUpdateListener.Dispose ();
-				spanUpdateListener = null;
-			}
 			DisposeLayoutDict ();
-			if (tabArray != null)
-				tabArray.Dispose ();
+			tabArray?.Dispose ();
 			accessible?.Dispose ();
 			accessible = null;
+			if (xtermCursor.IsValueCreated)
+				xtermCursor.Value.Dispose ();
+			if (xtermCursorInverted.IsValueCreated)
+				xtermCursorInverted.Value.Dispose ();
+			if (textLinkCursor.IsValueCreated)
+				textLinkCursor.Value.Dispose ();
 			base.Dispose ();
+		}
+
+		int tabLayoutTabSize = -1;
+		Pango.TabArray tabArray;
+		Pango.TabArray TabArray {
+			get {
+				if (tabArray == null || tabLayoutTabSize != textEditor.Options.TabSize) {
+					CreateTabArray ();
+					tabLayoutTabSize = textEditor.Options.TabSize;
+				}
+				return tabArray;
+			}
+		}
+
+		void CreateTabArray ()
+		{
+			tabArray?.Dispose ();
+			using (var tabWidthLayout = PangoUtil.CreateLayout (textEditor, (new string (' ', textEditor.Options.TabSize)))) {
+				tabWidthLayout.Alignment = Pango.Alignment.Left;
+				tabWidthLayout.FontDescription = textEditor.Options.Font;
+				tabWidthLayout.GetSize (out int tabWidth, out int h);
+
+				tabArray = new Pango.TabArray (1, false);
+				tabArray.SetTab (0, Pango.TabAlign.Left, tabWidth);
+			}
 		}
 
 		#region Caret blinking
@@ -1064,7 +1077,7 @@ namespace Mono.TextEditor
 			var atts = new FastPangoAttrList ();
 			wrapper.Layout.Alignment = Pango.Alignment.Left;
 			wrapper.Layout.FontDescription = textEditor.Options.Font;
-			wrapper.Layout.Tabs = tabArray;
+			wrapper.Layout.Tabs = TabArray;
 			if (textEditor.Options.WrapLines) {
 				wrapper.Layout.Wrap = Pango.WrapMode.WordChar;
 				wrapper.Layout.Width = (int)((textEditor.Allocation.Width - XOffset - TextStartPosition) * Pango.Scale.PangoScale);
@@ -1095,6 +1108,7 @@ namespace Mono.TextEditor
 			if (containsPreedit) {
 				if (textEditor.GetTextEditorData ().IsCaretInVirtualLocation) {
 					lineText = textEditor.GetTextEditorData ().GetIndentationString (textEditor.Caret.Location) + textEditor.preeditString;
+					wrapper.IsVirtualLineText = true;
 				} else {
 					lineText = lineText.Insert (textEditor.preeditOffset - offset, textEditor.preeditString);
 				}
@@ -1644,6 +1658,7 @@ namespace Mono.TextEditor
 			}
 
 			public bool FastPath { get; internal set; }
+			public bool IsVirtualLineText { get; internal set; }
 
 			public Pango.Rectangle IndexToPos (int index)
 			{
@@ -1802,6 +1817,8 @@ namespace Mono.TextEditor
 
 		void DecorateTabsAndSpaces (Cairo.Context ctx, LayoutWrapper layout, int offset, double x, double y, int selectionStart, int selectionEnd)
 		{
+			if (layout.IsVirtualLineText)
+				return;
 			if (textEditor.Options.IncludeWhitespaces.HasFlag (IncludeWhitespaces.Space)) {
 				InnerDecorateTabsAndSpaces (ctx, layout, offset, x, y, selectionStart, selectionEnd, ' ');
 			}
@@ -1890,8 +1907,9 @@ namespace Mono.TextEditor
 			if (!string.IsNullOrEmpty (textEditor.preeditString))
 				virtualSpace = "";
 			LayoutWrapper wrapper = new LayoutWrapper (this, textEditor.LayoutCache.RequestLayout ());
+			wrapper.IsVirtualLineText = true;
 			wrapper.Text = virtualSpace;
-			wrapper.Layout.Tabs = tabArray;
+			wrapper.Layout.Tabs = TabArray;
 			wrapper.Layout.FontDescription = textEditor.Options.Font;
 			int vy, vx;
 			wrapper.GetSize (out vx, out vy);
@@ -2495,8 +2513,8 @@ namespace Mono.TextEditor
 			this.previewWindow.GdkWindow.GetOrigin (out x, out y);
 			int w = previewWindow.Allocation.Width;
 			int h = previewWindow.Allocation.Height;
-			if (!previewWindow.HideCodeSegmentPreviewInformString)
-				h -= previewWindow.PreviewInformStringHeight;
+			if (previewWindow.HasFooterText)
+				h -= previewWindow.FooterTextHeight;
 			CodeSegmentEditorWindow codeSegmentEditorWindow = new CodeSegmentEditorWindow (textEditor);
 			codeSegmentEditorWindow.Move (x, y);
 			codeSegmentEditorWindow.Resize (w, h);
@@ -2531,7 +2549,7 @@ namespace Mono.TextEditor
 
 		uint codeSegmentTooltipTimeoutId = 0;
 
-		void ShowTooltip (ISegment segment, Rectangle hintRectangle)
+		internal void ShowCodeSegmentPreviewTooltip (ISegment segment, Rectangle hintRectangle, uint timeout = 650)
 		{
 			if (previewWindow != null && previewWindow.Segment.Equals (segment))
 				return;
@@ -2539,7 +2557,7 @@ namespace Mono.TextEditor
 			HideCodeSegmentPreviewWindow ();
 			if (segment.IsInvalid () || segment.Length == 0)
 				return;
-			codeSegmentTooltipTimeoutId = GLib.Timeout.Add (650, delegate {
+			codeSegmentTooltipTimeoutId = GLib.Timeout.Add (timeout, delegate {
 				codeSegmentTooltipTimeoutId = 0;
 				previewWindow = new CodeSegmentPreviewWindow (textEditor, false, segment);
 				if (previewWindow.IsEmptyText) {
@@ -2557,7 +2575,6 @@ namespace Mono.TextEditor
 
 				int x = hintRectangle.Right;
 				int y = hintRectangle.Bottom;
-				previewWindow.CalculateSize ();
 				var req = previewWindow.SizeRequest ();
 				int w = req.Width;
 				int h = req.Height;
@@ -2652,7 +2669,7 @@ namespace Mono.TextEditor
 		Cursor GetDefaultTextCursor()
 		{
 			var baseColor = textEditor.Style.Background(StateType.Normal);
-			return  HslColor.Brightness(baseColor) < 0.5 ? xtermCursorInverted : xtermCursor;
+			return  HslColor.Brightness(baseColor) < 0.5 ? xtermCursorInverted.Value : xtermCursor.Value;
 		}
 
 		protected internal override void MouseHover (MarginMouseEventArgs args)
@@ -2706,16 +2723,16 @@ namespace Mono.TextEditor
 				int lineNr = args.LineNumber;
 				foreach (var shownFolding in GetFoldRectangles (lineNr)) {
 					if (shownFolding.Key.Contains ((int)(args.X + this.XOffset), (int)args.Y)) {
-						ShowTooltip (shownFolding.Value.Segment, shownFolding.Key);
+						ShowCodeSegmentPreviewTooltip (shownFolding.Value.Segment, shownFolding.Key);
 						return;
 					}
 				}
 
-				ShowTooltip (TextSegment.Invalid, Gdk.Rectangle.Zero);
+				ShowCodeSegmentPreviewTooltip (TextSegment.Invalid, Gdk.Rectangle.Zero);
 				string link = GetLink != null ? GetLink (args) : null;
 
 				if (!String.IsNullOrEmpty (link)) {
-					base.cursor = textLinkCursor;
+					base.cursor = textLinkCursor.Value;
 				} else {
 					base.cursor = hoverResult.HasCursor ? hoverResult.Cursor : GetDefaultTextCursor ();
 				}
@@ -2878,7 +2895,7 @@ namespace Mono.TextEditor
 			cr.Fill ();
 		}
 
-		IEnumerable<KeyValuePair<Gdk.Rectangle, FoldSegment>> GetFoldRectangles (int lineNr)
+		internal IEnumerable<KeyValuePair<Gdk.Rectangle, FoldSegment>> GetFoldRectangles (int lineNr)
 		{
 			if (lineNr < 0)
 				yield break;
@@ -2900,10 +2917,10 @@ namespace Mono.TextEditor
 			using (var calcTextLayout = textEditor.LayoutCache.RequestLayout ())
 			using (var calcFoldingLayout = textEditor.LayoutCache.RequestLayout ()) {
 				calcTextLayout.FontDescription = textEditor.Options.Font;
-				calcTextLayout.Tabs = this.tabArray;
+				calcTextLayout.Tabs = this.TabArray;
 
 				calcFoldingLayout.FontDescription = markerLayoutFont;
-				calcFoldingLayout.Tabs = this.tabArray;
+				calcFoldingLayout.Tabs = this.TabArray;
 				foreach (var folding in foldings) {
 					int foldOffset = folding.Offset;
 					if (foldOffset < offset)
@@ -3058,6 +3075,9 @@ namespace Mono.TextEditor
 		{
 //			double xStart = System.Math.Max (area.X, XOffset);
 //			xStart = System.Math.Max (0, xStart);
+			cr.Rectangle (XOffset, 0, textEditor.Allocation.Width - XOffset, textEditor.Allocation.Height);
+			cr.Clip ();
+
 			var correctedXOffset = System.Math.Floor (XOffset) - 1;
 			var extendingMarker = line != null ? (IExtendingTextLineMarker)textEditor.Document.GetMarkers (line).FirstOrDefault (l => l is IExtendingTextLineMarker) : null;
 			isSpaceAbove = extendingMarker != null ? extendingMarker.IsSpaceAbove : false;
@@ -3311,7 +3331,7 @@ namespace Mono.TextEditor
 		protected internal override void MouseLeft ()
 		{
 			base.MouseLeft ();
-			ShowTooltip (TextSegment.Invalid, Gdk.Rectangle.Zero);
+			ShowCodeSegmentPreviewTooltip (TextSegment.Invalid, Gdk.Rectangle.Zero);
 		}
 
 		#region Coordinate transformation
@@ -3349,8 +3369,11 @@ namespace Mono.TextEditor
 						layoutWrapper.IndexToLineX (index + 1, false, out lineNr, out xp2);
 						index = TranslateIndexToUTF8 (layoutWrapper.Text, index);
 
-						if (snapCharacters && !IsNearX1 (xp, xp1, xp2))
+						if (snapCharacters && !IsNearX1 (xp, xp1, xp2)) {
 							index++;
+							if (index < layoutWrapper.Text.Length  && CaretMoveActions.IsLowSurrogateMarkerSet (layoutWrapper.Text [index]))
+								index++;
+						}
 						return true;
 					}
 				}
@@ -3508,7 +3531,7 @@ namespace Mono.TextEditor
 					l.SetText (textEditor.GetTextEditorData ().IndentationTracker.GetIndentationString (line.LineNumber));
 					l.Alignment = Pango.Alignment.Left;
 					l.FontDescription = textEditor.Options.Font;
-					l.Tabs = tabArray;
+					l.Tabs = TabArray;
 
 					Pango.Rectangle ink_rect, logical_rect;
 					l.GetExtents (out ink_rect, out logical_rect);

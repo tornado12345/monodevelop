@@ -50,6 +50,8 @@ using MonoDevelop.Refactoring;
 using MonoDevelop.CSharp.Refactoring;
 using MonoDevelop.Ide.Editor.Highlighting;
 using Microsoft.CodeAnalysis.DocumentHighlighting;
+using Microsoft.VisualStudio.Platform;
+using MonoDevelop.Ide.Composition;
 
 namespace MonoDevelop.CSharp.Highlighting
 {
@@ -83,10 +85,9 @@ namespace MonoDevelop.CSharp.Highlighting
 					Editor.SyntaxHighlighting = fallbackHighlighting;
 				return;
 			}
-			var old = Editor.SyntaxHighlighting as RoslynClassificationHighlighting;
-			if (old == null || old.DocumentId != DocumentContext.AnalysisDocument.Id) {
-				Editor.SyntaxHighlighting = new RoslynClassificationHighlighting ((MonoDevelopWorkspace)DocumentContext.RoslynWorkspace,
-																				  DocumentContext.AnalysisDocument.Id, "source.cs");
+			var old = Editor.SyntaxHighlighting as TagBasedSyntaxHighlighting;
+			if (old == null) {
+				Editor.SyntaxHighlighting = CompositionManager.GetExportedValue<ITagBasedSyntaxHighlightingFactory> ().CreateSyntaxHighlighting (Editor.TextView, "source.cs");
 			}
 		}
 
@@ -99,14 +100,11 @@ namespace MonoDevelop.CSharp.Highlighting
 
 		protected async override Task<ImmutableArray<DocumentHighlights>> ResolveAsync (CancellationToken token)
 		{
-			var doc = IdeApp.Workbench.ActiveDocument;
-			if (doc == null || doc.FileName == FilePath.Null)
-				return ImmutableArray<DocumentHighlights>.Empty;
-			var analysisDocument = doc.AnalysisDocument;
+			var analysisDocument = DocumentContext?.AnalysisDocument;
 			if (analysisDocument == null)
 				return ImmutableArray<DocumentHighlights>.Empty;
 
-			return await highlightsService.GetDocumentHighlightsAsync (analysisDocument, doc.Editor.CaretOffset, ImmutableHashSet<Document>.Empty.Add (analysisDocument), token);
+			return await highlightsService.GetDocumentHighlightsAsync (analysisDocument, Editor.CaretOffset, ImmutableHashSet<Document>.Empty.Add (analysisDocument), token);
 		}
 
 		protected override Task<IEnumerable<MemberReference>> GetReferencesAsync (ImmutableArray<DocumentHighlights> resolveResult, CancellationToken token)

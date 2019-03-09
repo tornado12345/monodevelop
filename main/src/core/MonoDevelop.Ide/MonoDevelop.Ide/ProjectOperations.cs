@@ -1,4 +1,4 @@
-//
+﻿//
 // ProjectOperations.cs
 //
 // Author:
@@ -26,46 +26,39 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-
 using System;
-using System.Linq;
-using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
-
-using MonoDevelop.Projects;
-using MonoDevelop.Projects.Text;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using MonoDevelop.Components;
 using MonoDevelop.Core;
 using MonoDevelop.Core.Execution;
-using MonoDevelop.Core.ProgressMonitoring;
-using MonoDevelop.Ide.ProgressMonitoring;
-using MonoDevelop.Ide.Gui.Dialogs;
-using MonoDevelop.Ide.Gui;
-using MonoDevelop.Ide.Projects;
-using MonoDevelop.Core.Assemblies;
 using MonoDevelop.Core.Instrumentation;
-using System.Diagnostics;
-using System.Text;
-using MonoDevelop.Ide.TypeSystem;
-using System.Threading.Tasks;
-using System.Threading;
-using ExecutionContext = MonoDevelop.Projects.ExecutionContext;
-using MonoDevelop.Ide.Tasks;
-using MonoDevelop.Projects.MSBuild;
-using System.Collections.Immutable;
-using MonoDevelop.Ide.Editor;
 using MonoDevelop.Core.Text;
-using MonoDevelop.Components.Extensions;
+using MonoDevelop.Ide.Editor;
+using MonoDevelop.Ide.Gui;
+using MonoDevelop.Ide.Gui.Dialogs;
+using MonoDevelop.Ide.ProgressMonitoring;
+using MonoDevelop.Ide.Projects;
+using MonoDevelop.Ide.Tasks;
+using MonoDevelop.Ide.TypeSystem;
+using MonoDevelop.Projects;
+using MonoDevelop.Projects.MSBuild;
+using ExecutionContext = MonoDevelop.Projects.ExecutionContext;
+using MonoDevelop.Ide.Projects.OptionPanels;
 
 namespace MonoDevelop.Ide
 {
 	/// <summary>
 	/// This is the basic interface to the workspace.
 	/// </summary>
-	public class ProjectOperations
+	public partial class ProjectOperations
 	{
-		AsyncOperation<BuildResult> currentBuildOperation = new AsyncOperation<BuildResult> (Task.FromResult (BuildResult.CreateSuccess ()), null);
+		static AsyncOperation<BuildResult> DefaultBuildOperation = new AsyncOperation<BuildResult> (Task.FromResult (BuildResult.CreateSuccess ()), null);
+		AsyncOperation<BuildResult> currentBuildOperation = DefaultBuildOperation;
 		MultipleAsyncOperation currentRunOperation = MultipleAsyncOperation.CompleteMultipleOperation;
 		IBuildTarget currentBuildOperationOwner;
 		List<IBuildTarget> currentRunOperationOwners = new List<IBuildTarget> ();
@@ -76,18 +69,11 @@ namespace MonoDevelop.Ide
 		WorkspaceItem currentWorkspaceItem = null;
 		object currentItem;
 		
-		BuildResult lastResult = new BuildResult ();
-		
 		internal ProjectOperations ()
 		{
 			IdeApp.Workspace.WorkspaceItemUnloaded += OnWorkspaceItemUnloaded;
 			IdeApp.Workspace.ItemUnloading += IdeAppWorkspaceItemUnloading;
 			
-		}
-
-		[Obsolete ("This property will be removed.")]
-		public BuildResult LastCompilerResult {
-			get { return lastResult; }
 		}
 		
 		public Project CurrentSelectedProject {
@@ -162,6 +148,12 @@ namespace MonoDevelop.Ide
 		public AsyncOperation CurrentRunOperation {
 			get { return currentRunOperation; }
 			set { AddRunOperation (value); }
+		}
+
+		void ResetCurrentBuildOperation ()
+		{
+			currentBuildOperation = DefaultBuildOperation;
+			currentBuildOperationOwner = null;
 		}
 
 		public void AddRunOperation (AsyncOperation runOperation)
@@ -387,17 +379,18 @@ namespace MonoDevelop.Ide
 		
 		public async void Export (IMSBuildFileObject item, MSBuildFileFormat format)
 		{
-			ExportSolutionDialog dlg = new ExportSolutionDialog (item, format);
-			
+			ExportSolutionDialog dlg = null;
 			try {
+				dlg = new ExportSolutionDialog (item, format);
+
 				if (MessageService.RunCustomDialog (dlg) == (int) Gtk.ResponseType.Ok) {
 					using (ProgressMonitor monitor = IdeApp.Workbench.ProgressMonitors.GetToolOutputProgressMonitor (true)) {
 						await Services.ProjectService.Export (monitor, item.FileName, dlg.TargetFolder, dlg.Format);
 					}
 				}
 			} finally {
-				dlg.Destroy ();
-				dlg.Dispose ();
+				dlg?.Destroy ();
+				dlg?.Dispose ();
 			}
 		}
 		
@@ -574,7 +567,7 @@ namespace MonoDevelop.Ide
 						BrandingService.ApplicationName
 					),
 					GettextCatalog.GetString (
-						"Changes done in those files will be overwritten by {0}.",
+						"Changes made in those files will be overwritten by {0}.",
 						BrandingService.ApplicationName
 					),
 					AlertButton.OverwriteFile);
@@ -701,27 +694,56 @@ namespace MonoDevelop.Ide
 				}
 			}
 		}
-		
-		public void NewSolution ()
+
+		public async void ShowRunConfiguration (Solution solution, MultiItemSolutionRunConfiguration runConfiguration)
 		{
-			NewSolution (null);
-		}
-		
-		public void NewSolution (string defaultTemplate)
-		{
-			NewSolution (defaultTemplate, true);
+			var optionsDialog = new CombineOptionsDialog (IdeApp.Workbench.RootWindow, solution);
+			optionsDialog.CurrentConfig = IdeApp.Workspace.ActiveConfigurationId;
+			try {
+				optionsDialog.SelectPanel ("Run");
+				if (runConfiguration != null) {
+					void shownCallback (object sender, EventArgs args)
+					{
+						var panel = optionsDialog.GetPanel<SolutionRunConfigurationsPanel> ("General");
+						if (panel != null) {
+							panel.ShowConfiguration (runConfiguration);
+						}
+						optionsDialog.Shown -= shownCallback;
+					}
+
+					optionsDialog.Shown += shownCallback;
+				}
+
+				if (MessageService.RunCustomDialog (optionsDialog) == (int)Gtk.ResponseType.Ok) {
+					await SaveAsync (solution);
+					await IdeApp.Workspace.SavePreferences (solution);
+				}
+			} finally {
+				optionsDialog.Destroy ();
+				optionsDialog.Dispose ();
+			}
 		}
 
-		public async void NewSolution (string defaultTemplate, bool showTemplateSelection)
+		public Task<bool> NewSolution ()
+		{
+			return NewSolution (null);
+		}
+
+		public Task<bool> NewSolution (string defaultTemplate)
+		{
+			return NewSolution (defaultTemplate, true);
+		}
+
+		public async Task<bool> NewSolution (string defaultTemplate, bool showTemplateSelection)
 		{
 			if (!await IdeApp.Workbench.SaveAllDirtyFiles ())
-				return;
+				return false;
 
 			var newProjectDialog = new NewProjectDialogController ();
 			newProjectDialog.OpenSolution = true;
 			newProjectDialog.SelectedTemplateId = defaultTemplate;
 			newProjectDialog.ShowTemplateSelection = showTemplateSelection;
-			newProjectDialog.Show ();
+			return newProjectDialog.Show ();
 		}
 		
 		public Task<WorkspaceItem> AddNewWorkspaceItem (Workspace parentWorkspace)
@@ -880,7 +902,16 @@ namespace MonoDevelop.Ide
 		
 		public bool CreateProjectFile (Project parentProject, string basePath, string selectedTemplateId)
 		{
-			using (NewFileDialog nfd = new NewFileDialog (parentProject, basePath)) {
+			using (var nfd = new NewFileDialog (parentProject, basePath)) {
+				if (selectedTemplateId != null)
+					nfd.SelectTemplate (selectedTemplateId);
+				return MessageService.ShowCustomDialog (nfd) == (int)Gtk.ResponseType.Ok;
+			}
+		}
+
+		public bool CreateSolutionFolderFile (SolutionFolder parentSolutionFolder,string selectedTemplateId = null)
+		{
+			using (var nfd = new NewFileDialog (null, parentSolutionFolder.BaseDirectory, parentSolutionFolder)) {
 				if (selectedTemplateId != null)
 					nfd.SelectTemplate (selectedTemplateId);
 				return MessageService.ShowCustomDialog (nfd) == (int)Gtk.ResponseType.Ok;
@@ -934,7 +965,7 @@ namespace MonoDevelop.Ide
 		public void RemoveSolutionItem (SolutionFolderItem item)
 		{
 			string question = GettextCatalog.GetString ("Do you really want to remove project '{0}' from '{1}'?", item.Name, item.ParentFolder.Name);
-			string secondaryText = GettextCatalog.GetString ("The Remove option remove the project from the solution, but it will not physically delete any file from disk.");
+			string secondaryText = GettextCatalog.GetString ("The Remove option will remove the project from the solution, but it will not physically delete any file from disk.");
 			
 			SolutionItem prj = item as SolutionItem;
 			if (prj == null) {
@@ -1066,6 +1097,32 @@ namespace MonoDevelop.Ide
 
 		async Task ExecuteAsync (IBuildTarget entry, ExecutionContext context, CancellationTokenSource cs, ConfigurationSelector configuration, RunConfiguration runConfiguration, bool buildBeforeExecuting)
 		{
+			ProjectEventMetadata eventMetadata = null;
+
+			if (entry is Solution solution) {
+				SolutionItem solutionItem = null;
+				if (runConfiguration == null) {
+					solutionItem = solution.StartupItem;
+				} else if (runConfiguration is SingleItemSolutionRunConfiguration singleItemSolution) {
+					solutionItem = singleItemSolution.Item;
+				}
+
+				if (solutionItem != null) {
+					eventMetadata = solutionItem.CreateProjectEventMetadata (configuration);
+				}
+			} else if (entry is SolutionItem item) {
+				eventMetadata = item.CreateProjectEventMetadata (configuration);
+			}
+
+			var metadata = new BuildAndDeployMetadata (eventMetadata);
+
+			// CheckAndBuildForExecute may open a dialog, so track that here if it does
+			metadata.BuildWithoutPrompting = IdeApp.Preferences.BuildBeforeExecuting;
+
+			metadata.SetSuccess ();
+			Counters.BuildAndDeploy.BeginTiming ("Execute", metadata);
+			Counters.TrackingBuildAndDeploy = true;
+
 			if (configuration == null)
 				configuration = IdeApp.Workspace.ActiveConfiguration;
 			
@@ -1073,14 +1130,29 @@ namespace MonoDevelop.Ide
 			var rt = entry as IRunTarget;
 			if (bth != null && rt != null) {
 				var h = await bth.Configure (rt, context, configuration, runConfiguration);
-				if (h == null)
+				if (h == null) {
+					metadata.SetFailure ();
+					Counters.TrackingBuildAndDeploy = false;
+					Counters.BuildAndDeploy.EndTiming ();
 					return;
+				}
 				context = new ExecutionContext (h, context.ConsoleFactory, context.ExecutionTarget);
 			}
 			
 			if (buildBeforeExecuting) {
-				if (!await CheckAndBuildForExecute (entry, context, configuration, runConfiguration))
+				Stopwatch buildTimer = new Stopwatch ();
+				buildTimer.Start ();
+
+				if (!await CheckAndBuildForExecute (entry, context, configuration, runConfiguration)) {
+					metadata.SetFailure ();
+					Counters.TrackingBuildAndDeploy = false;
+					Counters.BuildAndDeploy.EndTiming ();
+					buildTimer.Stop ();
 					return;
+				}
+
+				buildTimer.Stop ();
+				metadata.BuildTime = buildTimer.ElapsedMilliseconds;
 			}
 
 			ProgressMonitor monitor = new ProgressMonitor (cs);
@@ -1094,8 +1166,12 @@ namespace MonoDevelop.Ide
 			await t;
 
 			var error = monitor.Errors.FirstOrDefault ();
-			if (error != null)
+			if (error != null) {
 				IdeApp.Workbench.StatusBar.ShowError (error.DisplayMessage);
+				metadata.SetFailure ();
+				Counters.TrackingBuildAndDeploy = false;
+				Counters.BuildAndDeploy.EndTiming ();
+			}
 			currentRunOperationOwners.Remove (entry);
 		}
 		
@@ -1160,21 +1236,17 @@ namespace MonoDevelop.Ide
 
 				var t = CleanAsync (entry, monitor, tt, false, operationContext);
 
-				t = t.ContinueWith (ta => {
-					currentBuildOperationOwner = null;
-					return ta.Result; 
-				});
-
 				var op = new AsyncOperation<BuildResult> (t, cs);
 				currentBuildOperation = op;
 				currentBuildOperationOwner = entry;
+
+				t.ContinueWith (ta => { ResetCurrentBuildOperation (); });
+				return op;
 			}
 			catch {
 				tt.End ();
 				throw;
 			}
-			
-			return currentBuildOperation;
 		}
 		
 		async Task<BuildResult> CleanAsync (IBuildTarget entry, ProgressMonitor monitor, ITimeTracker tt, bool isRebuilding, OperationContext operationContext)
@@ -1207,7 +1279,12 @@ namespace MonoDevelop.Ide
 			try {
 				if (result != null) {
 					monitor.Log.WriteLine ();
-					monitor.Log.WriteLine (GettextCatalog.GetString ("---------------------- Done ----------------------"));
+
+					var msg = GettextCatalog.GetString (
+							"Clean: {0} succeeded, {1} failed, {2} up-to-date, {3} skipped",
+							result.SuccessfulBuildCount, result.FailedBuildCount, result.UpToDateBuildCount, result.SkippedBuildCount
+						);
+					monitor.Log.WriteLine ( "========== " + msg + " ==========");
 
 					tt.Trace ("Updating task service");
 				
@@ -1293,14 +1370,13 @@ namespace MonoDevelop.Ide
 			ProgressMonitor monitor = IdeApp.Workbench.ProgressMonitors.GetRebuildProgressMonitor ().WithCancellationSource (cs);
 
 			var t = RebuildAsync (entry, monitor, operationContext);
-			t = t.ContinueWith (ta => {
-				currentBuildOperationOwner = null;
-				return ta.Result;
-			});
 
 			var op = new AsyncOperation<BuildResult> (t, cs);
+			currentBuildOperation = op;
+			currentBuildOperationOwner = entry;
 
-			return currentBuildOperation = op;
+			t.ContinueWith (ta => { ResetCurrentBuildOperation (); });
+			return op;
 		}
 		
 		async Task<BuildResult> RebuildAsync (IBuildTarget entry, ProgressMonitor monitor, OperationContext operationContext)
@@ -1329,11 +1405,88 @@ namespace MonoDevelop.Ide
 			}
 		}
 
-		async Task<bool> CheckAndBuildForExecute (IBuildTarget executionTarget, ExecutionContext context, ConfigurationSelector configuration, RunConfiguration runConfiguration)
+		internal static IBuildTarget[] GetBuildTargetsForExecution (IBuildTarget executionTarget, RunConfiguration runConfiguration)
 		{
+			if (executionTarget is Solution sol) {
+				if (runConfiguration == null) {
+					runConfiguration = sol.StartupConfiguration;
+				}
+				if (runConfiguration is SingleItemSolutionRunConfiguration src) {
+					return new [] { src.Item };
+				}
+				if (runConfiguration is MultiItemSolutionRunConfiguration mrc) {
+					var buildTargets = new IBuildTarget [mrc.Items.Count];
+					int i = 0;
+					foreach (var item in mrc.Items) {
+						buildTargets [i++] = item.SolutionItem;
+					}
+					return buildTargets;
+				}
+			}
+			return new [] { executionTarget };
+		}
+
+		// given a solution RunConfiguration, determine the matching project RunConfigurations
+		static RunConfiguration GetProjectRunConfiguration (IRunTarget target, RunConfiguration config)
+		{
+			if (config is SingleItemSolutionRunConfiguration src) {
+				if (src.Item == target) {
+					return src.RunConfiguration;
+				}
+			}
+			else if (config is MultiItemSolutionRunConfiguration mrc) {
+				foreach (var item in mrc.Items) {
+					if (item.SolutionItem == target)
+						return item.RunConfiguration;
+				}
+			}
+			return config;
+		}
+
+		Task<bool> CheckAndBuildForExecute (IBuildTarget executionTarget, ExecutionContext context, ConfigurationSelector configuration, RunConfiguration runConfiguration)
+		{
+			// When executing a solution we are actually going to execute the startup project(s), so we only need to build it/them
+			IBuildTarget [] buildTargets = GetBuildTargetsForExecution (executionTarget, runConfiguration);
+
+			return CheckAndBuildForExecute (
+				buildTargets, configuration,
+				IdeApp.Preferences.BuildBeforeExecuting, !IdeApp.Preferences.RunWithWarnings,
+				(target, monitor) => {
+					if (target is IRunTarget runTarget) {
+						var projectRunConfig = GetProjectRunConfiguration (runTarget, runConfiguration);
+						return runTarget.PrepareExecution (monitor, context, configuration, projectRunConfig);
+					}
+					return target.PrepareExecution (monitor, context, configuration);
+				}
+			);
+		}
+
+		/// <summary>
+		/// Prepares projects/solutions for execution by building them and their execution dependencies if necessary.
+		/// </summary>
+		/// <returns>Whether the operation was successful.</returns>
+		/// <param name="executionTargets">The projects and/or solution to build. If there are multiple projects, they must be in the same solution.</param>
+		/// <param name="configuration">The configuration selector.</param>
+		/// <param name="buildWithoutPrompting">Whether to prompt the user before building, when building is necessary.</param>
+		/// <param name="cancelOnWarning">Whether to cancel the execution operation if there is a build warning.</param>
+		/// <param name="createPrepareExecutionTask">
+		/// May be executed in parallel with the build to perform additional
+		/// preparation that does not depend on the build, such as launching a simulator.
+		/// There is no guaranteed this will be executed for any target.
+		/// </param>
+		public async Task<bool> CheckAndBuildForExecute (
+			ICollection<IBuildTarget> executionTargets, ConfigurationSelector configuration,
+			bool buildWithoutPrompting = true, bool cancelOnWarning = false,
+			Func<IBuildTarget, ProgressMonitor,Task> createPrepareExecutionTask = null,
+			CancellationToken? token = null)
+		{
+			if (executionTargets.Count == 0) {
+				throw new ArgumentException ("No execution targets specified", nameof (executionTargets)); ;
+			}
+
 			if (currentBuildOperation != null && !currentBuildOperation.IsCompleted) {
 				var bres = await currentBuildOperation.Task;
-				if (bres.HasErrors || !IdeApp.Preferences.RunWithWarnings && bres.HasWarnings)
+				if (bres.HasErrors || (cancelOnWarning && bres.HasWarnings))
 					return false;
 			}
 
@@ -1342,52 +1495,74 @@ namespace MonoDevelop.Ide
 			if (r.Failed)
 				return false;
 
-			var buildTarget = executionTarget;
+			var executionDeps = executionTargets.SelectMany (et => et.GetExecutionDependencies ());
+			IBuildTarget buildTarget = SolutionItemBuildBatch.Create (executionDeps);
 
-			// When executing a solution we are actually going to execute the starup project. So we only need to build that project.
-			// TODO: handle multi-startup solutions.
-			var sol = buildTarget as Solution;
-			if (sol != null && sol.StartupItem != null)
-				buildTarget = sol.StartupItem;
-			
-			var buildDeps = buildTarget.GetExecutionDependencies ().ToList ();
-			if (buildDeps.Count > 1)
-				throw new NotImplementedException ("Multiple execution dependencies not yet supported");
-			if (buildDeps.Count != 0)
-				buildTarget = buildDeps [0];
+			var context = new TargetEvaluationContext ();
+			context.GlobalProperties.SetValue ("IsBuildingForExecution", true);
 
-			bool needsBuild = FastCheckNeedsBuild (buildTarget, configuration);
-			if (!needsBuild) {
+			if (!FastCheckNeedsBuild (buildTarget, configuration, context)) {
 				return true;
 			}
 
-			if (IdeApp.Preferences.BuildBeforeExecuting) {
-				// Building the project may take some time, so we call PrepareExecution so that the target can
-				// prepare the execution (for example, it could start a simulator).
-				var cs = new CancellationTokenSource ();
-				Task prepareExecution;
-				if (buildTarget is IRunTarget)
-					prepareExecution = ((IRunTarget)buildTarget).PrepareExecution (new ProgressMonitor ().WithCancellationSource (cs), context, configuration, runConfiguration);
-				else
-					prepareExecution = buildTarget.PrepareExecution (new ProgressMonitor ().WithCancellationSource (cs), context, configuration);
-				
-				var result = await Build (buildTarget, true).Task;
-
-				if (result.HasErrors || (!IdeApp.Preferences.RunWithWarnings && result.HasWarnings)) {
-					cs.Cancel ();
-					return false;
-				}
-				else {
-					await prepareExecution;
-					return true;
+			if (!buildWithoutPrompting) {
+				var ret = PromptToBuild ();
+				if (ret.HasValue) {
+					return ret.Value;
 				}
 			}
 
+			CancellationTokenSource prepareOpTokenSource = null;
+
+			// Building the project may take some time, so we call PrepareExecution so that the target can
+			// prepare the execution while the build is in progress (for example, it could start a simulator).
+			// As a simple way to avoid starvation, if there are multiple, we run them in sequence.
+			bool building = true;
+			Task prepareExecutionTask = null;
+			if (createPrepareExecutionTask != null) {
+				prepareOpTokenSource = token != null
+					? CancellationTokenSource.CreateLinkedTokenSource (token.Value)
+					: new CancellationTokenSource ();
+				prepareExecutionTask = RunPrepareExecutionTasks ();
+			}
+
+			BuildResult result = await Build (buildTarget, token, context).Task;
+
+			if (result.HasErrors || (cancelOnWarning && result.HasWarnings)) {
+				prepareOpTokenSource?.Cancel ();
+				return false;
+			}
+
+			building = false;
+			if (prepareExecutionTask != null) {
+				await prepareExecutionTask;
+			}
+
+			return true;
+
+			async Task RunPrepareExecutionTasks ()
+			{
+				var targetsToPrepare = new Queue<IBuildTarget> (executionTargets);
+
+				while (targetsToPrepare.Count > 0 && building) {
+					var target = targetsToPrepare.Dequeue ();
+					var monitor = new ProgressMonitor ().WithCancellationSource (prepareOpTokenSource);
+					await createPrepareExecutionTask (target, monitor);
+				}
+			}
+		}
+
+		/// <summary>
+		/// Prompts the user whether they want to build the project
+		/// </summary>
+		/// <returns>True to execute without building, false to cancel, null to build.</returns>
+		static bool? PromptToBuild ()
+		{
 			var bBuild = new AlertButton (GettextCatalog.GetString ("Build"));
 			var bRun = new AlertButton (Gtk.Stock.Execute, true);
 			var res = MessageService.AskQuestion (
 				GettextCatalog.GetString ("Outdated Build"),
-				GettextCatalog.GetString ("The project you are executing has changes done after the last time it was compiled. Do you want to continue?"),
+				GettextCatalog.GetString ("The project you are executing has changed since the last time it was compiled. Do you want to continue or rebuild it?"),
 				1,
 				AlertButton.Cancel,
 				bBuild,
@@ -1402,69 +1577,69 @@ namespace MonoDevelop.Ide
 			}
 
 			if (res == bBuild) {
-				// Building the project may take some time, so we call PrepareExecution so that the target can
-				// prepare the execution (for example, it could start a simulator).
-				var cs = new CancellationTokenSource ();
+				return null;
+			}
 
-				Task prepareExecution;
-				if (buildTarget is IRunTarget)
-					prepareExecution = ((IRunTarget)buildTarget).PrepareExecution (new ProgressMonitor ().WithCancellationSource (cs), context, configuration, runConfiguration);
-				else
-					prepareExecution = buildTarget.PrepareExecution (new ProgressMonitor ().WithCancellationSource (cs), context, configuration);
-				
-				var result = await Build (buildTarget, true).Task;
+			return false;
+		}
 
-				if (result.HasErrors || (!IdeApp.Preferences.RunWithWarnings && result.HasWarnings)) {
-					cs.Cancel ();
-					return false;
+		/// <summary>
+		/// Given a build target, determines whether it or its dependencies needs to be built.
+		/// </summary>
+		/// <param name="target">The build target to check.</param>
+		/// <param name="configuration">The build configuration selector.</param>
+		static bool FastCheckNeedsBuild (IBuildTarget target, ConfigurationSelector configuration, TargetEvaluationContext context)
+		{
+			if (FastBuildCheckDisabled ()) {
+				return true;
+			}
+
+			IEnumerable<SolutionItem> items;
+
+			switch (target) {
+			case Project proj: {
+					var deps = new HashSet<SolutionItem> { proj };
+					CollectDependencies (proj, deps, configuration);
+					items = deps;
+					break;
 				}
-				else {
-					await prepareExecution;
+			case SolutionItemBuildBatch batch: {
+					var deps = new HashSet<SolutionItem> ();
+					foreach (var item in batch.Items) {
+						deps.Add (item);
+						CollectDependencies (item, deps, configuration);
+					}
+					items = deps;
+					break;
+				}
+			case Solution sln:
+				items = sln.GetAllSolutionItems ();
+				break;
+			default:
+				return true;
+			}
+
+			foreach (var item in items) {
+				if (!(item is Project p) || p.FastCheckNeedsBuild (configuration, InitOperationContext (target, context))) {
 					return true;
 				}
 			}
 
 			return false;
 		}
-			
-		bool FastCheckNeedsBuild (IBuildTarget target, ConfigurationSelector configuration)
+
+		static bool FastBuildCheckDisabled ()
 		{
 			var env = Environment.GetEnvironmentVariable ("DisableFastUpToDateCheck");
-			if (!string.IsNullOrEmpty (env) && env != "0" && !env.Equals ("false", StringComparison.OrdinalIgnoreCase))
-				return true;
-
-			var sei = target as Project;
-			if (sei != null) {
-				if (sei.FastCheckNeedsBuild (configuration, InitOperationContext (target, new TargetEvaluationContext ())))
-					return true;
-				//TODO: respect solution level dependencies
-				var deps = new HashSet<SolutionItem> ();
-				CollectReferencedItems (sei, deps, configuration);
-				foreach (var dep in deps.OfType<Project> ()) {
-					if (dep.FastCheckNeedsBuild (configuration, InitOperationContext (target, new TargetEvaluationContext ())))
-						return true;
-				}
-				return false;
-			}
-
-			var sln = target as Solution;
-			if (sln != null) {
-				foreach (var item in sln.GetAllProjects ()) {
-					if (item.FastCheckNeedsBuild (configuration, InitOperationContext (target, new TargetEvaluationContext ())))
-						return true;
-				}
-				return false;
-			}
-
-			//TODO: handle other IBuildTargets
-			return true;
+			return !string.IsNullOrEmpty (env) && env != "0" && !env.Equals ("false", StringComparison.OrdinalIgnoreCase);
 		}
 
-		void CollectReferencedItems (SolutionItem item, HashSet<SolutionItem> collected, ConfigurationSelector configuration)
+		//TODO: respect solution level dependencies
+		static void CollectDependencies (SolutionItem item, HashSet<SolutionItem> collected, ConfigurationSelector configuration)
 		{
 			foreach (var refItem in item.GetReferencedItems (configuration)) {
 				if (collected.Add (refItem)) {
-					CollectReferencedItems (refItem, collected, configuration);
+					CollectDependencies (refItem, collected, configuration);
 				}
 			}
 		}
@@ -1492,15 +1667,19 @@ namespace MonoDevelop.Ide
 					cs = CancellationTokenSource.CreateLinkedTokenSource (cs.Token, cancellationToken.Value);
 				ProgressMonitor monitor = IdeApp.Workbench.ProgressMonitors.GetBuildProgressMonitor ().WithCancellationSource (cs);
 				BeginBuild (monitor, tt, false);
+
 				var t = BuildSolutionItemAsync (entry, monitor, tt, skipPrebuildCheck, operationContext);
-				currentBuildOperation = new AsyncOperation<BuildResult> (t, cs);
+
+				var op = new AsyncOperation<BuildResult> (t, cs);
+				currentBuildOperation = op;
 				currentBuildOperationOwner = entry;
-				t.ContinueWith ((ta) => currentBuildOperationOwner = null);
+
+				t.ContinueWith (ta => { ResetCurrentBuildOperation (); });
+				return op;
 			} catch {
 				tt.End ();
 				throw;
 			}
-			return currentBuildOperation;
 		}
 		
 		async Task<BuildResult> BuildSolutionItemAsync (IBuildTarget entry, ProgressMonitor monitor, ITimeTracker tt, bool skipPrebuildCheck = false, OperationContext operationContext = null)
@@ -1539,7 +1718,7 @@ namespace MonoDevelop.Ide
 		/// Initializes the context to be used for build operations. It currently just initializes
 		/// it with the currently selected execution target.
 		/// </summary>
-		T InitOperationContext<T> (IBuildTarget target, T context) where T:OperationContext
+		static T InitOperationContext<T> (IBuildTarget target, T context) where T:OperationContext
 		{
 			OperationContext ctx = context;
 			if (ctx == null)
@@ -1590,18 +1769,23 @@ namespace MonoDevelop.Ide
 			}
 		}
 
-		async Task<BuildResult> DoBeforeCompileAction ()
+		Task<BuildResult> DoBeforeCompileAction ()
+		{
+			return ApplySavePolicy ();
+		}
+
+		public async Task<BuildResult> ApplySavePolicy ()
 		{
 			BeforeCompileAction action = IdeApp.Preferences.BeforeBuildSaveAction;
 			var result = new BuildResult ();
-			
+
 			switch (action) {
 			case BeforeCompileAction.Nothing: break;
 			case BeforeCompileAction.PromptForSave: await PromptForSave (result); break;
 			case BeforeCompileAction.SaveAllFiles: await SaveAllFiles (result); break;
 			default: System.Diagnostics.Debug.Assert (false); break;
 			}
-			
+
 			return result;
 		}
 
@@ -1622,9 +1806,13 @@ namespace MonoDevelop.Ide
 			tt.Trace ("Begin reporting build result");
 			try {
 				if (result != null) {
-					lastResult = result;
 					monitor.Log.WriteLine ();
-					monitor.Log.WriteLine (GettextCatalog.GetString ("---------------------- Done ----------------------"));
+
+					var msg = GettextCatalog.GetString (
+							"Build: {0} succeeded, {1} failed, {2} up-to-date, {3} skipped",
+							result.SuccessfulBuildCount, result.FailedBuildCount, result.UpToDateBuildCount, result.SkippedBuildCount
+						);
+					monitor.Log.WriteLine ( "========== " + msg + " ==========");
 					
 					tt.Trace ("Updating task service");
 
@@ -1637,7 +1825,7 @@ namespace MonoDevelop.Ide
 
 					if (monitor.CancellationToken.IsCancellationRequested) {
 						monitor.ReportError (GettextCatalog.GetString ("Build canceled."), null);
-					} else if (result.ErrorCount == 0 && result.WarningCount == 0 && lastResult.FailedBuildCount == 0) {
+					} else if (result.ErrorCount == 0 && result.WarningCount == 0 && result.FailedBuildCount == 0) {
 						monitor.ReportSuccess (GettextCatalog.GetString ("Build successful."));
 					} else if (result.ErrorCount == 0 && result.WarningCount > 0) {
 						monitor.ReportWarning(GettextCatalog.GetString("Build: ") + errorString + ", " + warningString);
@@ -1647,7 +1835,7 @@ namespace MonoDevelop.Ide
 						monitor.ReportError(GettextCatalog.GetString("Build failed."), null);
 					}
 					tt.Trace ("End build event");
-					OnEndBuild (monitor, lastResult.FailedBuildCount == 0, lastResult, entry as SolutionFolderItem);
+					OnEndBuild (monitor, result.FailedBuildCount == 0, result, entry as SolutionFolderItem);
 				} else {
 					tt.Trace ("End build event");
 					OnEndBuild (monitor, false);
@@ -1791,7 +1979,7 @@ namespace MonoDevelop.Ide
 			ProgressMonitor monitor = null;
 			
 			if (files.Length > 10) {
-				monitor = new MessageDialogProgressMonitor (true);
+				monitor = new MessageDialogProgressMonitor (true, true, true, true, MessageService.RootWindow);
 				monitor.BeginTask (GettextCatalog.GetString("Adding files..."), files.Length);
 			}
 			
@@ -2203,12 +2391,27 @@ namespace MonoDevelop.Ide
 			
 			monitor.EndTask ();
 		}
-		
+
+		static void GetTargetCopyFileNameParts(FilePath path, out string nameWithoutExtension, out string extension)
+		{
+			// under normal circumstances this is what we would want, foo.cs -> foo and .cs
+			// however, for cases like foo.xaml.cs, we want foo and .xaml.cs
+			nameWithoutExtension = path.FileNameWithoutExtension;
+			extension = path.Extension;
+			var x = Path.GetFileNameWithoutExtension (nameWithoutExtension);
+			while (x != nameWithoutExtension) {
+				extension = Path.GetExtension (nameWithoutExtension) + extension;
+				nameWithoutExtension = x;
+			}
+		}
+
 		internal static FilePath GetTargetCopyName (FilePath path, bool isFolder)
 		{
+			GetTargetCopyFileNameParts (path, out string nameWithoutExtension, out string extension);
+
 			int n=1;
 			// First of all try to find an existing copy tag
-			string fn = path.FileNameWithoutExtension;
+			string fn = nameWithoutExtension;
 			for (int i=1; i<100; i++) {
 				string copyTag = GetCopyTag (i); 
 				if (fn.EndsWith (copyTag)) {
@@ -2223,7 +2426,7 @@ namespace MonoDevelop.Ide
 			FilePath basePath = path;
 			while ((!isFolder && File.Exists (path)) || (isFolder && Directory.Exists (path))) {
 				string copyTag = GetCopyTag (n);
-				path = basePath.ParentDirectory.Combine (basePath.FileNameWithoutExtension + copyTag + basePath.Extension);
+				path = basePath.ParentDirectory.Combine (nameWithoutExtension + copyTag + extension);
 				n++;
 			}
 			return path;
@@ -2413,13 +2616,14 @@ namespace MonoDevelop.Ide
 		public void AddOperation (AsyncOperation op)
 		{
 			Operations.Add (op);
-			op.Task.ContinueWith (CheckForCompletion);
+			op.Task.ContinueWith (t => CheckForCompletion (t));
 		}
 
 		void CheckForCompletion (Task obj)
 		{
-			if (Operations.All (op => op.IsCompleted))
+			if (Operations.All (op => op.IsCompleted)) {
 				TaskCompletionSource.SetResult (0);
+			}
 		}
 
 		void MultiCancel ()

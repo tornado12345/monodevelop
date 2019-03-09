@@ -32,10 +32,20 @@ namespace MonoDevelop.VersionControl.Git
 {
 	abstract class GitVersionControl : VersionControlSystem
 	{
-		readonly Dictionary<FilePath,GitRepository> repositories = new Dictionary<FilePath,GitRepository> ();
+		string version = null;
+
+		const string GitExtension = ".git";
 
 		public override string Name {
 			get { return "Git"; }
+		}
+
+		public override string Version {
+			get {
+				if (version == null)
+					version = LibGit2Sharp.GlobalSettings.Version.InformationalVersion;
+				return version;
+			}
 		}
 
 		public override bool IsInstalled {
@@ -46,12 +56,7 @@ namespace MonoDevelop.VersionControl.Git
 
 		public override Repository GetRepositoryReference (FilePath path, string id)
 		{
-			GitRepository repo;
-			if (!repositories.TryGetValue (path.CanonicalPath, out repo) || repo.Disposed) {
-				repo = new GitRepository (this, path, null);
-				repositories [repo.RootPath.CanonicalPath] = repo;
-			}
-			return repo;
+			return new GitRepository (this, path, null);
 		}
 
 		protected override Repository OnCreateRepositoryInstance ()
@@ -69,16 +74,19 @@ namespace MonoDevelop.VersionControl.Git
 			string repo = LibGit2Sharp.Repository.Discover (path.ResolveLinks ());
 			if (!string.IsNullOrEmpty (repo)) {
 				repo = repo.TrimEnd ('\\', '/');
-				if (repo.EndsWith (".git", System.StringComparison.OrdinalIgnoreCase))
+				if (repo.EndsWith (GitExtension, System.StringComparison.OrdinalIgnoreCase))
 					repo = Path.GetDirectoryName (repo);
 			}
 			return repo;
 		}
 
-		internal void UnregisterRepo (GitRepository repo)
+		public override string GetRelativeCheckoutPathForRemote (string remoteRelativePath)
 		{
-			if (!repo.RootPath.IsNullOrEmpty)
-				repositories.Remove (repo.RootPath.CanonicalPath);
+			remoteRelativePath = base.GetRelativeCheckoutPathForRemote (remoteRelativePath);
+			if (remoteRelativePath.EndsWith (GitExtension, System.StringComparison.CurrentCultureIgnoreCase)) {
+				remoteRelativePath = remoteRelativePath.Substring (0, remoteRelativePath.Length - GitExtension.Length);
+			} 
+			return remoteRelativePath;
 		}
 	}
 }

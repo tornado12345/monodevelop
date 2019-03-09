@@ -70,7 +70,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 		{
 			NSUserDefaults defaults = NSUserDefaults.StandardUserDefaults;
 
-			enabled = new CheckButton ("Enable Accessibility");
+			enabled = new CheckButton (GettextCatalog.GetString ("Enable Accessibility"));
 			enabled.Active = originalSetting = defaults.BoolForKey (EnabledKey);
 			enabled.Visible = true;
 
@@ -128,7 +128,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 		void RestartClicked (object sender, System.EventArgs e)
 		{
 			Save ();
-			IdeApp.Restart (true);
+			IdeApp.Restart (true).Ignore ();
 		}
 	}
 }

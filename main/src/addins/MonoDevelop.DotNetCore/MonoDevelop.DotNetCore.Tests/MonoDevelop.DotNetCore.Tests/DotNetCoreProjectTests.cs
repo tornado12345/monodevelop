@@ -25,6 +25,7 @@
 // THE SOFTWARE.
 
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Xml;
@@ -250,6 +251,221 @@ namespace MonoDevelop.DotNetCore.Tests
 			Assert.IsTrue (project.UseDefaultMetadataForExcludedExpandedItems);
 			Assert.IsTrue (project.UseAdvancedGlobSupport);
 			Assert.IsTrue (project.UseFileWatcher);
+		}
+
+		/// <summary>
+		/// ASP.NET Core projects have different build actions for files in the wwwroot folder. This
+		/// tests that the correct build actions are used for different folders.
+		/// </summary>
+		[Test]
+		public async Task AspNetCoreProject_DefaultBuildActions ()
+		{
+			string projectFileName = Util.GetSampleProject ("aspnetcore", "aspnetcore.csproj");
+			using (var project = (DotNetProject) await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projectFileName)) {
+
+				var fileName = project.BaseDirectory.Combine ("test.txt");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("MyClass.cs");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("Compile", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("MyPage.html");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("MyPage.cshtml");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("Content", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("settings.json");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("Content", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("test.config");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("Content", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("MyPage.resx");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("EmbeddedResource", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("sample.ts");
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("TypeScriptCompile", project.GetDefaultBuildAction (fileName));
+
+				fileName = project.BaseDirectory.Combine ("wwwroot", "MyPage.html");
+				Directory.CreateDirectory (fileName.ParentDirectory);
+				File.WriteAllText (fileName, string.Empty);
+				Assert.AreEqual ("Content", project.GetDefaultBuildAction (fileName));
+			}
+		}
+
+		[Test]
+		public async Task DotNetCoreProject_DefaultBuildActions ()
+		{
+			string solutionFileName = Util.GetSampleProject ("dotnetcore-console", "dotnetcore-sdk-console.sln");
+			solution = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solutionFileName);
+			var project = solution.GetAllProjects ().Single ();
+
+			var fileName = project.BaseDirectory.Combine ("test.txt");
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+
+			fileName = project.BaseDirectory.Combine ("MyClass.cs");
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("Compile", project.GetDefaultBuildAction (fileName));
+
+			fileName = project.BaseDirectory.Combine ("MyPage.html");
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+
+			fileName = project.BaseDirectory.Combine ("MyPage.cshtml");
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+
+			fileName = project.BaseDirectory.Combine ("settings.json");
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+
+			fileName = project.BaseDirectory.Combine ("test.config");
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+
+			fileName = project.BaseDirectory.Combine ("MyPage.resx");
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("EmbeddedResource", project.GetDefaultBuildAction (fileName));
+
+			fileName = project.BaseDirectory.Combine ("wwwroot", "MyPage.html");
+			Directory.CreateDirectory (fileName.ParentDirectory);
+			File.WriteAllText (fileName, string.Empty);
+			Assert.AreEqual ("None", project.GetDefaultBuildAction (fileName));
+		}
+
+		[Test]
+		public async Task ConsoleProjectNoMainPropertyGroup_ChangeToLibraryAndSaveProject_OutputTypeSavedInProject ()
+		{
+			string solutionFileName = Util.GetSampleProject ("DotNetCoreNoMainPropertyGroup", "DotNetCoreNoMainPropertyGroup.sln");
+			solution = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solutionFileName);
+			var project = solution.GetAllDotNetProjects ().Single ();
+
+			// Original project does not have OutputType.
+			var globalPropertyGroup = project.MSBuildProject.GetGlobalPropertyGroup ();
+			Assert.IsFalse (globalPropertyGroup.HasProperty ("OutputType"));
+			Assert.AreEqual (CompileTarget.Exe, project.CompileTarget);
+
+			string outputTypeEvaluatedValue = project.MSBuildProject.EvaluatedProperties.GetValue ("OutputType");
+			Assert.AreEqual ("Exe", outputTypeEvaluatedValue);
+
+			project.CompileTarget = CompileTarget.Library;
+			await project.SaveAsync (Util.GetMonitor ());
+
+			// Reload project.
+			solution.Dispose ();
+			solution = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solutionFileName);
+			project = solution.GetAllDotNetProjects ().Single ();
+
+			globalPropertyGroup = project.MSBuildProject.GetGlobalPropertyGroup ();
+
+			string outputTypeProperty = globalPropertyGroup.GetValue ("OutputType");
+			Assert.AreEqual ("Library", outputTypeProperty);
+			Assert.AreEqual (CompileTarget.Library, project.CompileTarget);
+		}
+
+		[Test]
+		public async Task IsWeb_ProjectHasSdkAttribute ()
+		{
+			string projFile = Util.GetSampleProject ("DotNetCoreSdkFormat", "DotNetCoreProjectSdk", "DotNetCoreProjectSdk.csproj");
+
+			using (var p = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectExtension = p.AsFlavor<DotNetCoreProjectExtension> ();
+
+				Assert.AreEqual ("Microsoft.NET.Sdk", p.MSBuildProject.Sdk);
+				Assert.IsFalse (projectExtension.IsWeb);
+
+				p.MSBuildProject.Sdk = "Microsoft.NET.Sdk.Web";
+				Assert.IsTrue (projectExtension.IsWeb);
+
+				p.MSBuildProject.Sdk = "Microsoft.NET.Sdk;Microsoft.NET.Sdk.Web";
+				Assert.IsTrue (projectExtension.IsWeb);
+			}
+		}
+
+		[Test]
+		public async Task LoadDotNetCoreProjectWithSdkNode ()
+		{
+			string projFile = Util.GetSampleProject ("DotNetCoreSdkFormat", "DotNetCoreSdkNode", "DotNetCoreSdkNode.csproj");
+
+			using (var p = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				Assert.IsTrue (p.HasFlavor<DotNetCoreProjectExtension> ());
+			}
+		}
+
+		[Test]
+		public async Task LoadDotNetCoreProjectWithSdkImports ()
+		{
+			string projFile = Util.GetSampleProject ("DotNetCoreSdkFormat", "DotNetCoreImportSdk", "DotNetCoreImportSdk.csproj");
+
+			using (var p = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				Assert.IsTrue (p.HasFlavor<DotNetCoreProjectExtension> ());
+			}
+		}
+
+		[Test]
+		public async Task SolutionUsingCSharpProjectTypeGuid_SaveSolution_ProjectTypeGuidUnchanged ()
+		{
+			string solutionFileName = Util.GetSampleProject ("dotnetcore-console", "dotnetcore-sdk-console.sln");
+			solution = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solutionFileName);
+			var project = solution.GetAllProjects ().Single ();
+			string solutionFileText = File.ReadAllText (solutionFileName);
+
+			await solution.SaveAsync (Util.GetMonitor ());
+
+			string newSolutionFileText = File.ReadAllText (solutionFileName);
+			Assert.AreEqual ("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}", project.TypeGuid);
+			Assert.AreEqual (solutionFileText, newSolutionFileText);
+		}
+
+		[Test]
+		public async Task SolutionUsingAlternativeVisualStudioProjectTypeGuid_SaveSolution_ProjectTypeGuidUnchanged ()
+		{
+			string solutionFileName = Util.GetSampleProject ("dotnetcore-console", "dotnetcore-alternative-guid.sln");
+			solution = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solutionFileName);
+			var project = solution.GetAllProjects ().Single ();
+			string solutionFileText = File.ReadAllText (solutionFileName);
+
+			await solution.SaveAsync (Util.GetMonitor ());
+
+			string newSolutionFileText = File.ReadAllText (solutionFileName);
+			Assert.AreEqual ("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}", project.TypeGuid);
+			Assert.AreEqual (solutionFileText, newSolutionFileText);
+		}
+
+		[Test]
+		public async Task NetStandard_EnsureGeneratedAssemblyInfoAvailableToTypeSystem ()
+		{
+			var solFile = Util.GetSampleProject ("netstandard-sdk", "netstandard-sdk.sln");
+
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = (Project)sol.Items [0];
+
+				var process = Process.Start ("msbuild", $"/t:Restore \"{solFile}\"");
+				Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
+				Assert.AreEqual (0, process.ExitCode);
+
+				var debugConfig = new SolutionConfigurationSelector ("Debug");
+				var debugSourceFiles = await p.GetSourceFilesAsync (Util.GetMonitor (), debugConfig);
+
+				var releaseConfig = new SolutionConfigurationSelector ("Release");
+				var releaseSourceFiles = await p.GetSourceFilesAsync (Util.GetMonitor (), releaseConfig);
+
+				var expectedDebugAssemblyInfoFile = p.BaseIntermediateOutputPath.Combine ("Debug", "netstandard1.4", "netstandard-sdk.AssemblyInfo.cs");
+				var expectedReleaseAssemblyInfoFile = p.BaseIntermediateOutputPath.Combine ("Release", "netstandard1.4", "netstandard-sdk.AssemblyInfo.cs");
+
+				Assert.IsTrue (debugSourceFiles.Any (f => f.FilePath == expectedDebugAssemblyInfoFile));
+				Assert.IsTrue (releaseSourceFiles.Any (f => f.FilePath == expectedReleaseAssemblyInfoFile));
+			}
 		}
 	}
 }

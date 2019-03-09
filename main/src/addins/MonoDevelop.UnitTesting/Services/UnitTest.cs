@@ -196,9 +196,11 @@ namespace MonoDevelop.UnitTesting
 		public TestStatus Status {
 			get { return status; }
 			set {
+				if (status == value)
+					return;
+
 				status = value;
 				OnTestStatusChanged ();
-				(Parent as UnitTestGroup)?.UpdateStatusFromChildren ();
 			}
 		}
 
@@ -236,7 +238,16 @@ namespace MonoDevelop.UnitTesting
 			get;
 			protected set;
 		}
-		
+
+		/// <summary>
+		/// Used for the text editor integration to identify the source code member connected to the unit test.
+		/// </summary>
+		public string TestSourceCodeDocumentId {
+			get;
+			protected set;
+		}
+
+
 		public string FullName {
 			get {
 				if (parent != null)
@@ -311,8 +322,6 @@ namespace MonoDevelop.UnitTesting
 		{
 			return true;
 		}
-
-		bool building;
 
 		/// <summary>
 		/// Builds the project that contains this unit test or group of unit tests.
@@ -419,6 +428,9 @@ namespace MonoDevelop.UnitTesting
 		
 		protected virtual void OnTestStatusChanged ()
 		{
+			if (parent is UnitTestGroup) {
+				parent.OnTestStatusChanged ();
+			}
 			Gtk.Application.Invoke ((o, args) => {
 				// Run asynchronously in the UI thread
 				if (TestStatusChanged != null)

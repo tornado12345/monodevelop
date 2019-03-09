@@ -28,6 +28,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel.Composition;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Mono.Addins;
@@ -42,18 +43,16 @@ namespace MonoDevelop.AnalysisCore
 		static readonly AnalyzerAssemblyLoader analyzerAssemblyLoader = new AnalyzerAssemblyLoader ();
 		readonly static string diagnosticAnalyzerAssembly = typeof (DiagnosticAnalyzerAttribute).Assembly.GetName ().Name;
 
-		const bool ClrHeapEnabled = false;
-
-		internal OptionsTable Options = new OptionsTable ();
-		readonly ImmutableArray<HostDiagnosticAnalyzerPackage> hostDiagnosticAnalyzerInfo;
+		private TaskCompletionSource<OptionsTable> optionsCompletionSource = new TaskCompletionSource<OptionsTable> ();
+		internal Task<OptionsTable> GetOptionsAsync () => optionsCompletionSource.Task;
+		readonly Task<ImmutableArray<HostDiagnosticAnalyzerPackage>> hostDiagnosticAnalyzerInfoTask;
 
 		const string extensionPath = "/MonoDevelop/Refactoring/AnalyzerAssemblies";
 		string [] RuntimeEnabledAssemblies;
 		public MonoDevelopWorkspaceDiagnosticAnalyzerProviderService ()
 		{
-			LoadAnalyzerAssemblies ();
 			RefactoringEssentials.NRefactory6Host.GetLocalizedString = GettextCatalog.GetString;
-			hostDiagnosticAnalyzerInfo = CreateHostDiagnosticAnalyzerPackages ();
+			hostDiagnosticAnalyzerInfoTask = Task.Run (() => CreateHostDiagnosticAnalyzerPackages ());
 		}
 
 		void LoadAnalyzerAssemblies()
@@ -68,23 +67,20 @@ namespace MonoDevelop.AnalysisCore
 
 		public IEnumerable<HostDiagnosticAnalyzerPackage> GetHostDiagnosticAnalyzerPackages ()
 		{
-			return hostDiagnosticAnalyzerInfo;
+			return hostDiagnosticAnalyzerInfoTask.Result;
 		}
 
 		ImmutableArray<HostDiagnosticAnalyzerPackage> CreateHostDiagnosticAnalyzerPackages ()
 		{
+			LoadAnalyzerAssemblies ();
 			var builder = ImmutableArray.CreateBuilder<HostDiagnosticAnalyzerPackage> ();
 			var assemblies = ImmutableArray.CreateBuilder<string> ();
-
+			var options = new OptionsTable ();
 			foreach (var asm in AppDomain.CurrentDomain.GetAssemblies ()) {
 				try {
 					var assemblyName = asm.GetName ().Name;
 					if (Array.IndexOf (RuntimeEnabledAssemblies, assemblyName) == -1) {
 						switch (assemblyName) {
-						case "ClrHeapAllocationAnalyzer":
-							if (!ClrHeapEnabled)
-								continue;
-							break;
 						//blacklist
 						case "FSharpBinding":
 							continue;
@@ -99,11 +95,12 @@ namespace MonoDevelop.AnalysisCore
 
 					// Figure out a way to disable E&C analyzers.
 					assemblies.Add (asm.Location);
-					Options.ProcessAssembly (asm);
+					options.ProcessAssembly (asm);
 				} catch (Exception e) {
 					LoggingService.LogError ("Error while loading diagnostics in " + asm.FullName, e);
 				}
 			}
+			optionsCompletionSource.SetResult (options);
 			builder.Add (new HostDiagnosticAnalyzerPackage ("MonoDevelop", assemblies.AsImmutable ()));
 
 			// Go through all providers

@@ -35,11 +35,12 @@ using NuGet.Packaging.Core;
 using NuGet.ProjectManagement;
 using NuGet.ProjectModel;
 using NuGet.Versioning;
+using UnitTests;
 
 namespace MonoDevelop.PackageManagement.Tests
 {
 	[TestFixture]
-	public class DotNetCoreNuGetProjectTests
+	public class DotNetCoreNuGetProjectTests : TestBase
 	{
 		DotNetProject dotNetProject;
 		TestableDotNetCoreNuGetProject project;
@@ -65,11 +66,11 @@ namespace MonoDevelop.PackageManagement.Tests
 			return project;
 		}
 
-		void AddDotNetProjectPackageReference (string packageId, string version)
+		ProjectPackageReference AddDotNetProjectPackageReference (string packageId, string version)
 		{
 			var packageReference = ProjectPackageReference.Create (packageId, version);
-
 			dotNetProject.Items.Add (packageReference);
+			return packageReference;
 		}
 
 		Task<bool> UninstallPackageAsync (string packageId, string version)
@@ -193,17 +194,22 @@ namespace MonoDevelop.PackageManagement.Tests
 			Assert.AreEqual (MessageLevel.Warning, context.LastLogLevel);
 		}
 
+		/// <summary>
+		/// Original PackageReference in project should be updated with new version and not removed since this
+		/// will keep any custom metadata added to the PackageReference.
+		/// </summary>
 		[Test]
-		public async Task InstallPackageAsync_PackageAlreadyInstalledWithDifferentVersion_OldPackageReferenceIsRemoved ()
+		public async Task InstallPackageAsync_PackageAlreadyInstalledWithDifferentVersion_OldPackageReferenceIsUpdated ()
 		{
 			CreateNuGetProject ("MyProject");
-			AddDotNetProjectPackageReference ("NUnit", "2.6.1");
+			var nunitPackageReference = AddDotNetProjectPackageReference ("NUnit", "2.6.1");
+			nunitPackageReference.Metadata.SetValue ("PrivateAssets", "All");
 
 			bool result = await InstallPackageAsync ("NUnit", "3.6.0");
 
-			var packageReference = dotNetProject.Items.OfType<ProjectPackageReference> ()
-				.Single ()
-				.CreatePackageReference ();
+			var projectPackageReference = dotNetProject.Items.OfType<ProjectPackageReference> ()
+				.Single ();
+			var packageReference = projectPackageReference.CreatePackageReference ();
 
 			Assert.AreEqual ("NUnit", packageReference.PackageIdentity.Id);
 			Assert.AreEqual ("3.6.0", packageReference.PackageIdentity.Version.ToNormalizedString ());
@@ -211,6 +217,7 @@ namespace MonoDevelop.PackageManagement.Tests
 			Assert.IsTrue (project.IsSaved);
 			Assert.IsFalse (packageReference.HasAllowedVersions);
 			Assert.IsNull (packageReference.AllowedVersions);
+			Assert.AreEqual ("All", projectPackageReference.Metadata.GetValue ("PrivateAssets"));
 		}
 
 		[Test]
@@ -227,23 +234,24 @@ namespace MonoDevelop.PackageManagement.Tests
 		[Test]
 		public async Task GetPackageSpecsAsync_NewProject_BaseIntermediatePathUsedForProjectAssetsJsonFile ()
 		{
-			CreateNuGetProject ("MyProject", @"d:\projects\MyProject\MyProject.csproj");
+			string projectFile = Util.GetSampleProject ("NetStandardXamarinForms", "NetStandardXamarinForms", "NetStandardXamarinForms.csproj");
+			using (var project = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projectFile)) {
 
-			PackageSpec spec = await GetPackageSpecsAsync ();
+				dependencyGraphCacheContext = new DependencyGraphCacheContext ();
+				var nugetProject = new DotNetCoreNuGetProject (project);
+				var specs = await nugetProject.GetPackageSpecsAsync (dependencyGraphCacheContext);
+				var spec = specs.Single ();
 
-			Assert.AreEqual (dotNetProject.FileName.ToString (), spec.FilePath);
-			Assert.AreEqual ("MyProject", spec.Name);
-			Assert.AreEqual ("1.0.0", spec.Version.ToString ());
-			Assert.AreEqual (ProjectStyle.PackageReference, spec.RestoreMetadata.ProjectStyle);
-			Assert.AreEqual ("MyProject", spec.RestoreMetadata.ProjectName);
-			Assert.AreEqual (dotNetProject.FileName.ToString (), spec.RestoreMetadata.ProjectPath);
-			Assert.AreEqual (dotNetProject.FileName.ToString (), spec.RestoreMetadata.ProjectUniqueName);
-			Assert.AreEqual (dotNetProject.BaseIntermediateOutputPath.ToString (), spec.RestoreMetadata.OutputPath);
-			Assert.AreSame (spec, dependencyGraphCacheContext.PackageSpecCache[dotNetProject.FileName.ToString ()]);
-
-			// Cannot currently test this - needs the target framework to be available in the 
-			// MSBuild.EvaluatedProperties
-			//Assert.AreEqual ("netcoreapp1.0", spec.RestoreMetadata.OriginalTargetFrameworks.Single ());
+				Assert.AreEqual (projectFile, spec.FilePath);
+				Assert.AreEqual ("NetStandardXamarinForms", spec.Name);
+				Assert.AreEqual ("1.0.0", spec.Version.ToString ());
+				Assert.AreEqual (ProjectStyle.PackageReference, spec.RestoreMetadata.ProjectStyle);
+				Assert.AreEqual ("NetStandardXamarinForms", spec.RestoreMetadata.ProjectName);
+				Assert.AreEqual (projectFile, spec.RestoreMetadata.ProjectPath);
+				Assert.AreEqual (projectFile, spec.RestoreMetadata.ProjectUniqueName);
+				Assert.AreSame (spec, dependencyGraphCacheContext.PackageSpecCache[projectFile]);
+				Assert.AreEqual ("netstandard1.0", spec.RestoreMetadata.OriginalTargetFrameworks.Single ());
+			}
 		}
 
 		[Test]
@@ -271,23 +279,6 @@ namespace MonoDevelop.PackageManagement.Tests
 			Assert.AreEqual ("NUnit", packageReference.PackageIdentity.Id);
 			Assert.IsTrue (packageReference.IsFloating ());
 			Assert.AreEqual ("2.6.0-*", packageReference.AllowedVersions.Float.ToString ());
-		}
-
-		[Test]
-		public async Task PostProcessAsync_ProjectAssetsFile_NotifyChangeInAssetsFile ()
-		{
-			CreateNuGetProject ();
-			AddDotNetProjectPackageReference ("NUnit", "2.6.0");
-			dotNetProject.BaseIntermediateOutputPath = @"d:\projects\MyProject\obj".ToNativePath ();
-			string fileNameChanged = null;
-			PackageManagementServices.PackageManagementEvents.FileChanged += (sender, e) => {
-				fileNameChanged = e.Single ().FileName;
-			};
-
-			await project.PostProcessAsync (context, CancellationToken.None);
-
-			string expectedFileNameChanged = @"d:\projects\MyProject\obj\project.assets.json".ToNativePath ();
-			Assert.AreEqual (expectedFileNameChanged, fileNameChanged);
 		}
 
 		[Test]
@@ -322,25 +313,6 @@ namespace MonoDevelop.PackageManagement.Tests
 			Assert.AreEqual (dotNetProject.ParentSolution, project.SolutionUsedToCreateBuildIntegratedRestorer);
 			Assert.AreEqual (project, buildIntegratedRestorer.ProjectRestored);
 			Assert.AreEqual ("References", modifiedHint);
-		}
-
-		[Test]
-		public async Task PostProcessAsync_RestoreRunLockFileNotChanged_NotifyChangeInAssetsFile ()
-		{
-			CreateNuGetProject ();
-			AddDotNetProjectPackageReference ("NUnit", "2.6.0");
-			dotNetProject.BaseIntermediateOutputPath = @"d:\projects\MyProject\obj".ToNativePath ();
-			string fileNameChanged = null;
-			PackageManagementServices.PackageManagementEvents.FileChanged += (sender, e) => {
-				fileNameChanged = e.Single ().FileName;
-			};
-			OnAfterExecuteActions ("NUnit", "2.6.3", NuGetProjectActionType.Install);
-
-			await project.PostProcessAsync (context, CancellationToken.None);
-
-			string expectedFileNameChanged = @"d:\projects\MyProject\obj\project.assets.json".ToNativePath ();
-			Assert.AreEqual (expectedFileNameChanged, fileNameChanged);
-			Assert.AreEqual (project, buildIntegratedRestorer.ProjectRestored);
 		}
 
 		/// <summary>
@@ -510,6 +482,21 @@ namespace MonoDevelop.PackageManagement.Tests
 			string cacheFilePath = await project.GetCacheFilePathAsync ();
 
 			Assert.AreEqual (expectedCacheFilePath, cacheFilePath);
+		}
+
+		[Test]
+		public void CanCreate_MSBuildProjectIsNull_DoesNotThrowNullReferenceException ()
+		{
+			var dotNetCoreProject = CreateDotNetCoreProject ();
+			dotNetCoreProject.Dispose ();
+
+			bool result = false;
+			Assert.DoesNotThrow (() => {
+				result = DotNetCoreNuGetProject.CanCreate (dotNetCoreProject);
+			});
+
+			Assert.IsNull (dotNetCoreProject.MSBuildProject);
+			Assert.IsFalse (result);
 		}
 	}
 }

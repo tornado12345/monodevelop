@@ -27,6 +27,7 @@
 using Microsoft.VisualStudio.TestPlatform.ObjectModel;
 using MonoDevelop.UnitTesting.VsTest;
 using NUnit.Framework;
+using System;
 
 namespace MonoDevelop.UnitTesting.Tests
 {
@@ -58,6 +59,7 @@ namespace MonoDevelop.UnitTesting.Tests
 		[TestCase ("A.B.MyTest", "A.B.MyTestDisplayName", "A", "B", "MyTestDisplayName")]
 		[TestCase ("A.B.MyTest", "A.B.MyTest(text: \"ab\")", "A", "B", "MyTest(text: \"ab\")")]
 		[TestCase ("A.B.MyTest", "A.B.MyTest(text: \"a.b\")", "A", "B", "MyTest(text: \"a.b\")")]
+		[TestCase ("MyClass.MyTest", "Name with dot.", "", "MyClass", "Name with dot.")]
 		public void TestName (
 			string fullyQualifiedName,
 			string displayName,
@@ -71,5 +73,36 @@ namespace MonoDevelop.UnitTesting.Tests
 			Assert.AreEqual (expectedFixtureTypeName, test.FixtureTypeName);
 			Assert.AreEqual (expectedName, test.Name);
 		}
+
+		/// <summary>
+		/// Bug 701330: DTS: When adding Unit Test into the application, the application will crash with a stack trace that seems to try to recursively add unit test over 85,000 times
+		/// </summary>
+		[Test]
+		public void TestVSTS701330 ()
+		{
+			var grp = new VsTestNamespaceTestGroup (null, null, null, "Test");
+			var uri = new Uri ("/test/Test.cs");
+			grp.AddTest (new MyVsTestUnitTest ("Test", "Test", "TestCase1"));
+			grp.AddTest (new MyVsTestUnitTest ("Test", "Test.Test", "TestCase1"));
+		}
+
+		/// <summary>
+		/// VSTS Bug 729387: [Feedback] Broken text editor unit test #6735
+		/// </summary>
+		[Test]
+		public void TestVSTS729387 ()
+		{
+			var test = CreateVsUnitTest ("Namespace.MyTest.Test1", "Test1");
+			Assert.AreEqual ("Namespace.MyTest.Test1", test.TestSourceCodeDocumentId);
+		}
+
+		class MyVsTestUnitTest : VsTestUnitTest
+		{
+			public MyVsTestUnitTest (string displayName, string fixtureTypeNamespace, string fixtureTypeName) : base(displayName)
+			{
+				FixtureTypeNamespace = fixtureTypeNamespace;
+				FixtureTypeName = fixtureTypeName;
+		}
+	}
 	}
 }

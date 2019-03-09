@@ -82,6 +82,7 @@ namespace Mono.TextEditor
 
 		internal MonoTextEditor (TextDocument doc, ITextEditorOptions options, EditMode initialMode) 
 		{
+			this.Direction = TextDirection.Ltr;
 			uiThread = Thread.CurrentThread;
 			GtkWorkarounds.FixContainerLeak (this);
 			WidgetFlags |= WidgetFlags.NoWindow;
@@ -923,7 +924,7 @@ namespace Mono.TextEditor
 
 		public void HideTooltip (bool checkMouseOver = true)
 		{
-			textArea.HideTooltip (checkMouseOver);
+			textArea.HideTooltip (TooltipCloseReason.Force);
 		}
 		public Action<Gdk.EventButton> DoPopupMenu {
 			get {

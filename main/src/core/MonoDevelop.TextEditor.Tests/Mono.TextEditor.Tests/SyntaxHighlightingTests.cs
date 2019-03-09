@@ -123,7 +123,7 @@ namespace Mono.TextEditor.Tests
 		public void TestCDATASection ()
 		{
 			TestOutput ("<![CDATA[ test]]>",
-			            "<span foreground=\"#e5da73\">&lt;![CDATA[ test]]&gt;</span>",
+						"<span foreground=\"#e5da73\">&lt;![CDATA[</span><span foreground=\"#eeeeec\"> test</span><span foreground=\"#e5da73\">]]&gt;</span>",
 			            "application/xml");
 		}
 		
@@ -135,7 +135,7 @@ namespace Mono.TextEditor.Tests
 		public void TestBug603 ()
 		{
 			TestOutput ("///<summary>foo bar</summary>",
-			            "<span foreground=\"#789769\">///</span><span foreground=\"#888a85\">&lt;</span><span foreground=\"#719dcf\">summary</span><span foreground=\"#888a85\">&gt;</span><span foreground=\"#789769\">foo bar</span><span foreground=\"#888a85\">&lt;/</span><span foreground=\"#719dcf\">summary</span><span foreground=\"#888a85\">&gt;</span>");
+						"<span foreground=\"#789769\">///</span><span foreground=\"#eeeeec\">&lt;</span><span foreground=\"#719dcf\">summary</span><span foreground=\"#eeeeec\">&gt;</span><span foreground=\"#789769\">foo bar</span><span foreground=\"#eeeeec\">&lt;/</span><span foreground=\"#719dcf\">summary</span><span foreground=\"#eeeeec\">&gt;</span>");
 		}
 
 		[Test]
@@ -212,6 +212,27 @@ namespace Mono.TextEditor.Tests
 			TestOutput ("$\"{foo}\"",
 			  			"<span foreground=\"#e5da73\">$\"{</span><span foreground=\"#eeeeec\">foo</span><span foreground=\"#e5da73\">}\"</span>");
 		}
+		[Test]
+		public void ParseFileTypeTest ()
+		{
+			Assert.AreEqual ("xml", SyntaxHighlightingService.ParseFileType ("\"xml\""));
+			Assert.AreEqual ("xml", SyntaxHighlightingService.ParseFileType ("\".xml\""));
+			Assert.AreEqual ("xml", SyntaxHighlightingService.ParseFileType ("\"xml\","));
+			Assert.AreEqual ("xml", SyntaxHighlightingService.ParseFileType ("\".xml\","));
+			Assert.IsTrue (string.IsNullOrEmpty (SyntaxHighlightingService.ParseFileType ("\"\",")));
+			Assert.IsTrue (string.IsNullOrEmpty (SyntaxHighlightingService.ParseFileType ("\".\",")));
+			Assert.IsTrue (string.IsNullOrEmpty (SyntaxHighlightingService.ParseFileType ("}")));
+		}
 
+		/// <summary>
+		/// VSTS Bug 665407: TypeScript/JavaScript TextMate syntax highlighting errors
+		/// </summary>
+		[Test]
+		public void TestVSTS665407 ()
+		{
+			TestOutput ("function foo(i: string) {}\nfunction foo() {}",
+						"<span foreground=\"#719dcf\">function</span><span foreground=\"#eeeeec\"> foo(i</span><span foreground=\"#719dcf\">:</span><span foreground=\"#eeeeec\"> </span><span foreground=\"#4ec9b0\">string</span><span foreground=\"#eeeeec\">) {}</span>\n<span foreground=\"#719dcf\">function</span><span foreground=\"#eeeeec\"> foo() {}</span>",
+						"text/x-typescript");
+		}
 	}
 }

@@ -28,39 +28,148 @@
 // OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
-
 using System;
-
 using MonoDevelop.Ide.Gui;
-
-using MonoDevelop.DesignerSupport;
-using MonoDevelop.DesignerSupport.Toolbox;
 using MonoDevelop.Components;
+using Xwt;
+using Gtk;
+#if MAC
+using MonoDevelop.Components.Mac;
+#endif
 
 namespace MonoDevelop.DesignerSupport
 {
-	
 	public class ToolboxPad : PadContent
 	{
-		Toolbox.Toolbox toolbox;
-		
-		public ToolboxPad ()
+		Gtk.Widget widget;
+
+#if MAC
+		Toolbox.MacToolbox toolbox;
+		IPadWindow window;
+#endif
+		protected override void Initialize (IPadWindow window)
 		{
-		}
-		
-		protected override void Initialize (IPadWindow container)
-		{
-			base.Initialize (container);
-			toolbox = new Toolbox.Toolbox (DesignerSupport.Service.ToolboxService, container);
+			base.Initialize (window);
+#if MAC
+			this.window = window;
+			toolbox = new Toolbox.MacToolbox (DesignerSupport.Service.ToolboxService, window);
+			widget = GtkMacInterop.NSViewToGtkWidget (toolbox);
+			widget.CanFocus = true;
+			widget.Sensitive = true;
+			widget.KeyPressEvent += toolbox.OnKeyPressed;
+			widget.KeyReleaseEvent += toolbox.KeyReleased;
+
+			widget.DragBegin += Widget_DragBegin;
+			widget.DragEnd += Widget_DragEnd;
+			widget.Focused += Widget_Focused;
+
+			this.window.PadContentShown += Container_PadContentShown;
+			this.window.PadContentHidden += Container_PadContentHidden;
+
+			toolbox.ContentFocused += Toolbox_ContentFocused;
+			toolbox.DragSourceSet += Toolbox_DragSourceSet;
+			toolbox.DragBegin += Toolbox_DragBegin;
+
+			widget.ShowAll ();
+#else
+			widget = new Toolbox.Toolbox (DesignerSupport.Service.ToolboxService, window);
+#endif
 		}
 
-		
-		#region AbstractPadContent implementations
+#if MAC
+
+		void Container_PadContentShown (object sender, EventArgs args) => toolbox.Hidden = false;
+		void Container_PadContentHidden (object sender, EventArgs args) => toolbox.Hidden = true;
+
+		private void Widget_DragEnd (object o, DragEndArgs args)
+		{
+			isDragging = false;
+		}
+
+		void Widget_Focused (object sender, EventArgs args)
+		{
+			toolbox.FocusSelectedView();
+		}
+
+		void Widget_DragBegin (object sender, DragBeginArgs args)
+		{
+			if (!isDragging) {
+				DesignerSupport.Service.ToolboxService.DragSelectedItem (widget, args.Context);
+				isDragging = true;
+			}
+		}
+
+		void Toolbox_DragSourceSet (object sender, Gtk.TargetEntry [] e)
+		{
+			targets = new Gtk.TargetList ();
+			targets.AddTable (e);
+		}
+
+		void Toolbox_ContentFocused (object sender, EventArgs args)
+		{
+			if (!widget.HasFocus) {
+				widget.HasFocus = true;
+				toolbox.FocusSelectedView ();
+			}
+		}
+
+		void Toolbox_DragBegin (object sender, EventArgs args)
+		{
+			var selectedNode = toolbox.SelectedNode;
+			if (!isDragging && selectedNode != null) {
+
+				DesignerSupport.Service.ToolboxService.SelectItem (selectedNode);
+
+				Gtk.Drag.SourceUnset (widget);
+
+				// Gtk.Application.CurrentEvent and other copied gdk_events seem to have a problem
+				// when used as they use gdk_event_copy which seems to crash on de-allocating the private slice.
+				IntPtr currentEvent = GtkWorkarounds.GetCurrentEventHandle ();
+				Gtk.Drag.Begin (widget, targets, Gdk.DragAction.Copy | Gdk.DragAction.Move, 1, new Gdk.Event (currentEvent, false));
+
+				// gtk_drag_begin does not store the event, so we're okay
+				GtkWorkarounds.FreeEvent (currentEvent);
+			}
+		}
+
+		Gtk.TargetList targets = new Gtk.TargetList ();
+		bool isDragging;
+
+		public override void Dispose ()
+		{
+			if (window != null) {
+				window.PadContentShown -= Container_PadContentShown;
+				window.PadContentHidden -= Container_PadContentHidden;
+				window = null;
+			}
+
+			if (widget != null) {
+				widget.DragBegin -= Widget_DragBegin;
+				widget.DragEnd -= Widget_DragEnd;
+				widget.Focused -= Widget_Focused;
+				widget.KeyPressEvent -= toolbox.OnKeyPressed;
+				widget.KeyReleaseEvent -= toolbox.KeyReleased;
+				widget.Destroy ();
+				widget.Dispose ();
+				widget = null;
+			}
+			if (toolbox != null) {
+				toolbox.ContentFocused -= Toolbox_ContentFocused;
+				toolbox.DragBegin -= Toolbox_DragBegin;
+				toolbox.DragSourceSet -= Toolbox_DragSourceSet;
+				toolbox.Dispose ();
+				toolbox = null;
+			}
+			base.Dispose ();
+		}
+#endif
+
+#region AbstractPadContent implementations
 		
 		public override Control Control {
-			get { return toolbox; }
+			get { return widget; }
 		}
 		
-		#endregion
+#endregion
 	}
 }

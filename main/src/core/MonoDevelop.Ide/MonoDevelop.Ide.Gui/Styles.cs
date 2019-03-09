@@ -49,6 +49,7 @@ namespace MonoDevelop.Ide.Gui
 		public static Color BaseIconColor { get; internal set; }
 		public static Color LinkForegroundColor { get; internal set; }
 		public static Color BorderColor { get; internal set; }
+		public static Color FrameBoxBorderColor { get; internal set; }
 		public static Color SecondaryTextColor { get; internal set; }
 		public static string SecondaryTextColorHexString { get; internal set; }
 		public static Color SecondarySelectionTextColor { get; internal set; }
@@ -285,6 +286,14 @@ namespace MonoDevelop.Ide.Gui
 			public static Color KeyConflictForegroundColor { get; internal set; }
 		}
 
+		// Notification bar
+		internal static class NotificationBar
+		{
+			public static Color BarBackgroundColor { get; internal set; }
+			public static Color ButtonLabelColor { get; internal set; }
+			public static Color BarBorderColor { get; } = Color.FromName ("#000000").WithAlpha (0.1);
+		}
+
 		// Helper methods
 
 		internal static Color Shift (Color color, double factor)
@@ -458,14 +467,15 @@ namespace MonoDevelop.Ide.Gui
 		{
 			BaseIconColor = Color.FromName ("#575757");
 			BorderColor = Color.FromName ("#eeeeee");
+			FrameBoxBorderColor = Color.FromName ("#a3a3a3");
 			ThinSplitterColor = Color.FromName ("#dadada");
 			SeparatorColor = Color.FromName ("#f2f2f4");
 			PrimaryBackgroundColor = BaseBackgroundColor;
 			SecondaryBackgroundDarkerColor = Color.FromName ("#e7eaee");
 			SecondaryBackgroundLighterColor = Color.FromName ("#f9f9fb");
-			SecondaryTextColorHexString = "#888888";
+			SecondaryTextColorHexString = "#767676";
 			SecondaryTextColor = Color.FromName (SecondaryTextColorHexString);
-			SecondarySelectionTextColor = Color.FromName ("#93cbff");
+			SecondarySelectionTextColor = Color.FromName ("#ffffff");
 			PadBackground = Color.FromName ("#fafafa");
 			InactivePadBackground = Color.FromName ("#e8e8e8");
 			InactivePadLabelColor = Color.FromName ("#777777");
@@ -481,13 +491,13 @@ namespace MonoDevelop.Ide.Gui
 			InformationForegroundColor = Color.FromName ("#5785bd");
 
 			StatusWarningBackgroundColor = Color.FromName ("#f1c40f");
-			StatusWarningTextColor = BaseBackgroundColor;
+			StatusWarningTextColor = Color.FromName ("#000000");
 			WarningBoxBackgroundColor = StatusWarningBackgroundColor;
 			WarningBoxForegroundColor = Color.FromName ("#000000");
-			WarningForegroundColor = Color.FromName ("#a08000");
+			WarningForegroundColor = Color.FromName ("#986923");
 
 			StatusErrorBackgroundColor = Color.FromName ("#f56d4f");
-			StatusErrorTextColor = BaseBackgroundColor;
+			StatusErrorTextColor = Color.FromName ("#000000");
 			ErrorBoxBackgroundColor = StatusErrorBackgroundColor;
 			ErrorBoxForegroundColor = Color.FromName ("#000000");
 			ErrorForegroundColor = Color.FromName ("#db6246");
@@ -551,39 +561,45 @@ namespace MonoDevelop.Ide.Gui
 			CodeCompletion.SelectionBackgroundInactiveColor = Color.FromName ("#7e96c0");
 			CodeCompletion.SelectionHighlightColor = CodeCompletion.HighlightColor;
 
+			// Wizards
+
+			Wizard.BannerBackgroundColor = Color.FromName ("#f5f5f5");
+			Wizard.BannerShadowColor = Color.FromName ("#e0e0e0");
+			Wizard.BannerForegroundColor = Color.FromName ("#6b6b6b");
+			Wizard.BannerSecondaryForegroundColor = SecondaryTextColor;
+			Wizard.PageSeparatorColor = ThinSplitterColor;
+			Wizard.ContentSeparatorColor = Color.FromName ("#d2d5d9");
+			Wizard.ContentShadowColor = ThinSplitterColor;
+
 			// New Project Dialog
 
-			NewProjectDialog.BannerBackgroundColor = Color.FromName ("#77828c");
-			NewProjectDialog.BannerLineColor = Color.FromName ("#707a83");
-			NewProjectDialog.BannerForegroundColor = BaseBackgroundColor;
+			NewProjectDialog.BannerBackgroundColor = Wizard.BannerBackgroundColor;
+			NewProjectDialog.BannerLineColor = Wizard.BannerShadowColor;
+			NewProjectDialog.BannerForegroundColor = Wizard.BannerForegroundColor;
 			NewProjectDialog.TemplateListBackgroundColor = Color.FromName ("#f9f9fa");
 			NewProjectDialog.TemplateSectionSeparatorColor = Color.FromName ("#e2e2e2");
 			NewProjectDialog.TemplateLanguageButtonBackground = BaseBackgroundColor;
 			NewProjectDialog.ProjectConfigurationSeparatorColor = Color.FromName ("#d2d5d9");
 
-			// Wizards
+			// Notification Bar
 
-			Wizard.BannerBackgroundColor = Color.FromName ("#77828c");
-			Wizard.BannerShadowColor = Color.FromName ("#707a83");
-			Wizard.BannerForegroundColor = BaseBackgroundColor;
-			Wizard.BannerSecondaryForegroundColor = SecondaryTextColor;
-			Wizard.PageSeparatorColor = ThinSplitterColor;
-			Wizard.ContentSeparatorColor = Color.FromName ("#d2d5d9");
-			Wizard.ContentShadowColor = ThinSplitterColor;
+			NotificationBar.BarBackgroundColor = Color.FromName ("#f3f3f3");
+			NotificationBar.ButtonLabelColor = Color.FromName ("#444444");
 		}
 
 		internal static void LoadDarkStyle ()
 		{
 			BaseIconColor = Color.FromName ("#bfbfbf");
 			BorderColor = Color.FromName ("#2e2e2e");
+			FrameBoxBorderColor = BorderColor;
 			ThinSplitterColor = BorderColor;
 			SeparatorColor = Color.FromName ("#4b4b4b");
 			PrimaryBackgroundColor = BaseBackgroundColor;
 			SecondaryBackgroundDarkerColor = Color.FromName ("#484848");
 			SecondaryBackgroundLighterColor = SeparatorColor;
-			SecondaryTextColorHexString = "#777777";
+			SecondaryTextColorHexString = "#ababab";
 			SecondaryTextColor = Color.FromName (SecondaryTextColorHexString);
-			SecondarySelectionTextColor = Color.FromName ("#93cbff");
+			SecondarySelectionTextColor = Color.FromName ("#ffffff");
 			PadBackground = Color.FromName ("#525252");
 			InactivePadBackground = Color.FromName ("#474747");
 			InactivePadLabelColor = Color.FromName ("#999999");
@@ -599,13 +615,13 @@ namespace MonoDevelop.Ide.Gui
 			InformationForegroundColor = Color.FromName ("#9cc8ff");
 
 			StatusWarningBackgroundColor = Color.FromName ("#ffcf0f");
-			StatusWarningTextColor = Color.FromName ("#665206");
+			StatusWarningTextColor = Color.FromName ("#000000");
 			WarningBoxBackgroundColor = StatusWarningBackgroundColor;
 			WarningBoxForegroundColor = Color.FromName ("#000000");
 			WarningForegroundColor = Color.FromName ("#ffd21c");
 
 			StatusErrorBackgroundColor = Color.FromName ("#ff7152");
-			StatusErrorTextColor = Color.FromName ("#662d20");
+			StatusErrorTextColor = Color.FromName ("#000000");
 			ErrorBoxBackgroundColor = StatusErrorBackgroundColor;
 			ErrorBoxForegroundColor = Color.FromName ("#000000");
 			ErrorForegroundColor = Color.FromName ("#ff866b");
@@ -667,25 +683,31 @@ namespace MonoDevelop.Ide.Gui
 			CodeCompletion.SelectionBackgroundInactiveColor = Color.FromName ("#7e96c0");
 			CodeCompletion.SelectionHighlightColor = CodeCompletion.HighlightColor;
 
+			// Wizards
+
+			Wizard.BannerBackgroundColor = Color.FromName ("#333333");
+			Wizard.BannerShadowColor = Color.FromName ("#2e2e2e");
+			Wizard.BannerForegroundColor = Color.FromName ("#c2c2c2");
+			Wizard.BannerSecondaryForegroundColor = SecondaryTextColor;
+			Wizard.PageSeparatorColor = ThinSplitterColor;
+			Wizard.ContentSeparatorColor = Color.FromName ("#6e6e6e");
+			Wizard.ContentShadowColor = ThinSplitterColor;
+
 			// New Project Dialog
 
-			NewProjectDialog.BannerBackgroundColor = Color.FromName ("#6a737e");
-			NewProjectDialog.BannerLineColor = NewProjectDialog.BannerBackgroundColor;
-			NewProjectDialog.BannerForegroundColor = Color.FromName ("#ffffff");
+			NewProjectDialog.BannerBackgroundColor = Wizard.BannerBackgroundColor;
+			NewProjectDialog.BannerLineColor = Wizard.BannerShadowColor;
+			NewProjectDialog.BannerForegroundColor = Wizard.BannerForegroundColor;
 			NewProjectDialog.TemplateListBackgroundColor = DockBarBackground;
 			NewProjectDialog.TemplateSectionSeparatorColor = ThinSplitterColor;
 			NewProjectDialog.TemplateLanguageButtonBackground = SecondaryBackgroundDarkerColor;
 			NewProjectDialog.ProjectConfigurationSeparatorColor = Color.FromName ("#6e6e6e");
 
-			// Wizards
+			// Notification Bar
 
-			Wizard.BannerBackgroundColor = Color.FromName ("#6a737e");
-			Wizard.BannerShadowColor = Wizard.BannerBackgroundColor;
-			Wizard.BannerForegroundColor = Color.FromName ("#ffffff");
-			Wizard.BannerSecondaryForegroundColor = SecondaryTextColor;
-			Wizard.PageSeparatorColor = ThinSplitterColor;
-			Wizard.ContentSeparatorColor = Color.FromName ("#6e6e6e");
-			Wizard.ContentShadowColor = ThinSplitterColor;
+			NotificationBar.BarBackgroundColor = Color.FromName ("#222222");
+			NotificationBar.ButtonLabelColor = Color.FromName ("#BEBEBE");
+
 		}
 
 		static StylesStringTagModel tagModel;

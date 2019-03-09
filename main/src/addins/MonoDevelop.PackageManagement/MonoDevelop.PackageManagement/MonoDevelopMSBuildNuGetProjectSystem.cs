@@ -36,7 +36,7 @@ using NuGet.ProjectManagement;
 
 namespace MonoDevelop.PackageManagement
 {
-	internal class MonoDevelopMSBuildNuGetProjectSystem : IMSBuildProjectSystem
+	internal class MonoDevelopMSBuildNuGetProjectSystem : IMSBuildProjectSystem, IProjectReferenceMaintainer
 	{
 		IDotNetProject project;
 		NuGetFramework targetFramework;
@@ -76,6 +76,8 @@ namespace MonoDevelop.PackageManagement
 			this.guiSyncDispatcher = guiSyncDispatcher;
 			this.guiSyncDispatcherFunc = guiSyncDispatcherFunc;
 			this.guiSyncDispatcherFuncReturnBool = guiSyncDispatcherFuncReturnBool;
+
+			ProjectReferenceMaintainer = this;
 		}
 
 		public INuGetProjectContext NuGetProjectContext { get; set; }
@@ -157,18 +159,12 @@ namespace MonoDevelop.PackageManagement
 			if (ShouldAddFileToProject (path)) {
 				await AddFileProjectItemToProject (path);
 			}
-			OnFileChanged (path);
 			LogAddedFileToProject (path);
 		}
 
 		bool ShouldAddFileToProject (string path)
 		{
 			return !IsBinDirectory (path) && !FileExistsInProject (path);
-		}
-
-		void OnFileChanged (string path)
-		{
-			GuiSyncDispatch (() => fileService.OnFileChanged (GetFullPath (path)));
 		}
 
 		bool IsBinDirectory(string path)
@@ -266,8 +262,7 @@ namespace MonoDevelop.PackageManagement
 
 		async Task AddReferenceToProject (ProjectReference assemblyReference)
 		{
-			project.References.Add (assemblyReference);
-			await project.SaveAsync ();
+			await ProjectReferenceMaintainer.AddReference (assemblyReference);
 			LogAddedReferenceToProject (assemblyReference);
 		}
 
@@ -406,7 +401,7 @@ namespace MonoDevelop.PackageManagement
 		ProjectReference FindReference (string name)
 		{
 			string referenceName = GetReferenceName (name);
-			foreach (ProjectReference referenceProjectItem in project.References) {
+			foreach (ProjectReference referenceProjectItem in ProjectReferenceMaintainer.GetReferences ()) {
 				string projectReferenceName = GetProjectReferenceName (referenceProjectItem.Reference);
 				if (IsMatchIgnoringCase (projectReferenceName, referenceName)) {
 					return referenceProjectItem;
@@ -515,8 +510,7 @@ namespace MonoDevelop.PackageManagement
 				ProjectReference referenceProjectItem = FindReference (name);
 				if (referenceProjectItem != null) {
 					packageManagementEvents.OnReferenceRemoving (referenceProjectItem);
-					project.References.Remove (referenceProjectItem);
-					await project.SaveAsync ();
+					await ProjectReferenceMaintainer.RemoveReference (referenceProjectItem);
 					LogRemovedReferenceFromProject (referenceProjectItem);
 				}
 			});
@@ -584,6 +578,25 @@ namespace MonoDevelop.PackageManagement
 		}
 
 		public dynamic VSProject4 { get; private set; }
+
+		internal IProjectReferenceMaintainer ProjectReferenceMaintainer { get; set; }
+
+		IEnumerable<ProjectReference> IProjectReferenceMaintainer.GetReferences ()
+		{
+			return project.References;
+		}
+
+		async Task IProjectReferenceMaintainer.AddReference (ProjectReference reference)
+		{
+			project.References.Add (reference);
+			await project.SaveAsync ();
+		}
+
+		async Task IProjectReferenceMaintainer.RemoveReference (ProjectReference reference)
+		{
+			project.References.Remove (reference);
+			await project.SaveAsync ();
+		}
 	}
 }
 

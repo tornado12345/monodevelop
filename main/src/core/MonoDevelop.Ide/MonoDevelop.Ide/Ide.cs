@@ -49,6 +49,8 @@ using MonoDevelop.Ide.TypeSystem;
 using MonoDevelop.Ide.Extensions;
 using MonoDevelop.Ide.Templates;
 using System.Threading.Tasks;
+using MonoDevelop.Ide.RoslynServices.Options;
+using MonoDevelop.Ide.RoslynServices;
 
 namespace MonoDevelop.Ide
 {
@@ -61,14 +63,12 @@ namespace MonoDevelop.Ide
 		static CommandManager commandService;
 		static IdeServices ideServices;
 		static RootWorkspace workspace;
-		static IdePreferences preferences;
-
-		public const int CurrentRevision = 5;
+		readonly static IdePreferences preferences;
 
 		static bool isMainRunning;
 		static bool isInitialRun;
 		static bool isInitialRunAfterUpgrade;
-		static int upgradedFromRevision;
+		static Version upgradedFromVersion;
 		
 		public static event ExitEventHandler Exiting;
 		public static event EventHandler Exited;
@@ -86,6 +86,24 @@ namespace MonoDevelop.Ide
 					initializedEvent -= value;
 				});
 			}
+		}
+
+		static EventHandler startupCompleted;
+		public static event EventHandler StartupCompleted {
+			add {
+				Runtime.RunInMainThread (() => {
+					startupCompleted += value;
+				});
+			}
+			remove {
+				Runtime.RunInMainThread (() => {
+					startupCompleted -= value;
+				});
+			}
+		}
+		internal static void OnStartupCompleted ()
+		{
+			startupCompleted?.Invoke (null, EventArgs.Empty);
 		}
 
 		internal static IdeCustomizer Customizer { get; set; }
@@ -142,9 +160,7 @@ namespace MonoDevelop.Ide
 			get { return ideServices; }
 		}
 
-		public static IdePreferences Preferences {
-			get { return preferences; }
-		}
+		public static IdePreferences Preferences => preferences;
 
 		public static bool IsInitialized {
 			get {
@@ -163,8 +179,8 @@ namespace MonoDevelop.Ide
 		}
 		
 		// If IsInitialRunAfterUpgrade is true, returns the previous version
-		public static int UpgradedFromRevision {
-			get { return upgradedFromRevision; }
+		public static Version UpgradedFromVersion {
+			get { return upgradedFromVersion; }
 		}
 		
 		public static Version Version {
@@ -172,8 +188,24 @@ namespace MonoDevelop.Ide
 				return Runtime.Version;
 			}
 		}
-		
-		public static void Initialize (ProgressMonitor monitor)
+
+		// This flag tells us whether or not the solution being loaded was from the file manager.
+		static bool reportTimeToCode;
+		static bool fmTimeoutExpired;
+		public static bool ReportTimeToCode {
+			get => reportTimeToCode && !fmTimeoutExpired;
+			set {
+				reportTimeToCode = value;
+				if (fmTimeoutId > 0) {
+					GLib.Source.Remove (fmTimeoutId);
+					fmTimeoutId = 0;
+				}
+			}
+		}
+
+		public static void Initialize (ProgressMonitor monitor) => Initialize (monitor, false);
+
+		internal static void Initialize (ProgressMonitor monitor, bool hideWelcomePage)
 		{
 			// Already done in IdeSetup, but called again since unit tests don't use IdeSetup.
 			DispatchService.Initialize ();
@@ -201,8 +233,8 @@ namespace MonoDevelop.Ide
 			};
 			
 			FileService.ErrorHandler = FileServiceErrorHandler;
-		
-			monitor.BeginTask (GettextCatalog.GetString("Loading Workbench"), 6);
+
+			monitor.BeginTask (GettextCatalog.GetString("Loading Workbench"), 5);
 			Counters.Initialization.Trace ("Loading Commands");
 			
 			commandService.LoadCommands ("/MonoDevelop/Ide/Commands");
@@ -216,27 +248,22 @@ namespace MonoDevelop.Ide
 			Counters.Initialization.Trace ("Initializing Workbench");
 			workbench.Initialize (monitor);
 			monitor.Step (1);
-			
+
+			Counters.Initialization.Trace ("Initializing WelcomePage service");
 			MonoDevelop.Ide.WelcomePage.WelcomePageService.Initialize ();
-			MonoDevelop.Ide.WelcomePage.WelcomePageService.ShowWelcomePage ();
-
 			monitor.Step (1);
 
-			Counters.Initialization.Trace ("Restoring Workbench State");
-			workbench.Show ("SharpDevelop.Workbench.WorkbenchMemento");
+			Counters.Initialization.Trace ("Realizing Workbench Window");
+			workbench.Realize ("SharpDevelop.Workbench.WorkbenchMemento");
 			monitor.Step (1);
-			
-			Counters.Initialization.Trace ("Flushing GUI events");
-			DispatchService.RunPendingEvents ();
-			Counters.Initialization.Trace ("Flushed GUI events");
-			
+
 			MessageService.RootWindow = workbench.RootWindow;
 			Xwt.MessageDialog.RootWindow = Xwt.Toolkit.CurrentEngine.WrapWindow (workbench.RootWindow);
 		
 			commandService.EnableIdleUpdate = true;
 
 			if (Customizer != null)
-				Customizer.OnIdeInitialized ();
+				Customizer.OnIdeInitialized (hideWelcomePage);
 			
 			// Startup commands
 			Counters.Initialization.Trace ("Running Startup Commands");
@@ -247,51 +274,26 @@ namespace MonoDevelop.Ide
 			// Set initial run flags
 			Counters.Initialization.Trace ("Upgrading Settings");
 
-			if (PropertyService.Get("MonoDevelop.Core.FirstRun", false)) {
+			if (PropertyService.Get("MonoDevelop.Core.FirstRun", true)) {
 				isInitialRun = true;
 				PropertyService.Set ("MonoDevelop.Core.FirstRun", false);
-				PropertyService.Set ("MonoDevelop.Core.LastRunVersion", BuildInfo.Version);
-				PropertyService.Set ("MonoDevelop.Core.LastRunRevision", CurrentRevision);
+				PropertyService.Set ("MonoDevelop.Core.LastRunVersion", Runtime.Version.ToString ());
 				PropertyService.SaveProperties ();
 			}
 
-			string lastVersion = PropertyService.Get ("MonoDevelop.Core.LastRunVersion", "1.9.1");
-			int lastRevision = PropertyService.Get ("MonoDevelop.Core.LastRunRevision", 0);
-			if (lastRevision != CurrentRevision && !isInitialRun) {
+			string lastVersionString = PropertyService.Get ("MonoDevelop.Core.LastRunVersion", "1.0");
+			Version.TryParse (lastVersionString, out var lastVersion);
+
+			if (Runtime.Version > lastVersion && !isInitialRun) {
 				isInitialRunAfterUpgrade = true;
-				if (lastRevision == 0) {
-					switch (lastVersion) {
-						case "1.0": lastRevision = 1; break;
-						case "2.0": lastRevision = 2; break;
-						case "2.2": lastRevision = 3; break;
-						case "2.2.1": lastRevision = 4; break;
-					}
-				}
-				upgradedFromRevision = lastRevision;
-				PropertyService.Set ("MonoDevelop.Core.LastRunVersion", BuildInfo.Version);
-				PropertyService.Set ("MonoDevelop.Core.LastRunRevision", CurrentRevision);
+				upgradedFromVersion = lastVersion;
+				PropertyService.Set ("MonoDevelop.Core.LastRunVersion", Runtime.Version.ToString ());
 				PropertyService.SaveProperties ();
 			}
 			
 			// The ide is now initialized
 
 			isInitialized = true;
-			
-			if (isInitialRun) {
-				try {
-					OnInitialRun ();
-				} catch (Exception e) {
-					LoggingService.LogError ("Error found while initializing the IDE", e);
-				}
-			}
-
-			if (isInitialRunAfterUpgrade) {
-				try {
-					OnUpgraded (upgradedFromRevision);
-				} catch (Exception e) {
-					LoggingService.LogError ("Error found while initializing the IDE", e);
-				}
-			}
 			
 			if (initializedEvent != null) {
 				initializedEvent (null, EventArgs.Empty);
@@ -315,7 +317,23 @@ namespace MonoDevelop.Ide
 		{
 			Ide.IdeApp.Workbench.StatusBar.ShowWarning (e.Message);
 		}
-		
+
+		static readonly uint fmTimeoutMs = 2500;
+		static uint fmTimeoutId;
+		internal static void StartFMOpenTimer (Action timeCompletion)
+		{
+			// We only track time to code if the reportTimeToCode flag is set within fmTimeoutMs from this method being called
+			fmTimeoutId = GLib.Timeout.Add (fmTimeoutMs, () => FMOpenTimerExpired (timeCompletion));
+		}
+
+		static bool FMOpenTimerExpired (Action timeCompletion)
+		{
+			fmTimeoutExpired = true;
+			fmTimeoutId = 0;
+			timeCompletion ();
+			return false;
+		}
+
 		//this method is MIT/X11, 2009, Michael Hutchinson / (c) Novell
 		public static void OpenFiles (IEnumerable<FileOpenInformation> files)
 		{
@@ -323,7 +341,7 @@ namespace MonoDevelop.Ide
 		}
 
 		//this method is MIT/X11, 2009, Michael Hutchinson / (c) Novell
-		internal static async void OpenFiles (IEnumerable<FileOpenInformation> files, IDictionary<string, string> metadata)
+		internal static async void OpenFiles (IEnumerable<FileOpenInformation> files, OpenWorkspaceItemMetadata metadata)
 		{
 			if (!files.Any ())
 				return;
@@ -339,7 +357,11 @@ namespace MonoDevelop.Ide
 			}
 			
 			var filteredFiles = new List<FileOpenInformation> ();
-			bool closeCurrent = true;
+
+			Gdk.ModifierType mtype = Components.GtkWorkarounds.GetCurrentKeyModifiers ();
+			bool closeCurrent = !mtype.HasFlag (Gdk.ModifierType.ControlMask);
+			if (Platform.IsMac && closeCurrent)
+				closeCurrent = !mtype.HasFlag (Gdk.ModifierType.Mod2Mask);
 
 			foreach (var file in files) {
 				if (Services.ProjectService.IsWorkspaceItemFile (file.FileName) ||
@@ -387,10 +409,18 @@ namespace MonoDevelop.Ide
 		{
 			if (args.Change == ExtensionChange.Add) {
 				try {
-					if (typeof(CommandHandler).IsInstanceOfType (args.ExtensionObject))
-						typeof(CommandHandler).GetMethod ("Run", System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance, null, Type.EmptyTypes, null).Invoke (args.ExtensionObject, null);
-					else
+#if DEBUG
+					// Only show this in debug builds for now, we want to enable this later for addins that might delay
+					// IDE startup.
+					if (args.ExtensionNode is TypeExtensionNode node) {
+						LoggingService.LogDebug ("Startup command handler: {0}", node.TypeName);
+					}
+#endif
+					if (args.ExtensionObject is CommandHandler handler) {
+						handler.InternalRun ();
+					} else {
 						LoggingService.LogError ("Type " + args.ExtensionObject.GetType () + " must be a subclass of MonoDevelop.Components.Commands.CommandHandler");
+					}
 				} catch (Exception ex) {
 					LoggingService.LogError (ex.ToString ());
 				}
@@ -408,16 +438,20 @@ namespace MonoDevelop.Ide
 			get { return isMainRunning; }
 		}
 
+		public static bool IsExiting { get; private set; }
+
 		/// <summary>
 		/// Exits MonoDevelop. Returns false if the user cancels exiting.
 		/// </summary>
 		public static async Task<bool> Exit ()
 		{
+			IsExiting = true;
 			if (await workbench.Close ()) {
 				Gtk.Application.Quit ();
 				isMainRunning = false;
 				return true;
 			}
+			IsExiting = false;
 			return false;
 		}
 
@@ -433,6 +467,9 @@ namespace MonoDevelop.Ide
 		public static async Task<bool> Restart (bool reopenWorkspace = false)
 		{
 			if (await Exit ()) {
+				// Log that we restarted ourselves
+				PropertyService.Set ("MonoDevelop.Core.RestartRequested", true);
+
 				try {
 					DesktopService.RestartIde (reopenWorkspace);
 				} catch (Exception ex) {
@@ -560,35 +597,6 @@ namespace MonoDevelop.Ide
 				Exited (null, EventArgs.Empty);
 		}
 
-		static void OnInitialRun ()
-		{
-			SetInitialLayout ();
-		}
-
-		static void OnUpgraded (int previousRevision)
-		{
-			if (previousRevision <= 3) {
-				// Reset the current runtime when upgrading from <2.2, to ensure the default runtime is not stuck to an old mono install
-				IdeApp.Preferences.DefaultTargetRuntime.Value = Runtime.SystemAssemblyService.CurrentRuntime;
-			}
-			if (previousRevision < 5)
-				SetInitialLayout ();
-		}
-		
-		static void SetInitialLayout ()
-		{
-			if (!IdeApp.Workbench.Layouts.Contains ("Solution")) {
-				// Create the Solution layout, based on Default
-				IdeApp.Workbench.CurrentLayout = "Solution";
-				IdeApp.Workbench.GetPad<MonoDevelop.Ide.Gui.Pads.ProjectPad.ProjectSolutionPad> ().Visible = false;
-				IdeApp.Workbench.GetPad<MonoDevelop.Ide.Gui.Pads.ClassBrowser.ClassBrowserPad> ().Visible = false;
-				foreach (Pad p in IdeApp.Workbench.Pads) {
-					if (p.Visible)
-						p.AutoHide = true;
-				}
-			}
-		}
-
 		static ITimeTracker commandTimeCounter;
 			
 		static void CommandServiceCommandTargetScanStarted (object sender, EventArgs e)
@@ -631,5 +639,7 @@ namespace MonoDevelop.Ide
 		public TemplatingService TemplatingService {
 			get { return templatingService.Value; }
 		}
+
+		internal RoslynService RoslynService { get; } = new RoslynService ();
 	}
 }

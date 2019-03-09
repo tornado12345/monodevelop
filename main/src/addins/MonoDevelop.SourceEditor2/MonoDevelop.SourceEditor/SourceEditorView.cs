@@ -64,9 +64,9 @@ using System.Threading;
 using System.Collections.Immutable;
 
 namespace MonoDevelop.SourceEditor
-{	
+{
 	partial class SourceEditorView : ViewContent, IBookmarkBuffer, IClipboardHandler, ITextFile,
-		ICompletionWidget,  ISplittable, IFoldable, IToolboxDynamicProvider,
+		ICompletionWidget2,  ISplittable, IFoldable, IToolboxDynamicProvider, IToolboxDynamicProviderDeleteSupport,
 		ICustomFilteringToolboxConsumer, IZoomable, ITextEditorResolver, ITextEditorDataProvider,
 		ICodeTemplateHandler, ICodeTemplateContextProvider, IPrintable,
 	ITextEditorImpl, ITextMarkerFactory, IUndoHandler
@@ -83,6 +83,8 @@ namespace MonoDevelop.SourceEditor
 		List<PinnedWatchInfo> pinnedWatches = new List<PinnedWatchInfo> ();
 		bool writeAllowed;
 		bool writeAccessChecked;
+
+		internal BreakpointStore Breakpoints => breakpoints;
 
 		public ViewContent ViewContent {
 			get {
@@ -199,6 +201,7 @@ namespace MonoDevelop.SourceEditor
 		private SourceEditorView(DocumentAndLoaded doc)
 		{
 			Counters.LoadedEditors++;
+			breakpoints = DebuggingService.Breakpoints;
 
 			widget = new SourceEditorWidget (this, doc.Document);
 			loadedInCtor = doc.Loaded;
@@ -221,12 +224,11 @@ namespace MonoDevelop.SourceEditor
 			widget.TextEditor.IconMargin.MouseMoved += OnIconMarginMouseMoved;
 			widget.TextEditor.IconMargin.MouseLeave += OnIconMarginMouseLeave;
 			widget.TextEditor.TextArea.FocusOutEvent += TextArea_FocusOutEvent;
-			ClipbardRingUpdated += UpdateClipboardRing;
+			ClipboardRingService.Updated += OnClipboardItemsChanged;
 			
 			TextEditorService.FileExtensionAdded += HandleFileExtensionAdded;
 			TextEditorService.FileExtensionRemoved += HandleFileExtensionRemoved;
 
-			breakpoints = DebuggingService.Breakpoints;
 			DebuggingService.DebugSessionStarted += OnDebugSessionStarted;
 			DebuggingService.StoppedEvent += HandleTargetExited;
 			DebuggingService.ExecutionLocationChanged += OnExecutionLocationChanged;
@@ -247,6 +249,7 @@ namespace MonoDevelop.SourceEditor
 			IdeApp.Preferences.ShowMessageBubbles.Changed += HandleIdeAppPreferencesShowMessageBubblesChanged;
 			TaskService.TaskToggled += HandleErrorListPadTaskToggled;
 			widget.TextEditor.Options.Changed += HandleWidgetTextEditorOptionsChanged;
+			widget.TextEditor.Options.ZoomChanged += HandleWidgetTextEditorOptionsZoomChanged;
 			IdeApp.Preferences.DefaultHideMessageBubbles.Changed += HandleIdeAppPreferencesDefaultHideMessageBubblesChanged;
 			// Document.AddAnnotation (this);
 
@@ -566,6 +569,11 @@ namespace MonoDevelop.SourceEditor
 			currentErrorMarkers.ForEach (marker => marker.DisposeLayout ());
 		}
 
+		void HandleWidgetTextEditorOptionsZoomChanged (object sender, EventArgs e)
+		{
+			zoomLevelChanged?.Invoke (this, e);
+		}
+
 		void HandleTaskServiceJumpedToTask (object sender, TaskEventArgs e)
 		{
 			var task = e.Tasks != null ? e.Tasks.FirstOrDefault () : null;
@@ -802,6 +810,11 @@ namespace MonoDevelop.SourceEditor
 			} catch (UnauthorizedAccessException e) {
 				LoggingService.LogError ("Error while saving file", e);
 				MessageService.ShowError (GettextCatalog.GetString ("Can't save file - access denied"), e.Message);
+				return;
+			} catch (IOException e) {
+				LoggingService.LogError ("Error while saving file", e);
+				MessageService.ShowError (e.Message);
+				return;
 			}
 
 			//			if (encoding != null)
@@ -1040,7 +1053,7 @@ namespace MonoDevelop.SourceEditor
 			
 			DisposeErrorMarkers ();
 			
-			ClipbardRingUpdated -= UpdateClipboardRing;
+			ClipboardRingService.Updated -= OnClipboardItemsChanged;
 
 			widget.TextEditor.Document.TextChanged -= HandleTextReplaced;
 			widget.TextEditor.Document.BeginUndo -= HandleBeginUndo; 
@@ -1054,6 +1067,7 @@ namespace MonoDevelop.SourceEditor
 
 			widget.TextEditor.Document.ReadOnlyCheckDelegate = null;
 			widget.TextEditor.Options.Changed -= HandleWidgetTextEditorOptionsChanged;
+			widget.TextEditor.Options.ZoomChanged -= HandleWidgetTextEditorOptionsZoomChanged;
 			widget.TextEditor.TextViewMargin.LineShowing -= TextViewMargin_LineShowing;
 			widget.TextEditor.TextArea.FocusOutEvent -= TextArea_FocusOutEvent;
 			widget.TextEditor.Document.MimeTypeChanged -= Document_MimeTypeChanged;
@@ -1473,8 +1487,9 @@ namespace MonoDevelop.SourceEditor
 			} else if (args.Button == 1) {
 				if (!string.IsNullOrEmpty (Document.FileName)) {
 					if (args.LineSegment != null) {
-						int column = TextEditor.Caret.Line == args.LineNumber ? TextEditor.Caret.Column : 1;
-
+						int column = TextEditor.Caret.Line == args.LineNumber ? 
+												Math.Min (TextEditor.Caret.Column, args.LineSegment.Length) : 1;
+							
 						lock (breakpoints)
 							breakpoints.Toggle (Document.FileName, args.LineNumber, column);
 					}
@@ -1848,33 +1863,48 @@ namespace MonoDevelop.SourceEditor
 		{
 			widget.TextEditor.GetTextEditorData ().Replace (offset, count, text);
 		}
-		
+
+		class EditorCodeCompletionContext : CodeCompletionContext
+		{
+			MonoTextEditor editor;
+			DocumentLocation loc;
+
+			public EditorCodeCompletionContext (MonoTextEditor editor, DocumentLocation loc)
+			{
+				this.editor = editor;
+				this.loc = loc;
+			}
+
+			public override Task<(int x, int y, int textHeight)> GetCoordinatesAsync ()
+			{
+				var p = editor.LocationToPoint (loc);
+				int tx, ty;
+				var parentWindow = editor.ParentWindow;
+				if (parentWindow != null) {
+					parentWindow.GetOrigin (out tx, out ty);
+				} else {
+					tx = ty = 0;
+				}
+				tx += editor.Allocation.X + p.X;
+				ty += editor.Allocation.Y + p.Y + (int)editor.LineHeight;
+
+				return Task.FromResult ((tx, ty, (int)editor.GetLineHeight (loc.Line)));
+			}
+		}
+
 		public CodeCompletionContext CreateCodeCompletionContext (int triggerOffset)
 		{
-			var result = new CodeCompletionContext ();
 			if (widget == null)
-				return result;
+				return CodeCompletionContext.Invalid;
 			var editor = widget.TextEditor;
 			if (editor == null)
-				return result;
-			result.TriggerOffset = triggerOffset;
+				return CodeCompletionContext.Invalid;
 			var loc = editor.Caret.Location;
+
+			var result = new EditorCodeCompletionContext (editor, loc);
+			result.TriggerOffset = triggerOffset;
 			result.TriggerLine = loc.Line;
 			result.TriggerLineOffset = loc.Column - 1;
-			var p = widget.TextEditor.LocationToPoint (loc);
-			int tx, ty;
-			var parentWindow = editor.ParentWindow;
-			if (parentWindow != null) {
-				parentWindow.GetOrigin (out tx, out ty);
-			} else {
-				tx = ty = 0;
-			}
-			tx += editor.Allocation.X + p.X;
-			ty += editor.Allocation.Y + p.Y + (int)editor.LineHeight;
-
-			result.TriggerXCoord = tx;
-			result.TriggerYCoord = ty;
-			result.TriggerTextHeight = (int)TextEditor.GetLineHeight (loc.Line);
 			return result;
 		}
 		
@@ -1995,6 +2025,12 @@ namespace MonoDevelop.SourceEditor
 		}
 		
 		public event EventHandler CompletionContextChanged;
+
+		void ICompletionWidget2.NotifyCompletionWindowClosed ()
+		{
+			GetTextEditorData ().FixVirtualIndentation ();
+		}
+
 		#endregion
 		
 		#region commenting and indentation
@@ -2148,84 +2184,26 @@ namespace MonoDevelop.SourceEditor
 				//FIXME: can't show more details, GTK# GetError binding is bad
 				MessageService.ShowError (GettextCatalog.GetString ("Print operation failed."));
 		}
-		
-		#endregion
-	
-		#region Toolbox
-		static List<TextToolboxNode> clipboardRing = new List<TextToolboxNode> ();
 
-		static event EventHandler ClipbardRingUpdated;
-		
-		static SourceEditorView ()
+		#endregion
+
+		#region Toolbox
+
+		void OnClipboardItemsChanged (object sender, EventArgs e)
 		{
-			CodeSegmentPreviewWindow.CodeSegmentPreviewInformString = GettextCatalog.GetString ("Press F2 to focus");
-			ClipboardActions.CopyOperation.Copy += delegate (string text) {
-				if (String.IsNullOrEmpty (text))
-					return;
-				foreach (TextToolboxNode node in clipboardRing) {
-					if (node.Text == text) {
-						clipboardRing.Remove (node);
-						break;
-					}
-				}
-				TextToolboxNode item = new TextToolboxNode (text);
-				string[] lines = text.Split ('\n');
-				for (int i = 0; i < 3 && i < lines.Length; i++) {
-					if (i > 0)
-						item.Description += Environment.NewLine;
-					string line = lines [i];
-					if (line.Length > 16)
-						line = line.Substring (0, 16) + "...";
-					item.Description += line;
-				}
-				item.Category = GettextCatalog.GetString ("Clipboard ring");
-				item.Icon = DesktopService.GetIconForFile ("a.txt", IconSize.Menu);
-				item.Name = text.Length > 16 ? text.Substring (0, 16) + "..." : text;
-				item.Name = item.Name.Replace ("\t", "\\t");
-				item.Name = item.Name.Replace ("\n", "\\n");
-				clipboardRing.Add (item);
-				while (clipboardRing.Count > 12) {
-					clipboardRing.RemoveAt (0);
-				}
-				if (ClipbardRingUpdated != null)
-					ClipbardRingUpdated (null, EventArgs.Empty);
-			};
-		}
-		
-		public void UpdateClipboardRing (object sender, EventArgs e)
-		{
-			if (ItemsChanged != null)
-				ItemsChanged (this, EventArgs.Empty);
+			ItemsChanged?.Invoke (this, EventArgs.Empty);
 		}
 		
 		public IEnumerable<ItemToolboxNode> GetDynamicItems (IToolboxConsumer consumer)
 		{
-			foreach (TextToolboxNode item in clipboardRing)
-				yield return item;
-			//FIXME: make this work again
-//			CategoryToolboxNode category = new CategoryToolboxNode (GettextCatalog.GetString ("Clipboard ring"));
-//			category.IsDropTarget    = false;
-//			category.CanIconizeItems = false;
-//			category.IsSorted        = false;
-//			foreach (TextToolboxNode item in clipboardRing) {
-//				category.Add (item);
-//			}
-//			
-//			if (clipboardRing.Count == 0) {
-//				TextToolboxNode item = new TextToolboxNode (null);
-//				item.Category = GettextCatalog.GetString ("Clipboard ring");
-//				item.Name = null;
-//				//category.Add (item);
-//			}
-//			return new BaseToolboxNode [] { category };
+			return ClipboardRingService.GetToolboxItems ();
 		}
 		
 		public event EventHandler ItemsChanged;
 		
 		void IToolboxConsumer.ConsumeItem (ItemToolboxNode item)
 		{
-			var tn = item as ITextToolboxNode;
-			if (tn != null) {
+			if (item is ITextToolboxNode tn) {
 				tn.InsertAtCaret (WorkbenchWindow.Document);
 				TextEditor.GrabFocus ();
 			}
@@ -2268,8 +2246,7 @@ namespace MonoDevelop.SourceEditor
 		
 		string GetDragPreviewText (ItemToolboxNode item)
 		{
-			ITextToolboxNode tn = item as ITextToolboxNode;
-			if (tn == null) {
+			if (!(item is ITextToolboxNode tn)) {
 				LoggingService.LogWarning ("Cannot use non-ITextToolboxNode toolbox items in the text editor.");
 				return null;
 			}
@@ -2284,9 +2261,9 @@ namespace MonoDevelop.SourceEditor
 			
 		bool ICustomFilteringToolboxConsumer.SupportsItem (ItemToolboxNode item)
 		{
-			ITextToolboxNode textNode = item as ITextToolboxNode;
-			if (textNode == null)
+			if (!(item is ITextToolboxNode textNode)) {
 				return false;
+			}
 			
 			//string filename = this.IsUntitled ? UntitledName : ContentName;
 			//int i = filename.LastIndexOf ('.');
@@ -2387,8 +2364,9 @@ namespace MonoDevelop.SourceEditor
 
 		void CorrectIndenting ()
 		{
-			var doc = IdeApp.Workbench.ActiveDocument?.Editor;
-			if (doc == null)
+			var doc = IdeApp.Workbench.ActiveDocument;
+			var editor = doc?.Editor;
+			if (editor == null)
 				return;
 			var formatter = CodeFormatterService.GetFormatter (Document.MimeType);
 			if (formatter == null || !formatter.SupportsCorrectingIndent)
@@ -2402,13 +2380,11 @@ namespace MonoDevelop.SourceEditor
 					var lead = selection.GetLeadOffset (editorData);
 					var version = TextEditor.Document.Version;
 					int max = selection.MaxLine;
-					for (int i = TextEditor.MainSelection.MinLine; i <= max; i++) {
-						formatter.CorrectIndenting (policies, doc, i);
-					}
+					formatter.CorrectIndentingAsync (editor, doc, TextEditor.MainSelection.MinLine, max);
 					editorData.SetSelection (version.MoveOffsetTo (editorData.Document.Version, anchor), version.MoveOffsetTo (editorData.Document.Version, lead));
 				}
 			} else {
-				formatter.CorrectIndenting (policies, doc, TextEditor.Caret.Line);
+				formatter.CorrectIndenting (policies, editor, TextEditor.Caret.Line);
 			}
 		}
 
@@ -2418,6 +2394,8 @@ namespace MonoDevelop.SourceEditor
 				return TextEditor.GetTextEditorData ();
 			if (type.Equals (typeof (IDocumentReloadPresenter)))
 				return widget;
+			if (type.Equals (typeof (Microsoft.VisualStudio.Text.ITextDocument)))
+				return Document.VsTextDocument;
 			return base.OnGetContent (type);
 		}
 
@@ -2680,7 +2658,23 @@ namespace MonoDevelop.SourceEditor
 			var helpWindow = new Mono.TextEditor.PopupWindow.InsertionCursorLayoutModeHelpWindow ();
 			helpWindow.TitleText = insertionModeOptions.Operation;
 			mode.HelpWindow = helpWindow;
-			mode.CurIndex = insertionModeOptions.FirstSelectedInsertionPoint;
+			if (insertionModeOptions.FirstSelectedInsertionPoint >= 0) {
+				mode.CurIndex = insertionModeOptions.FirstSelectedInsertionPoint;
+			} else {
+				// no first point given - place the default insertion point at the first location below the caret
+				// or at the last top of it.
+				var caretLocation = this.GetTextEditorData ().Caret.Location;
+				for (int i = 0; i < mode.InsertionPoints.Count; i++) {
+					var point = mode.InsertionPoints [i];
+					if (point.Location < caretLocation) {
+						mode.CurIndex = i;
+					} else {
+						mode.CurIndex = i;
+						break;
+					}
+ 				}
+
+			}
 			mode.StartMode ();
 			mode.Exited += delegate(object s, Mono.TextEditor.InsertionCursorEventArgs iCArgs) {
 				if (insertionModeOptions.ModeExitedAction != null) {
@@ -3098,14 +3092,20 @@ namespace MonoDevelop.SourceEditor
 
 		string ITextEditorImpl.GetMarkup (int offset, int length, MarkupOptions options)
 		{
+			return GetMarkupAsync (offset, length, options, default).WaitAndGetResult (default);
+		}
+
+		public async Task<string> GetMarkupAsync (int offset, int length, MarkupOptions options, CancellationToken cancellationToken = default)
+		{
+			Runtime.AssertMainThread ();
 			var data = TextEditor.GetTextEditorData ();
 			switch (options.MarkupFormat) {
 			case MarkupFormat.Pango:
-				return data.GetMarkup (offset, length, false, replaceTabs: false, fitIdeStyle: options.FitIdeStyle);
+				return await data.GetMarkupAsync (offset, length, false, replaceTabs: false, fitIdeStyle: options.FitIdeStyle, cancellationToken: cancellationToken);
 			case MarkupFormat.Html:
-				return HtmlWriter.GenerateHtml (ClipboardColoredText.GetChunks (data, new TextSegment (offset, length)).WaitAndGetResult (default (System.Threading.CancellationToken)), data.ColorStyle, data.Options);
+				return HtmlWriter.GenerateHtml (await ClipboardColoredText.GetChunks (data, new TextSegment (offset, length), cancellationToken), data.ColorStyle, data.Options);
 			case MarkupFormat.RichText:
-				return RtfWriter.GenerateRtf (ClipboardColoredText.GetChunks (data, new TextSegment (offset, length)).WaitAndGetResult (default (System.Threading.CancellationToken)), data.ColorStyle, data.Options);
+				return RtfWriter.GenerateRtf (await ClipboardColoredText.GetChunks (data, new TextSegment (offset, length), cancellationToken), data.ColorStyle, data.Options);
 			default:
 				throw new ArgumentOutOfRangeException ();
 			}
@@ -3205,12 +3205,14 @@ namespace MonoDevelop.SourceEditor
 			get { return TextEditor != null && TextEditor.Options != null ? TextEditor.Options.Zoom : 1d; }
 			set { if (TextEditor != null && TextEditor.Options != null) TextEditor.Options.Zoom = value; }
 		}
+
+		event EventHandler zoomLevelChanged;
 		event EventHandler ITextEditorImpl.ZoomLevelChanged {
 			add {
-				TextEditor.Options.ZoomChanged += value;
+				zoomLevelChanged += value;
 			}
 			remove {
-				TextEditor.Options.ZoomChanged -= value;
+				zoomLevelChanged -= value;
 			}
 		}
 
@@ -3283,18 +3285,11 @@ namespace MonoDevelop.SourceEditor
 			switch (effect) {
 			case TextSegmentMarkerEffect.DottedLine:
 			case TextSegmentMarkerEffect.WavedLine:
-				{
-					var result = new GenericUnderlineMarker (new TextSegment (offset, length), effect);
-					if (color.HasValue)
-						result.Color = color.Value;
-					return result;
-				}
 			case TextSegmentMarkerEffect.Underline:
 				{
 					var result = new GenericUnderlineMarker (new TextSegment (offset, length), effect);
 					if (color.HasValue)
 						result.Color = color.Value;
-					result.Wave = false;
 					return result;
 				}
 
@@ -3349,28 +3344,16 @@ namespace MonoDevelop.SourceEditor
 			widget.QuickTaskStrip.GotoPgDown ();
 		}
 
-		[CommandUpdateHandler (ScrollbarCommand.ShowTasks)]
-		void UpdateShowMap (CommandInfo info)
-		{
-			widget.QuickTaskStrip.UpdateShowMap (info);
-		}
-
-		[CommandHandler (ScrollbarCommand.ShowTasks)]
-		void ShowMap ()
-		{
-			widget.QuickTaskStrip.ShowMap ();
-		}
-
 		[CommandUpdateHandler (ScrollbarCommand.ShowMinimap)]
-		void UpdateShowFull (CommandInfo info)
+		void UpdateShowMinimap (CommandInfo info)
 		{
-			widget.QuickTaskStrip.UpdateShowFull (info);
+			widget.QuickTaskStrip.UpdateShowMinimap (info);
 		}
 
 		[CommandHandler (ScrollbarCommand.ShowMinimap)]
-		void ShowFull ()
+		void ShowShowMinimap ()
 		{
-			widget.QuickTaskStrip.ShowFull ();
+			widget.QuickTaskStrip.ShowShowMinimap ();
 		}
 
 		#endregion
@@ -3417,10 +3400,17 @@ namespace MonoDevelop.SourceEditor
 			return TextEditor.GetLineHeight (line);
 		}
 
+		public bool DeleteDynamicItem (ItemToolboxNode node) => ClipboardRingService.DeleteItem (node);
+
+		public bool CanDeleteDynamicItem (ItemToolboxNode node) => ClipboardRingService.GetToolboxItems ().Contains (node);
+
 		public bool HasFocus {
 			get {
 				return this.TextEditor.HasFocus;
 			}
 		}
+
+		bool ITextEditorImpl.LockFixIndentation { get => TextEditor.GetTextEditorData ().LockFixIndentation; set => TextEditor.GetTextEditorData ().LockFixIndentation = value; }
+
 	}
 } 

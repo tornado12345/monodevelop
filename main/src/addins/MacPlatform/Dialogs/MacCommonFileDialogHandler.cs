@@ -78,6 +78,8 @@ namespace MonoDevelop.MacIntegration
 
 		static void SetCommonPanelProperties (TData data, NSSavePanel panel)
 		{
+			if (MacSystemInformation.OsVersion >= MacSystemInformation.Mojave)
+				IdeTheme.ApplyTheme (panel);
 			panel.TreatsFilePackagesAsDirectories = true;
 
 			if (!string.IsNullOrEmpty (data.Title))
@@ -89,7 +91,9 @@ namespace MonoDevelop.MacIntegration
 			if (!string.IsNullOrEmpty (data.CurrentFolder))
 				panel.DirectoryUrl = new NSUrl (data.CurrentFolder, true);
 
-			panel.ParentWindow = NSApplication.SharedApplication.KeyWindow ?? NSApplication.SharedApplication.MainWindow;
+			var parent = Ide.DesktopService.GetFocusedTopLevelWindow ();
+			if (parent != null)
+				panel.ParentWindow = parent;
 
 			if (panel is NSOpenPanel openPanel) {
 				openPanel.AllowsMultipleSelection = data.SelectMultiple;

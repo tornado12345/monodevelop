@@ -40,6 +40,7 @@ using MonoDevelop.Components.Commands;
 using MonoDevelop.Core;
 
 using System.Xml;
+using System.Runtime.Remoting;
 
 namespace MonoDevelop.Components.AutoTest
 {
@@ -58,6 +59,8 @@ namespace MonoDevelop.Components.AutoTest
 			set { SessionDebug.DebugObject = value; }
 		}
 
+		readonly List<AppQuery> queries = new List<AppQuery> ();
+
 		public AutoTestSession ()
 		{
 		}
@@ -65,6 +68,40 @@ namespace MonoDevelop.Components.AutoTest
 		public override object InitializeLifetimeService ()
 		{
 			return null;
+		}
+
+		~AutoTestSession()
+		{
+			Dispose (false);
+		}
+
+		public void Dispose()
+		{
+			GC.SuppressFinalize (this);
+			Dispose (true);
+		}
+
+		public void DisconnectQueries()
+		{
+			lock (queries) {
+				foreach (var query in queries) {
+					RemotingServices.Disconnect (query);
+					query.Dispose ();
+				}
+				queries.Clear ();
+			}
+		}
+
+		bool disposed;
+		protected virtual void Dispose(bool disposing)
+		{
+			if (disposed)
+				return;
+
+			disposed = true;
+			RemotingServices.Disconnect (this);
+
+			DisconnectQueries ();
 		}
 
 		[Serializable]
@@ -334,6 +371,8 @@ namespace MonoDevelop.Components.AutoTest
 			AppQuery query = new AppQuery ();
 			query.SessionDebug = SessionDebug;
 
+			lock (queries)
+				queries.Add (query);
 			return query;
 		}
 
@@ -445,7 +484,13 @@ namespace MonoDevelop.Components.AutoTest
 			public TimeSpan TotalTime;
 		};
 
-		Counter GetCounterByIDOrName (string idOrName)
+		[Serializable]
+		public struct CounterContext {
+			public string CounterName;
+			public int InitialCount;
+		}
+
+		internal Counter GetCounterByIDOrName (string idOrName)
 		{
 			Counter c = InstrumentationService.GetCounterByID (idOrName);
 			return c ?? InstrumentationService.GetCounter (idOrName);
@@ -483,6 +528,40 @@ namespace MonoDevelop.Components.AutoTest
 			} while (timeout > 0);
 
 			throw new TimeoutException ("Timed out waiting for event");
+		}
+
+		public CounterContext CreateNewCounterContext (string counterName)
+		{
+			var counter = GetCounterByIDOrName (counterName);
+			if (counter == null) {
+				throw new Exception ($"Unknown counter {counterName}");
+			}
+
+			var context = new CounterContext {
+				CounterName = counterName,
+				InitialCount = counter.Count
+			};
+
+			return context;
+		}
+
+		public void WaitForCounterToChange (CounterContext context, int timeout = 20000, int pollStep = 200)
+		{
+			var counter = GetCounterByIDOrName (context.CounterName);
+			if (counter == null) {
+				throw new Exception ($"Unknown counter {context.CounterName}");
+			}
+
+			do {
+				if (counter.Count != context.InitialCount) {
+					return;
+				}
+
+				timeout -= pollStep;
+				Thread.Sleep (pollStep);
+			} while (timeout > 0);
+
+			throw new TimeoutException ("Timed out waiting for counter");
 		}
 
 		public bool Select (AppResult result)

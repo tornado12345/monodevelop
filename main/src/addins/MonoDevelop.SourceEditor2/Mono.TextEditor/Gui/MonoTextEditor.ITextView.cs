@@ -40,6 +40,8 @@ using System.Diagnostics;
 using MonoDevelop.Ide;
 using Microsoft.VisualStudio.Text.Classification;
 using System.Threading;
+using Microsoft.VisualStudio.Text.Operations.Implementation;
+using Microsoft.VisualStudio.Text.Operations;
 
 namespace Mono.TextEditor
 {
@@ -47,7 +49,7 @@ namespace Mono.TextEditor
 	{
 		#region Private Members
 
-		public Gtk.Container VisualElement { get => this; }
+		public Gtk.Container VisualElement { get => textArea; }
 
 		ITextBuffer textBuffer;
 
@@ -64,6 +66,20 @@ namespace Mono.TextEditor
 		bool hasInitializeBeenCalled = false;
 
 		ITextSelection selection;
+
+		private IEditorOperations editorOperations;
+		internal IEditorOperations EditorOperations 
+		{
+			get {
+				if (editorOperations == null) {
+					// *Someone* needs to call this to execute UndoHistoryRegistry.RegisterHistory -- VS does this via the ShimCompletionControllerFactory.
+					// See https://devdiv.visualstudio.com/DevDiv/_workitems/edit/669018 for details.
+					editorOperations = factoryService.EditorOperationsProvider.GetEditorOperations (this);
+				}
+
+				return editorOperations;
+			}
+		}
 
 		bool hasAggregateFocus;
 
@@ -96,13 +112,15 @@ namespace Mono.TextEditor
 		internal void Initialize (ITextViewModel textViewModel, ITextViewRoleSet roles, IEditorOptions parentOptions, TextEditorFactoryService factoryService, bool initialize = true)
 		{
 			this.roles = roles;
-			this.textArea.TextViewLines = new MdTextViewLineCollection (this);
 			this.factoryService = factoryService;
             GuardedOperations = this.factoryService.GuardedOperations;
             _spaceReservationStack = new SpaceReservationStack(this.factoryService.OrderedSpaceReservationManagerDefinitions, this);
 
 			this.TextDataModel = textViewModel.DataModel;
 			this.TextViewModel = textViewModel;
+
+			this.textArea.TextViewLines = new MdTextViewLineCollection (this);
+			textArea.LayoutChanged += TextAreaLayoutChanged;
 
 			textBuffer = textViewModel.EditBuffer;
             //			_visualBuffer = textViewModel.VisualBuffer;
@@ -115,6 +133,13 @@ namespace Mono.TextEditor
 
 			if (initialize)
 				this.Initialize ();
+		}
+
+		static List<ITextViewLine> emptyTextViewLineList = new List<ITextViewLine> (0);
+		void TextAreaLayoutChanged(object sender, EventArgs args)
+		{
+			//TODO: Properly implement LayoutChanged with all data
+			LayoutChanged?.Invoke (this, new TextViewLayoutChangedEventArgs (new ViewState (this), new ViewState (this), emptyTextViewLineList, emptyTextViewLineList));
 		}
 
 		internal bool IsTextViewInitialized { get { return hasInitializeBeenCalled; } }
@@ -134,8 +159,13 @@ namespace Mono.TextEditor
 
 			//			this.Loaded += OnLoaded;
 
-			// TODO: *Someone* needs to call this to execute UndoHistoryRegistry.RegisterHistory -- VS does this via the ShimCompletionControllerFactory.
-			factoryService.EditorOperationsProvider.GetEditorOperations (this);
+			// We need to instantiate EditorOperations, because it in turn will register the UndoHistory
+			// for the buffer via:
+			// https://github.com/KirillOsenkov/vs-editor-api/blob/d06adf1581eb8e16242c8b6eabc7ba13ceaf0d54/src/Text/Impl/EditorOperations/EditorOperations.cs#L108
+			// Without Undo History Roslyn Completion bails via:
+			// https://github.com/dotnet/roslyn/blob/a107b43dcad83cf79addd47a9919590c7366d130/src/EditorFeatures/Core/Implementation/IntelliSense/Completion/Controller_Commit.cs#L66
+			// See https://devdiv.visualstudio.com/DevDiv/_workitems/edit/669018 for details.
+			var instantiateEditorOperations = EditorOperations;
 
 			connectionManager = new ConnectionManager (this, factoryService.TextViewConnectionListeners, factoryService.GuardedOperations);
 
@@ -149,6 +179,9 @@ namespace Mono.TextEditor
 			//_visualBuffer.ChangedLowPriority += OnVisualBufferChanged;
 			//_visualBuffer.ContentTypeChanged += OnVisualBufferContentTypeChanged;
 
+			// instantiate the MultiSelectionBroker
+			var broker = MultiSelectionBroker;
+
 			hasInitializeBeenCalled = true;
 		}
 
@@ -157,6 +190,8 @@ namespace Mono.TextEditor
 				return Caret;
 			}
 		}
+
+		public ITextCaret TextCaret => Caret;
 
 		public bool HasAggregateFocus {
 			get {
@@ -299,11 +334,12 @@ namespace Mono.TextEditor
 		public event EventHandler Closed;
 		public event EventHandler GotAggregateFocus;
 		public event EventHandler LostAggregateFocus;
-#pragma warning disable CS0067
 		public event EventHandler<TextViewLayoutChangedEventArgs> LayoutChanged;
+#pragma warning disable CS0067
 		public event EventHandler ViewportLeftChanged;
 		public event EventHandler ViewportHeightChanged;
 		public event EventHandler ViewportWidthChanged;
+		public event EventHandler MaxTextRightCoordinateChanged;
 #pragma warning restore CS0067
 
 		public void Close ()
@@ -341,7 +377,8 @@ namespace Mono.TextEditor
 
 		public SnapshotSpan GetTextElementSpan (SnapshotPoint point)
 		{
-			throw new NotImplementedException ();
+			var line = this.GetTextViewLineContainingBufferPosition (point);
+			return line.GetTextElementSpan (point);
 		}
 
 		public ITextViewLine GetTextViewLineContainingBufferPosition (SnapshotPoint bufferPosition)
@@ -506,5 +543,28 @@ namespace Mono.TextEditor
 			get { return factoryService; }
 		}
 
+		public bool InOuterLayout => false;
+
+		private IMultiSelectionBroker multiSelectionBroker;
+		public IMultiSelectionBroker MultiSelectionBroker {
+			get {
+				if (multiSelectionBroker == null) {
+					multiSelectionBroker = factoryService.MultiSelectionBrokerFactory.CreateBroker (this);
+					multiSelectionBroker.MultiSelectionSessionChanged += OnMultiSelectionSessionChanged;
+				}
+
+				return multiSelectionBroker;
+			}
+		}
+
+		private void OnMultiSelectionSessionChanged (object sender, EventArgs e)
+		{
+			// The MultiSelectionBroker API has been updated, but currently in VSMac we still have a separate Caret concept.
+			// We need to manually synchronize our caret with what MultiSelectionBroker thinks the caret is.
+			// The other direction happens when we move our caret.
+			if (TextCaret.Position.VirtualBufferPosition != MultiSelectionBroker.PrimarySelection.InsertionPoint) {
+				TextCaret.MoveTo (MultiSelectionBroker.PrimarySelection.InsertionPoint);
+			}
+		}
 	}
 }

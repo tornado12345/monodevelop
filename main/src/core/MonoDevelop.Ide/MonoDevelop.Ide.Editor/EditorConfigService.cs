@@ -26,11 +26,13 @@
 using System;
 using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.CodingConventions;
 using System.Collections.Generic;
 using MonoDevelop.Core;
+using MonoDevelop.Projects;
 
 namespace MonoDevelop.Ide.Editor
 {
@@ -41,93 +43,151 @@ namespace MonoDevelop.Ide.Editor
 		readonly static ICodingConventionsManager codingConventionsManager = CodingConventionsManagerFactory.CreateCodingConventionsManager (new ConventionsFileManager());
 		static ImmutableDictionary<string, ICodingConventionContext> contextCache = ImmutableDictionary<string, ICodingConventionContext>.Empty;
 
-		public async static Task<ICodingConventionContext> GetEditorConfigContext (string fileName, CancellationToken token = default (CancellationToken))
+		public static async Task<ICodingConventionContext> GetEditorConfigContext (string fileName, CancellationToken token = default (CancellationToken))
 		{
-			if (!File.Exists (fileName))
+			if (string.IsNullOrEmpty (fileName))
 				return null;
-			if (contextCache.TryGetValue (fileName, out ICodingConventionContext result))
-				return result;
 			try {
-				result = await codingConventionsManager.GetConventionContextAsync (fileName, token);
+				var directory = Path.GetDirectoryName (fileName);
+				if (string.IsNullOrEmpty (directory)) {
+					return null;
+				}
+
+				// HACK: Work around for a library issue https://github.com/mono/monodevelop/issues/6104
+				if (directory == "/") {
+					return null;
+				}
+			} catch {
+				return null;
+			}
+			if (contextCache.TryGetValue (fileName, out var oldresult))
+				return oldresult;
+			try {
+				var result = await codingConventionsManager.GetConventionContextAsync (fileName, token);
+				lock (contextCacheLock) {
+					// check if another thread already requested a coding convention context and ensure
+					// that only one is alive.
+					if (contextCache.TryGetValue (fileName, out var result2)) {
+						if (result != result2)
+							result.Dispose ();
+						return result2;
+					}
+					contextCache = contextCache.SetItem (fileName, result);
+				}
+				return result;
 			} catch (OperationCanceledException) {
+				return null;
 			} catch (Exception e) {
 				LoggingService.LogError ("Error while getting coding conventions,", e);
-			}
-			if (result == null)
 				return null;
-			lock (contextCacheLock) {
-				contextCache = contextCache.SetItem (fileName, result);
-				return result;
 			}
 		}
 
-		public static void RemoveEditConfigContext (string fileName)
+		public static async Task RemoveEditConfigContext (string fileName)
 		{
+			ICodingConventionContext ctx;
 			lock (contextCacheLock) {
-				contextCache = contextCache.Remove (fileName);
+				if (!contextCache.TryGetValue (fileName, out ctx))
+					return;
+				contextCache = contextCache.Remove(fileName);
 			}
+			if (ctx != null)
+				ctx.Dispose ();
 		}
 
 		class ConventionsFileManager : IFileWatcher
 		{
-			Dictionary<string, FileSystemWatcher> watchers = new Dictionary<string, FileSystemWatcher> ();
+			HashSet<FilePath> watchedFiles = new HashSet<FilePath> ();
 
 			public event ConventionsFileChangedAsyncEventHandler ConventionFileChanged;
 			public event ContextFileMovedAsyncEventHandler ContextFileMoved;
 
+			public ConventionsFileManager ()
+			{
+				FileService.FileChanged += FileService_FileChanged;
+				FileService.FileRemoved += FileService_FileRemoved;
+				FileService.FileMoved += FileService_FileMoved;
+				FileService.FileRenamed += FileService_FileMoved;
+			}
+
+			void FileService_FileMoved (object sender, FileCopyEventArgs e)
+			{
+				lock (watchedFiles) {
+					foreach (var file in e) {
+						if (watchedFiles.Remove (file.SourceFile)) {
+							ContextFileMoved?.Invoke (this, new ContextFileMovedEventArgs (file.SourceFile, file.TargetFile));
+							if (file.SourceFile == file.TargetFile) {
+								StartWatching (file.TargetFile.FileName, file.TargetFile.ParentDirectory);
+							}
+						}
+					}
+				}
+			}
+
+			void FileService_FileChanged (object sender, FileEventArgs e)
+			{
+				lock (watchedFiles) {
+					foreach (var file in e) {
+						if (watchedFiles.Contains (file.FileName)) {
+							ConventionFileChanged?.Invoke (this, new ConventionsFileChangeEventArgs (file.FileName.FileName, file.FileName.ParentDirectory, ChangeType.FileModified));
+						}
+					}
+				}
+			}
+
+			void FileService_FileRemoved (object sender, FileEventArgs e)
+			{
+				lock (watchedFiles) {
+					foreach (var file in e) {
+						if (watchedFiles.Remove (file.FileName)) {
+							ConventionFileChanged?.Invoke (this, new ConventionsFileChangeEventArgs (file.FileName.FileName, file.FileName.ParentDirectory, ChangeType.FileDeleted));
+							WatchDirectories ();
+						}
+					}
+				}
+			}
+
 			public void Dispose ()
 			{
-				lock (watchers) {
-					foreach (var kv in watchers)
-						kv.Value.Dispose ();
-					watchers = null;
+				FileService.FileMoved -= FileService_FileMoved;
+				FileService.FileRenamed -= FileService_FileMoved;
+				FileService.FileRemoved -= FileService_FileRemoved;
+				FileService.FileChanged -= FileService_FileChanged;
+				FileWatcherService.WatchDirectories (this, null).Ignore ();
+				lock (watchedFiles) {
+					watchedFiles = null;
 				}
-			}
-
-			void OnChanged (object source, FileSystemEventArgs e)
-			{
-				var watcher = (FileSystemWatcher)source;
-				ConventionFileChanged?.Invoke (this, new ConventionsFileChangeEventArgs (watcher.Filter, watcher.Path, GetChangeType(e.ChangeType)));
-			}
-
-			static ChangeType GetChangeType(WatcherChangeTypes type)
-			{
-				switch (type) {
-				case WatcherChangeTypes.Changed:
-					return ChangeType.FileModified;
-				case WatcherChangeTypes.Deleted:
-					return ChangeType.FileDeleted;
-				}
-				return ChangeType.FileModified;
 			}
 
 			public void StartWatching (string fileName, string directoryPath)
 			{
-				lock (watchers) {
+				lock (watchedFiles) {
 					var key = directoryPath + Path.DirectorySeparatorChar.ToString () + fileName;
 
-					if (watchers.ContainsKey (key))
+					if (!File.Exists (key))
 						return;
 
-					var watcher = new FileSystemWatcher ();
-					watcher.Path = directoryPath;
-					watcher.Filter = fileName;
-					watcher.Changed += OnChanged;
-					watcher.Deleted += OnChanged;
-					watcher.EnableRaisingEvents = true;
-					watchers.Add (key, watcher);
+					if (!watchedFiles.Add (key))
+						return;
+
+					WatchDirectories ();
 				}
 			}
 
 			public void StopWatching (string fileName, string directoryPath)
 			{
-				lock (watchers) {
+				lock (watchedFiles) {
 					var key = directoryPath + Path.DirectorySeparatorChar.ToString () + fileName;
-					if (watchers.TryGetValue (key, out FileSystemWatcher watcher)) {
-						watcher.Dispose ();
-						watchers.Remove (key);
+					if (watchedFiles.Remove (key)) {
+						WatchDirectories ();
 					}
 				}
+			}
+
+			void WatchDirectories ()
+			{
+				var directories = watchedFiles.Count == 0 ? null : watchedFiles.Select (file => new FilePath (file).ParentDirectory);
+				FileWatcherService.WatchDirectories (this, directories);
 			}
 		}
 	}

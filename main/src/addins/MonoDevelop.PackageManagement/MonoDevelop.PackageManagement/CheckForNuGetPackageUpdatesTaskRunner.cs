@@ -94,6 +94,7 @@ namespace MonoDevelop.PackageManagement
 				project,
 				sourceRepositoryProvider,
 				nugetProject,
+				LogError,
 				cancellationTokenSource.Token);
 		}
 
@@ -106,7 +107,7 @@ namespace MonoDevelop.PackageManagement
 			IMonoDevelopSolutionManager solutionManager,
 			IDotNetProject project)
 		{
-			return new MonoDevelopNuGetProjectFactory (solutionManager.Settings)
+			return new MonoDevelopNuGetProjectFactory (solutionManager.Settings, solutionManager.Configuration)
 				.CreateNuGetProject (project);
 		}
 
@@ -174,7 +175,8 @@ namespace MonoDevelop.PackageManagement
 
 		protected virtual void LogError (string message, Exception ex)
 		{
-			LoggingService.LogError (message, ex);
+			if (!ex.IsOperationCanceledException ())
+				LoggingService.LogError (message, ex);
 		}
 
 		protected virtual void GuiBackgroundDispatch (Action action)

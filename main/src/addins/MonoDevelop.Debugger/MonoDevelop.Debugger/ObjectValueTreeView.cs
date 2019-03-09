@@ -930,7 +930,7 @@ namespace MonoDevelop.Debugger
 					ExpandRow (store.GetPath (it), false);
 				}
 			} else {
-				RefreshRow (it);
+				RefreshRow (it, val);
 			}
 		}
 
@@ -977,10 +977,11 @@ namespace MonoDevelop.Debugger
 				enumerableLoading.Remove (value);
 			}, cancellationTokenSource.Token, TaskContinuationOptions.NotOnCanceled, Xwt.Application.UITaskScheduler);
 		}
-		
-		void RefreshRow (TreeIter iter)
+
+		void RefreshRow (TreeIter iter, ObjectValue val)
 		{
-			var val = (ObjectValue) store.GetValue (iter, ObjectColumn);
+			if (val == null)
+				return;
 			UnregisterValue (val);
 			
 			RemoveChildren (iter);
@@ -1013,8 +1014,7 @@ namespace MonoDevelop.Debugger
 
 			while (store.IterChildren (out citer, iter)) {
 				var val = (ObjectValue) store.GetValue (citer, ObjectColumn);
-				if (val != null)
-					UnregisterValue (val);
+				UnregisterValue (val);
 				RemoveChildren (citer);
 				store.Remove (ref citer);
 			}
@@ -1030,6 +1030,8 @@ namespace MonoDevelop.Debugger
 
 		void UnregisterValue (ObjectValue val)
 		{
+			if (val == null)
+				return;
 			val.ValueChanged -= OnValueUpdated;
 			nodes.Remove (val);
 		}
@@ -1608,20 +1610,24 @@ namespace MonoDevelop.Debugger
 		{
 			return char.IsLetter (c) || c == '_' || c == '.';
 		}
-
-		void PopupCompletion (Entry entry)
+		CancellationTokenSource cts = new CancellationTokenSource ();
+		async void PopupCompletion (Entry entry)
 		{
-			char c = (char)Gdk.Keyval.ToUnicode (keyValue);
-			if (currentCompletionData == null && IsCompletionChar (c)) {
-				string expr = entry.Text.Substring (0, entry.CursorPosition);
-				currentCompletionData = GetCompletionData (expr);
-				if (currentCompletionData != null) {
-					DebugCompletionDataList dataList = new DebugCompletionDataList (currentCompletionData);
-					ctx = ((ICompletionWidget)this).CreateCodeCompletionContext (expr.Length - currentCompletionData.ExpressionLength);
-					CompletionWindowManager.ShowWindow (null, c, dataList, this, ctx);
-				} else {
-					currentCompletionData = null;
+			try {
+				char c = (char)Gdk.Keyval.ToUnicode (keyValue);
+				if (currentCompletionData == null && IsCompletionChar (c)) {
+					string expr = entry.Text.Substring (0, entry.CursorPosition);
+					cts.Cancel ();
+					cts = new CancellationTokenSource ();
+					currentCompletionData = await GetCompletionData (expr, cts.Token);
+					if (currentCompletionData != null) {
+						DebugCompletionDataList dataList = new DebugCompletionDataList (currentCompletionData);
+						ctx = ((ICompletionWidget)this).CreateCodeCompletionContext (expr.Length - currentCompletionData.ExpressionLength);
+						CompletionWindowManager.ShowWindow (null, c, dataList, this, ctx);
+					}
 				}
+
+			} catch (OperationCanceledException) {
 			}
 		}
 
@@ -1900,7 +1906,7 @@ namespace MonoDevelop.Debugger
 					var val = (ObjectValue)store.GetValue (it, ObjectColumn);
 					if (DebuggingService.ShowValueVisualizer (val)) {
 						UpdateParentValue (it);
-						RefreshRow (it);
+						RefreshRow (it, val);
 					}
 				} else if (cr == crtExp && !PreviewWindowManager.IsVisible && ValidObjectForPreviewIcon (it)) {
 					var val = (ObjectValue)store.GetValue (it, ObjectColumn);
@@ -2186,9 +2192,12 @@ namespace MonoDevelop.Debugger
 			var val = (ObjectValue) store.GetValue (iter, ObjectColumn);
 			if (val != null && val.Name == DebuggingService.DebuggerSession.EvaluationOptions.CurrentExceptionTag)
 				DebuggingService.ShowExceptionCaughtDialog ();
+
+			if (val != null && DebuggingService.HasValueVisualizers (val))
+				DebuggingService.ShowValueVisualizer (val);
 		}
-		
-		
+
+
 		bool GetCellAtPos (int x, int y, out TreePath path, out TreeViewColumn col, out CellRenderer cellRenderer)
 		{
 			if (GetPathAtPos (x, y, out path, out col)) {
@@ -2338,28 +2347,22 @@ namespace MonoDevelop.Debugger
 
 			return offset >= txt.Length ? '\0' : txt[offset];
 		}
-		
+
 		CodeCompletionContext ICompletionWidget.CreateCodeCompletionContext (int triggerOffset)
 		{
-			var c = new CodeCompletionContext ();
-			c.TriggerLine = 0;
-			c.TriggerOffset = triggerOffset;
-			c.TriggerLineOffset = c.TriggerOffset;
-			c.TriggerTextHeight = editEntry.SizeRequest ().Height;
-			c.TriggerWordLength = currentCompletionData.ExpressionLength;
-
 			int x, y;
-			int tx, ty;
 			editEntry.GdkWindow.GetOrigin (out x, out y);
-			editEntry.GetLayoutOffsets (out tx, out ty);
+			editEntry.GetLayoutOffsets (out int tx, out int ty);
 			int cp = editEntry.TextIndexToLayoutIndex (editEntry.Position);
 			Pango.Rectangle rect = editEntry.Layout.IndexToPos (cp);
-			tx += Pango.Units.ToPixels (rect.X) + x;
+			x += Pango.Units.ToPixels (rect.X) + tx;
 			y += editEntry.Allocation.Height;
 
-			c.TriggerXCoord = tx;
-			c.TriggerYCoord = y;
-			return c;
+			return new CodeCompletionContext (
+				x, y, editEntry.SizeRequest ().Height,
+				triggerOffset, 0, triggerOffset,
+				currentCompletionData.ExpressionLength
+			);
 		}
 		
 		string ICompletionWidget.GetCompletionText (CodeCompletionContext ctx)
@@ -2438,10 +2441,10 @@ namespace MonoDevelop.Debugger
 			return values;
 		}
 		
-		Mono.Debugging.Client.CompletionData GetCompletionData (string exp)
+		async Task<Mono.Debugging.Client.CompletionData> GetCompletionData (string exp, CancellationToken token)
 		{
 			if (CanQueryDebugger && frame != null)
-				return frame.GetExpressionCompletionData (exp);
+				return await DebuggingService.GetCompletionDataAsync (frame, exp, token);
 
 			return null;
 		}

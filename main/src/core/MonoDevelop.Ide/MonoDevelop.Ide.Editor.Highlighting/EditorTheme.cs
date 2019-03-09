@@ -102,7 +102,7 @@ namespace MonoDevelop.Ide.Editor.Highlighting
 		}
 	}
 
-	public sealed class EditorTheme
+	public sealed class EditorTheme : IEditorThemeProvider
 	{
 		public readonly static string DefaultThemeName = "Light";
 		public readonly static string DefaultDarkThemeName = "Dark";
@@ -150,7 +150,7 @@ namespace MonoDevelop.Ide.Editor.Highlighting
 		}
 
 
-		struct FontColorStyle {
+		readonly struct FontColorStyle {
 			public readonly HslColor Foreground;
 			public readonly HslColor Background;
 			public readonly string FontStyle;
@@ -329,6 +329,13 @@ namespace MonoDevelop.Ide.Editor.Highlighting
 			var result = (EditorTheme)this.MemberwiseClone ();
 			result.Name = newName;
 			return result;
+		}
+
+		EditorTheme IEditorThemeProvider.GetEditorTheme () => this;
+
+		public override string ToString ()
+		{
+			return string.Format ("[EditorTheme: Name={0}]", Name);
 		}
 	}
 }

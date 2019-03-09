@@ -146,10 +146,12 @@ namespace MonoDevelop.PackageManagement
 
 			var identity = new PackageIdentity (PackageId, Version);
 
+			var resolutionContext = CreateResolutionContext ();
+
 			actions = await packageManager.PreviewInstallPackageAsync (
 				project,
 				identity,
-				CreateResolutionContext (),
+				resolutionContext,
 				context,
 				primarySources,
 				secondarySources,
@@ -164,12 +166,17 @@ namespace MonoDevelop.PackageManagement
 			}
 
 			using (IDisposable fileMonitor = CreateFileMonitor ()) {
-				using (IDisposable referenceMaintainer = CreateLocalCopyReferenceMaintainer ()) {
+				using (var referenceMaintainer = CreateProjectReferenceMaintainer ()) {
 					await packageManager.ExecuteNuGetProjectActionsAsync (
 						project,
 						actions,
 						context,
+						resolutionContext.SourceCacheContext,
 						cancellationToken);
+
+					if (referenceMaintainer != null) {
+						await referenceMaintainer.ApplyChanges ();
+					}
 				}
 			}
 
@@ -239,13 +246,13 @@ namespace MonoDevelop.PackageManagement
 			return new LicenseAcceptanceService ();
 		}
 
-		IDisposable CreateLocalCopyReferenceMaintainer ()
+		ProjectReferenceMaintainer CreateProjectReferenceMaintainer ()
 		{
 			if (PreserveLocalCopyReferences) {
-				return new LocalCopyReferenceMaintainer (packageManagementEvents);
+				return new ProjectReferenceMaintainer (project);
 			}
 
-			return new NullDisposable ();
+			return null;
 		}
 
 		public IEnumerable<NuGetProjectAction> GetNuGetProjectActions ()

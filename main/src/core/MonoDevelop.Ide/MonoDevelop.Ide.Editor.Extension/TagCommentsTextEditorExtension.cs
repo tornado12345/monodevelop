@@ -88,20 +88,20 @@ namespace MonoDevelop.Ide.Editor.Extension
 			if (project == null)
 				return;
 
-			var newTasks = ImmutableArray<QuickTask>.Empty.ToBuilder ();
+			var newTasks = ImmutableArray.CreateBuilder<QuickTask> (args.TodoItems.Length);
 			Runtime.RunInMainThread (() => {
 				foreach (var todoItem in args.TodoItems) {
 					if (token.IsCancellationRequested)
 						return;
 
-					var offset = Editor.LocationToOffset (todoItem.MappedLine, todoItem.MappedColumn);
+					var offset = Editor.LocationToOffset (todoItem.MappedLine + 1, todoItem.MappedColumn + 1);
 					var newTask = new QuickTask (todoItem.Message, offset, DiagnosticSeverity.Info);
 					newTasks.Add (newTask);
 				}
 
 				if (token.IsCancellationRequested || isDisposed)
 					return;
-				tasks = newTasks.ToImmutable ();
+				tasks = newTasks.MoveToImmutable ();
 				OnTasksUpdated (EventArgs.Empty);
 			});
 		}

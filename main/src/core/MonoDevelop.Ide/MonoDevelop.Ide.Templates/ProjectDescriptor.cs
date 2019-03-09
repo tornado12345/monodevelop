@@ -32,6 +32,7 @@ using MonoDevelop.Core.Assemblies;
 using MonoDevelop.Projects;
 using System.IO;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Xml;
 using System.Linq;
 using MonoDevelop.Projects.MSBuild;
@@ -141,7 +142,7 @@ namespace MonoDevelop.Ide.Templates
 			return project;
 		}
 
-		public async void InitializeItem (SolutionFolderItem policyParent, ProjectCreateInformation projectCreateInformation, string defaultLanguage, SolutionItem item)
+		public async Task InitializeItem (SolutionFolderItem policyParent, ProjectCreateInformation projectCreateInformation, string defaultLanguage, SolutionItem item)
 		{
 			MonoDevelop.Projects.Project project = item as MonoDevelop.Projects.Project;
 
@@ -255,6 +256,11 @@ namespace MonoDevelop.Ide.Templates
 
 			string dir = ReplaceParameters (directory, substitution, projectCreateInformation);
 			projectCreateInformation.ProjectBasePath = Path.Combine (projectCreateInformation.SolutionPath, dir);
+
+			// Ensure that any relative path (e.g. "./Droid") used by 'directory' for the project template is removed since this
+			// can cause a problem with the remote msbuild host trying to load the project multiple times into the build engine
+			// due to a mismatch in the filename being used.
+			projectCreateInformation.ProjectBasePath = projectCreateInformation.ProjectBasePath.FullPath;
 
 			if (ShouldCreateProject (projectCreateInformation) && !Directory.Exists (projectCreateInformation.ProjectBasePath))
 				Directory.CreateDirectory (projectCreateInformation.ProjectBasePath);

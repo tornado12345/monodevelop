@@ -25,13 +25,14 @@
 // THE SOFTWARE.
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using MonoDevelop.Projects.MSBuild;
 
 namespace MonoDevelop.Projects
 {
 	public sealed class PackageDependency
 	{
-		string[] dependencies;
+		ImmutableArray<string> dependencies;
 
 		PackageDependency (string type, IMSBuildItemEvaluated item)
 		{
@@ -44,12 +45,17 @@ namespace MonoDevelop.Projects
 		public string Version { get; private set; }
 		public bool Resolved { get; private set; }
 
-		public IEnumerable<string> Dependencies {
+		public string FrameworkName { get; private set; }
+		public string DiagnosticCode { get; private set; }
+		public string DiagnosticMessage { get; private set; }
+
+		public ImmutableArray<string> Dependencies {
 			get { return dependencies; }
 		}
 
 		public bool IsTargetFramework { get; private set; }
 		public bool IsPackage { get; private set; }
+		public bool IsDiagnostic { get; private set; }
 
 		internal static PackageDependency Create (IMSBuildItemEvaluated item)
 		{
@@ -62,6 +68,7 @@ namespace MonoDevelop.Projects
 			switch (type) {
 				case "Target":
 				case "Package":
+				case "Diagnostic":
 				return new PackageDependency (type, item);
 
 				default:
@@ -78,11 +85,36 @@ namespace MonoDevelop.Projects
 				IsPackage = true;
 			} else if (Type == "Target") {
 				Name = item.Metadata.GetValue ("FrameworkName", "");
+				FrameworkName = Name;
 				Version = item.Metadata.GetValue ("FrameworkVersion", "");
 				Resolved = true;
 				IsTargetFramework = true;
+			} else if (Type == "Diagnostic") {
+				GetDiagnosticNameAndVersion (item);
+				DiagnosticCode = item.Metadata.GetValue ("DiagnosticCode", "");
+				DiagnosticMessage = item.Metadata.GetValue ("Message", "");
+				IsDiagnostic = true;
 			}
-			dependencies = item.Metadata.GetValue ("Dependencies", "").Split (new char [] { ';' }, System.StringSplitOptions.RemoveEmptyEntries);
+			dependencies = item.Metadata.GetValue ("Dependencies", "").Split (new char [] { ';' }, System.StringSplitOptions.RemoveEmptyEntries).ToImmutableArray ();
+		}
+
+		/// <summary>
+		/// Gets the NuGet package name and version from the identity for a NuGet diagnostic:
+		/// 
+		/// .NETStandard,Version=v2.0/.NETStandard,Version=v2.0/System.ComponentModel.EventBasedAsync/4.0.10/NU1603
+		/// </summary>
+		void GetDiagnosticNameAndVersion (IMSBuildItemEvaluated item)
+		{
+			if (string.IsNullOrEmpty (item.Include))
+				return;
+
+			var parts = item.Include.Split (new char [] { '/' });
+			if (parts.Length < 5)
+				return;
+
+			FrameworkName = parts [1];
+			Name = parts [2];
+			Version = parts [3];
 		}
 	}
 }

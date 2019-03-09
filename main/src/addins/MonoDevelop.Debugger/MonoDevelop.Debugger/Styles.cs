@@ -26,6 +26,7 @@
 
 using MonoDevelop.Ide;
 using Xwt.Drawing;
+using MonoDevelop.Components;
 
 namespace MonoDevelop.Debugger
 {
@@ -45,6 +46,8 @@ namespace MonoDevelop.Debugger
 
 		public class ExceptionCaughtDialogStyle
 		{
+			public Color HeaderBackgroundColor { get; internal set; }
+			public Color HeaderTextColor { get; internal set; }
 			public Color TreeBackgroundColor { get; internal set; }
 			public Color TreeTextColor { get; internal set; }
 			public Color LineNumberTextColor { get; internal set; }
@@ -67,35 +70,58 @@ namespace MonoDevelop.Debugger
 			ExceptionCaughtDialog.TreeTextColor = Ide.Gui.Styles.BaseForegroundColor;
 			ExceptionCaughtDialog.TreeSelectedBackgroundColor = Ide.Gui.Styles.BaseSelectionBackgroundColor;
 			ExceptionCaughtDialog.TreeSelectedTextColor = Ide.Gui.Styles.BaseSelectionTextColor;
-			ExceptionCaughtDialog.ValueTreeBackgroundColor = Ide.Gui.Styles.PadBackground;
+			ExceptionCaughtDialog.HeaderBackgroundColor = Color.FromName ("#a06705");
+			ExceptionCaughtDialog.HeaderTextColor = Color.FromName ("#ffffff");
 
 			if (IdeApp.Preferences.UserInterfaceTheme == Theme.Light) {
 				ObjectValueTreeValuesButtonBackground = Color.FromName ("#e9f2fc");
-				ObjectValueTreeValuesButtonText = Color.FromName ("#5294eb");
-				ObjectValueTreeValuesButtonBorder = Color.FromName ("#5294eb");
+				ObjectValueTreeValuesButtonText = Color.FromName ("#175fde");
+				ObjectValueTreeValuesButtonBorder = Color.FromName ("#175fde");
 				ObjectValueTreeValueDisabledText = Color.FromName ("#7f7f7f");
 				ObjectValueTreeValueModifiedText = Color.FromName ("#1FAECE");
 
-				ExceptionCaughtDialog.LineNumberTextColor = Color.FromName ("#BBBBBB");
-				ExceptionCaughtDialog.ExternalCodeTextColor = Color.FromName ("#BBBBBB");
+				ExceptionCaughtDialog.LineNumberTextColor = Color.FromName ("#707070");
+				ExceptionCaughtDialog.ExternalCodeTextColor = Color.FromName ("#707070");
+				ExceptionCaughtDialog.ValueTreeBackgroundColor = Color.FromName ("#ffffff");
 			} else {
-				ObjectValueTreeValuesButtonBackground = Color.FromName ("#7c8695");
-				ObjectValueTreeValuesButtonText = Color.FromName ("#cbe5ff");
-				ObjectValueTreeValuesButtonBorder = Color.FromName ("#a4bbd5");
+				ObjectValueTreeValuesButtonBackground = Color.FromName ("#555b65");
+				ObjectValueTreeValuesButtonText = Color.FromName ("#ace2ff");
+				ObjectValueTreeValuesButtonBorder = Color.FromName ("#ace2ff");
 				ObjectValueTreeValueDisabledText = Color.FromName ("#5a5a5a");
 				ObjectValueTreeValueModifiedText = Color.FromName ("#4FCAE6");
 
-				ExceptionCaughtDialog.LineNumberTextColor = Color.FromName ("#888888");
-				ExceptionCaughtDialog.ExternalCodeTextColor = Color.FromName ("#888888");
+				ExceptionCaughtDialog.LineNumberTextColor = Color.FromName ("#b4b4b4");
+				ExceptionCaughtDialog.ExternalCodeTextColor = Color.FromName ("#b4b4b4");
+				ExceptionCaughtDialog.ValueTreeBackgroundColor = Color.FromName ("#525252");
 			}
 
+			//Disabled state
+			ObjectValueTreeDisabledBackgroundColor = new Cairo.Color (0.64f, 0.64f, 0.64f);
+
 			// Shared
+			ObjectValueTreeSelectedTextColor = Ide.Gui.Styles.BaseSelectionTextColor.ToHexString (false);
+			ObjectValueTreeForegroundTextColor = Ide.Gui.Styles.BaseSelectionTextColor.ToHexString (false);
+			ObjectValueTreeExternalCodeForegroundTextColor = ExceptionCaughtDialog.ExternalCodeTextColor.ToHexString (false);
 
 			ObjectValueTreeValueErrorText = Ide.Gui.Styles.WarningForegroundColor;
 
 			PreviewVisualizerBackgroundColor = Ide.Gui.Styles.PopoverWindow.DefaultBackgroundColor;
 			PreviewVisualizerTextColor = Ide.Gui.Styles.PopoverWindow.DefaultTextColor;
 			PreviewVisualizerHeaderTextColor = Ide.Gui.Styles.PopoverWindow.DefaultTextColor;
+		}
+
+		public static string ObjectValueTreeSelectedTextColor { get; private set; }
+		public static string ObjectValueTreeForegroundTextColor { get; private set; }
+		public static string ObjectValueTreeExternalCodeForegroundTextColor { get; private set; }
+
+		public static Cairo.Color ObjectValueTreeDisabledBackgroundColor { get; private set; }
+
+		internal static string GetStackFrameForegroundHexColor (bool selected, bool isUserCode)
+		{
+			if (selected) {
+				return ObjectValueTreeSelectedTextColor;
+			}
+			return isUserCode ? ObjectValueTreeForegroundTextColor : ObjectValueTreeExternalCodeForegroundTextColor;
 		}
 	}
 }

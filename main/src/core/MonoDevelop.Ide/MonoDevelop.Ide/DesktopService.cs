@@ -1,21 +1,21 @@
-// 
+//
 // DesktopService.cs
-//  
+//
 // Author:
 //       Lluis Sanchez Gual <lluis@novell.com>
-// 
+//
 // Copyright (c) 2009 Novell, Inc (http://www.novell.com)
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -64,7 +64,7 @@ namespace MonoDevelop.Ide
 			PlatformService.Initialize ();
 			if (PlatformService.CanOpenTerminal)
 				Runtime.ProcessService.SetExternalConsoleHandler (PlatformService.StartConsoleProcess);
-			
+
 			FileService.FileRemoved += NotifyFileRemoved;
 			FileService.FileRenamed += NotifyFileRenamed;
 
@@ -72,9 +72,25 @@ namespace MonoDevelop.Ide
 			// so that we can safely access this property later in other threads
 			GC.KeepAlive (NativeToolkit);
 
+			MemoryMonitor = platformService.CreateMemoryMonitor ();
+			MemoryMonitor.StatusChanged += OnMemoryStatusChanged;
+
+			ThermalMonitor = platformService.CreateThermalMonitor ();
+			ThermalMonitor.StatusChanged += OnThermalStatusChanged;
+
 			FontService.Initialize ();
 		}
-		
+
+		static void OnMemoryStatusChanged (object sender, PlatformMemoryStatusEventArgs args)
+		{
+			Counters.MemoryPressure.Inc (args.CounterMetadata);
+		}
+
+		static void OnThermalStatusChanged (object sender, PlatformThermalStatusEventArgs args)
+		{
+			Counters.ThermalNotification.Inc (args.CounterMetadata);
+		}
+
 		/// <summary>
 		/// Returns the XWT toolkit for the native toolkit (Cocoa on Mac, WPF on Windows)
 		/// </summary>
@@ -111,23 +127,16 @@ namespace MonoDevelop.Ide
 		public static string DefaultMonospaceFont {
 			get { return PlatformService.DefaultMonospaceFont; }
 		}
-		
+
 		public static string PlatformName {
 			get { return PlatformService.Name; }
 		}
 
-		[Obsolete]
-		public static string DefaultControlLeftRightBehavior {
-			get {
-				return PlatformService.DefaultControlLeftRightBehavior;
-			}
-		}
-		
 		public static void ShowUrl (string url)
 		{
 			PlatformService.ShowUrl (url);
 		}
-		
+
 		public static void OpenFile (string filename)
 		{
 			PlatformService.OpenFile (filename);
@@ -156,12 +165,12 @@ namespace MonoDevelop.Ide
 		{
 			return PlatformService.GetMimeTypeForUri (uri);
 		}
-		
+
 		public static string GetMimeTypeDescription (string mimeType)
 		{
 			return PlatformService.GetMimeTypeDescription (mimeType);
 		}
-		
+
 		public static bool GetMimeTypeIsText (string mimeType)
 		{
 			return PlatformService.GetMimeTypeIsText (mimeType);
@@ -172,15 +181,14 @@ namespace MonoDevelop.Ide
 			if (mimeType == null) {
 				mimeType = GetMimeTypeForUri (file);
 			}
-
-			if (mimeType != "application/octet-stream") {
+			if (mimeType != "application/octet-stream" && mimeType != "application/x-msdownload") {
 				return GetMimeTypeIsText (mimeType);
 			}
 
 			if (!File.Exists (file))
 				return false;
 
-			return !MonoDevelop.Core.Text.TextFileUtility.IsBinary (file); 
+			return !MonoDevelop.Core.Text.TextFileUtility.IsBinary (file);
 		}
 
 		public async static Task<bool> GetFileIsTextAsync (string file, string mimeType = null)
@@ -212,7 +220,7 @@ namespace MonoDevelop.Ide
 		{
 			return PlatformService.GetMimeTypeIsSubtype (subMimeType, baseMimeType);
 		}
-		
+
 		public static IEnumerable<string> GetMimeTypeInheritanceChain (string mimeType)
 		{
 			return PlatformService.GetMimeTypeInheritanceChain (mimeType);
@@ -222,7 +230,7 @@ namespace MonoDevelop.Ide
 		{
 			return GetMimeTypeInheritanceChain (GetMimeTypeForUri (filename));
 		}
-		
+
 		public static Xwt.Drawing.Image GetIconForFile (string filename)
 		{
 			return PlatformService.GetIconForFile (filename);
@@ -232,7 +240,7 @@ namespace MonoDevelop.Ide
 		{
 			return PlatformService.GetIconForFile (filename).WithSize (size);
 		}
-		
+
 		public static Xwt.Drawing.Image GetIconForType (string mimeType)
 		{
 			return PlatformService.GetIconForType (mimeType);
@@ -248,14 +256,14 @@ namespace MonoDevelop.Ide
 		{
 			return PlatformService.SetGlobalMenu (commandManager, commandMenuAddinPath, appMenuAddinPath);
 		}
-		
+
 		// Used for preserve the file attributes when monodevelop opens & writes a file.
 		// This should work on unix & mac platform.
 		public static object GetFileAttributes (string fileName)
 		{
 			return PlatformService.GetFileAttributes (fileName);
 		}
-		
+
 		public static void SetFileAttributes (string fileName, object attributes)
 		{
 			PlatformService.SetFileAttributes (fileName, attributes);
@@ -265,7 +273,7 @@ namespace MonoDevelop.Ide
 		{
 			return PlatformService.GetUsableMonitorGeometry (screenNumber, monitorNumber);
 		}
-		
+
 		public static bool CanOpenTerminal {
 			get {
 				return PlatformService.CanOpenTerminal;
@@ -285,13 +293,13 @@ namespace MonoDevelop.Ide
 		{
 			PlatformService.OpenTerminal (workingDirectory, environmentVariables, windowTitle);
 		}
-		
+
 		public static RecentFiles RecentFiles {
 			get {
 				return PlatformService.RecentFiles;
 			}
 		}
-		
+
 		static void NotifyFileRemoved (object sender, FileEventArgs args)
 		{
 			foreach (FileEventInfo e in args) {
@@ -300,37 +308,56 @@ namespace MonoDevelop.Ide
 				}
 			}
 		}
-		
+
 		static void NotifyFileRenamed (object sender, FileCopyEventArgs args)
 		{
-			foreach (FileCopyEventInfo e in args) {
+			if (args.IsExternal)
+				return;
+
+			foreach (FileEventInfo e in args) {
 				if (!e.IsDirectory) {
 					PlatformService.RecentFiles.NotifyFileRenamed (e.SourceFile, e.TargetFile);
 				}
 			}
 		}
-		
+
 		internal static string GetUpdaterUrl ()
 		{
 			return PlatformService.GetUpdaterUrl ();
 		}
-		
+
 		internal static IEnumerable<string> GetUpdaterEnvironmentFlags ()
 		{
 			return PlatformService.GetUpdaterEnviromentFlags ();
 		}
-		
+
 		internal static void StartUpdatesInstaller (FilePath installerDataFile, FilePath updatedInstallerPath)
 		{
 			PlatformService.StartUpdatesInstaller (installerDataFile, updatedInstallerPath);
 		}
-		
+
 		/// <summary>
 		/// Grab the desktop focus for the window.
 		/// </summary>
 		internal static void GrabDesktopFocus (Gtk.Window window)
 		{
 			PlatformService.GrabDesktopFocus (window);
+		}
+
+		public static Window GetParentForModalWindow ()
+		{
+			return PlatformService.GetParentForModalWindow ();
+		}
+
+		public static Window GetFocusedTopLevelWindow ()
+		{
+			return PlatformService.GetFocusedTopLevelWindow ();
+		}
+
+		public static void FocusWindow (Window window)
+		{
+			if (window !=  null)
+				PlatformService.FocusWindow (window);
 		}
 
 		public static void RemoveWindowShadow (Window window)
@@ -401,6 +428,17 @@ namespace MonoDevelop.Ide
 			}
 		}
 
+		public static bool AccessibilityKeyboardFocusInUse {
+			get {
+				return PlatformService.AccessibilityKeyboardFocusInUse;
+			}
+		}
+
 		internal static string GetNativeRuntimeDescription () => PlatformService.GetNativeRuntimeDescription ();
+
+		public static ThermalMonitor ThermalMonitor { get; private set; }
+		public static MemoryMonitor MemoryMonitor { get; private set; }
+		static readonly Lazy<IPlatformTelemetryDetails> platformTelemetryDetails = new Lazy<IPlatformTelemetryDetails> (() => PlatformService.CreatePlatformTelemetryDetails ());
+		public static IPlatformTelemetryDetails PlatformTelemetry => platformTelemetryDetails.Value; 
 	}
 }

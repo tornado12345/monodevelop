@@ -7,7 +7,6 @@ open System.Threading.Tasks
 open FsUnit
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open MonoDevelop.Core
-open MonoDevelop.Core.ProgressMonitoring
 open MonoDevelop.FSharp
 open MonoDevelop.Ide
 open MonoDevelop.Ide.Projects
@@ -15,13 +14,15 @@ open MonoDevelop.Ide.Templates
 open MonoDevelop.PackageManagement.Tests.Helpers
 open MonoDevelop.Projects
 open MonoDevelop.Projects.MSBuild
+open MonoDevelop.FSharp.Shared
 open NUnit.Framework
 
 [<TestFixture>]
 type ``Template tests``() =
+    inherit UnitTests.TestBase()
     let toTask computation : Task = Async.StartAsTask computation :> _
 
-    let monitor = new ConsoleProgressMonitor()
+    let monitor = UnitTests.Util.GetMonitor ()
     do
         FixtureSetup.initialiseMonoDevelop()
         let getField name =
@@ -44,35 +45,24 @@ type ``Template tests``() =
             yield! category.Categories |> Seq.collect flattenCategories
         }
 
-    let solutionTemplates =
-        templateService.GetProjectTemplateCategories (predicate)
-        |> Seq.collect flattenCategories
-        |> Seq.collect(fun c -> c.Templates)
-        |> Seq.choose(fun s -> s.GetTemplate("F#") |> Option.ofObj)
-        |> Seq.filter(fun t -> t.Id.IndexOf("SharedAssets") = -1) // shared assets projects can't be built standalone
-        |> List.ofSeq
-
-    let templatesDir = FilePath(".").FullPath.ToString() / "buildtemplates"
+    let templatesDir = UnitTests.Util.TmpDir / "fsharp-buildtemplates"
 
     let getErrorsForProject (solution:Solution) =
         asyncSeq {
-
+            let config = solution.DefaultConfigurationSelector
             let ctx = TargetEvaluationContext (LogVerbosity=MSBuildVerbosity.Quiet)
-            let! result = solution.Build(monitor, solution.DefaultConfigurationSelector, ctx) |> Async.AwaitTask
+            let! result = solution.Build(monitor, config, ctx) |> Async.AwaitTask
             match result.HasWarnings, result.HasErrors with
             //| "Xamarin.tvOS.FSharp.SingleViewApp", _, false //MTOUCH : warning MT0094: Both profiling (--profiling) and incremental builds (--fastdev) is not supported when building for tvOS. Incremental builds have ben disabled.]
             | false, false ->
                 // xbuild worked, now check for editor squiggles
                 let projects =
                     solution.Items
-                    |> Seq.filter(fun i -> i :? DotNetProject)
-                    |> Seq.cast<DotNetProject> |> List.ofSeq
-
+                    |> Seq.ofType<DotNetProject> |> List.ofSeq
                 for project in projects do
                     let checker = FSharpChecker.Create()
-                    let! refs = project.GetReferencedAssemblies (CompilerArguments.getConfig()) |> Async.AwaitTask
-
-                    let projectOptions = languageService.GetProjectOptionsFromProjectFile (project, refs)
+                    let! refs = project.GetReferences (config) |> Async.AwaitTask
+                    let projectOptions = languageService.GetProjectOptionsFromProjectFile project config refs
                     let! checkResult = checker.ParseAndCheckProject projectOptions.Value
                     for error in checkResult.Errors do
                         yield "Editor error", error.FileName, error.Message
@@ -85,8 +75,9 @@ type ``Template tests``() =
     let testWithParameters (tt:string) (buildFolder:string) (parameters:string) =
         if not MonoDevelop.Core.Platform.IsMac then
             Assert.Ignore ()
+
+        let projectTemplate = ProjectTemplate.ProjectTemplates |> Seq.find (fun t -> t.Id = tt)
         toTask <| async {
-            let projectTemplate = ProjectTemplate.ProjectTemplates |> Seq.find (fun t -> t.Id = tt)
             let dir = FilePath (templatesDir/buildFolder)
             dir.Delete()
             Directory.CreateDirectory (dir |> string) |> ignore
@@ -103,14 +94,14 @@ type ``Template tests``() =
             cinfo.Parameters.["CreateAndroidUITest"] <- "False"
             cinfo.Parameters.["MinimumOSVersion"] <- "10.7"
             cinfo.Parameters.["AppIdentifier"] <- tt
-            cinfo.Parameters.["AndroidMinSdkVersionAttribute"] <- "android:minSdkVersion=\"10\""
+            cinfo.Parameters.["AndroidMinSdkVersionAttribute"] <- "android:minSdkVersion=\"27\""
             cinfo.Parameters.["AndroidThemeAttribute"] <- ""
-            cinfo.Parameters.["TargetFrameworkVersion"] <- "MonoAndroid,Version=v8.1"
 
             for templateParameter in TemplateParameter.CreateParameters (parameters) do
                 cinfo.Parameters.[templateParameter.Name] <- templateParameter.Value
 
-            use sln = projectTemplate.CreateWorkspaceItem (cinfo) :?> Solution
+            let! item = projectTemplate.CreateWorkspaceItem (cinfo) |> Async.AwaitTask
+            use sln = item :?> Solution
 
             let createTemplate (template:SolutionTemplate) =
                 let config = NewProjectConfiguration(
@@ -123,10 +114,6 @@ type ``Template tests``() =
                 templateService.ProcessTemplate(template, config, sln.RootFolder)
 
             let folder = new SolutionFolder()
-            let solutionTemplate =
-                solutionTemplates 
-                |> Seq.find(fun t -> t.Id = tt)
-
             let projects = sln.Items |> Seq.filter(fun i -> i :? DotNetProject) |> Seq.cast<DotNetProject> |> List.ofSeq
 
             // Save solution before installing NuGet packages to prevent any Imports from being added
@@ -161,40 +148,55 @@ type ``Template tests``() =
               </packageSources>
             </configuration>
             """
-        if not (Directory.Exists templatesDir) then
-            Directory.CreateDirectory templatesDir |> ignore
+        Directory.CreateDirectory templatesDir |> ignore
         let configFileName = templatesDir/"NuGet.Config"
         File.WriteAllText (configFileName, config, Text.Encoding.UTF8)
+        // HACK: Work around issue in "Xamarin Forms FSharp ClassLibrary" test
+        // the template is broken and doesn't define a framework, so gets the default net45
+        // however the base tests UnitTests.TestBase change the default to net40 resulting in
+        //"Could not install package 'FSharp.Core 4.3.3'. You are trying to install this package into a project that targets '.NETFramework,Version=v4.0',"
+        MonoDevelop.Projects.Services.ProjectService.DefaultTargetFramework
+            <- Runtime.SystemAssemblyService.GetTargetFramework (MonoDevelop.Core.Assemblies.TargetFrameworkMoniker.NET_4_5);
 
-    [<Test>]
+    [<TestFixtureTearDown>]
+    member x.TestFixtureTearDown() =
+        IdeApp.Exit()
+        |> Async.AwaitTask
+        |> Async.Ignore
+        |> Async.RunSynchronously
+
+    [<Test;AsyncStateMachine(typeof<Task>)>]
     member x.``FSharp portable project``() =
         let name = "FSharpPortableLibrary"
         let projectTemplate = ProjectTemplate.ProjectTemplates |> Seq.find (fun t -> t.Id = name)
-        let dir = FilePath (templatesDir/"fsportable")
-        dir.Delete()
-        let cinfo = new ProjectCreateInformation (ProjectBasePath = dir, ProjectName = name, SolutionName = name, SolutionPath = dir)
-        let sln = projectTemplate.CreateWorkspaceItem (cinfo) :?> Solution
-        let proj = sln.Items.[0] :?> FSharpProject
-        proj.IsPortableLibrary |> should equal true
+
+        async {
+            let dir = FilePath (templatesDir/"fsportable")
+            dir.Delete()
+            let cinfo = new ProjectCreateInformation (ProjectBasePath = dir, ProjectName = name, SolutionName = name, SolutionPath = dir)
+            let! item = projectTemplate.CreateWorkspaceItem (cinfo) |> Async.AwaitTask
+            let sln = item :?> Solution
+            let proj = sln.Items.[0] :?> FSharpProject
+            proj.IsPortableLibrary |> should equal true
+        } |> toTask
 
     [<Test;AsyncStateMachine(typeof<Task>)>]
-    [<Ignore("Waiting for dotnet core SDK 2.0 to be installed on Wrench")>]
     member x.``Can build netcoreapp11 MVC web app``()=
         async {
-            let directoryName = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
-            let projectPath = directoryName / ".." / ".." / "Samples" / "aspnetcoremvc11.sln"
+            let projectPath = UnitTests.Util.GetSampleProject ("fsharp-aspnetcoremvc11", "aspnetcoremvc11.sln")
 
             let! w = Services.ProjectService.ReadWorkspaceItem (monitor, FilePath(projectPath)) |> Async.AwaitTask
 
-            let solution = w :?> Solution
+            use solution = w :?> Solution
 
             let project =
                 solution.Items
-                |> Seq.filter(fun i -> i :? DotNetProject)
-                |> Seq.cast<DotNetProject>
+                |> Seq.ofType<DotNetProject>
                 |> Seq.head
 
             let! res = project.RunTarget(monitor, "Restore", ConfigurationSelector.Default)
+            do! project.ReevaluateProject (monitor)
+
             let fsharpFiles =
                 project.Files
                 |> Seq.filter(fun f -> f.FilePath.Extension = ".fs")
@@ -211,7 +213,6 @@ type ``Template tests``() =
             wwwrootFiles |> Seq.length |> should equal 41
             wwwrootFiles |> Seq.iter(fun imported -> imported |> should equal true)
             let errors = getErrorsForProject solution |> AsyncSeq.toSeq |> List.ofSeq
-            solution.Dispose()
             match errors with
             | [] -> Assert.Pass()
             | errors -> Assert.Fail (sprintf "%A" errors)
@@ -235,10 +236,10 @@ type ``Template tests``() =
     [<Test;AsyncStateMachine(typeof<Task>)>]member x.``FSharpGtkProject``()= test "FSharpGtkProject"
     [<Test;AsyncStateMachine(typeof<Task>)>]member x.``MonoDevelop FSharp LibraryProject``()= test "MonoDevelop.FSharp.LibraryProject"
     [<Test;AsyncStateMachine(typeof<Task>)>]member x.``FSharpNUnitLibraryProject``()= test "FSharpNUnitLibraryProject"
-    [<Test;AsyncStateMachine(typeof<Task>)>]
+    [<Ignore("Currently not testable");AsyncStateMachine(typeof<Task>)>]
     member x.``Xamarin Forms FSharp FormsApp Shared``() =
         testWithParameters "Xamarin.Forms.FSharp.FormsApp" "Xamarin.Forms.FSharp.FormsApp.Shared" "SafeUserDefinedProjectName=Xamarin_Forms_FSharp_FormsApp_Shared;CreateSharedAssetsProject=True;CreatePortableDotNetProject=False"
 
-    [<Test;AsyncStateMachine(typeof<Task>)>]
+    [<Ignore("Currently not testable");AsyncStateMachine(typeof<Task>)>]
     member x.``Xamarin Forms FSharp FormsApp Shared with XAML``() =
         testWithParameters "Xamarin.Forms.FSharp.FormsApp" "Xamarin.Forms.FSharp.FormsApp.Shared.XAML" "CreateXamlProject=True;SafeUserDefinedProjectName=Xamarin_Forms_FSharp_FormsApp_Shared_XAML;CreateSharedAssetsProject=True;CreatePortableDotNetProject=False"

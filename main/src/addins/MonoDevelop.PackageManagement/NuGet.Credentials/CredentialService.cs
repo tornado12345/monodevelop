@@ -9,6 +9,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using MonoDevelop.Core;
+using NuGet.Common;
 using NuGet.Configuration;
 
 namespace NuGet.Credentials
@@ -17,7 +18,7 @@ namespace NuGet.Credentials
 	/// This service manages orchestrates credential providers and supplies credentials
 	/// for use in http requests
 	/// </summary>
-	class CredentialService : ICredentialService
+	class CustomCredentialService : ICredentialService
 	{
 		readonly ConcurrentDictionary<string, bool> _retryCache
 			= new ConcurrentDictionary<string, bool> ();
@@ -42,7 +43,7 @@ namespace NuGet.Credentials
 		/// <param name="providers">All available credential providers.</param>
 		/// <param name="nonInteractive">If true, the nonInteractive flag will be passed to providers.
 		/// NonInteractive requests must not promt the user for credentials.</param>
-		public CredentialService (IEnumerable<ICredentialProvider> providers, bool nonInteractive)
+		public CustomCredentialService (IEnumerable<ICredentialProvider> providers, bool nonInteractive)
 		{
 			if (providers == null) {
 				throw new ArgumentNullException (nameof (providers));
@@ -138,7 +139,9 @@ namespace NuGet.Credentials
 
 		public CredentialService CreateNonInteractive ()
 		{
-			return new CredentialService (Providers, nonInteractive: true);
+			bool handlesDefaultCredentials = Providers.Any (provider => provider is DefaultCredentialsCredentialProvider);
+			var lazyProviders = AsyncLazy.New (() => Providers)
+;			return new CredentialService (lazyProviders, nonInteractive: true, handlesDefaultCredentials: handlesDefaultCredentials);
 		}
 
 		/// <summary>

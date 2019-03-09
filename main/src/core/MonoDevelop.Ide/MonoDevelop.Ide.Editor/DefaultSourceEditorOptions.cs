@@ -145,7 +145,7 @@ namespace MonoDevelop.Ide.Editor
 
 			bool ITextEditorOptions.HighlightCaretLine {
 				get {
-					return DefaultSourceEditorOptions.Instance.HighlightCaretLine;
+					return false;
 				}
 			}
 
@@ -244,6 +244,12 @@ namespace MonoDevelop.Ide.Editor
 					return DefaultSourceEditorOptions.Instance.SmartBackspace;
 				}
 			}
+
+			bool ITextEditorOptions.EnableQuickDiff {
+				get {
+					return false;
+				}
+			}
 			#endregion
 
 
@@ -271,7 +277,7 @@ namespace MonoDevelop.Ide.Editor
 			this.OnChanged (EventArgs.Empty);
 		}
 
-		void UpdateStylePolicy (MonoDevelop.Ide.Gui.Content.TextStylePolicy currentPolicy)
+		internal void UpdateStylePolicy (MonoDevelop.Ide.Gui.Content.TextStylePolicy currentPolicy)
 		{
 			defaultEolMarker = TextStylePolicy.GetEolMarker (currentPolicy.EolMarker);
 			tabsToSpaces          = currentPolicy.TabsToSpaces; // PropertyService.Get ("TabsToSpaces", false);
@@ -281,10 +287,17 @@ namespace MonoDevelop.Ide.Editor
 			removeTrailingWhitespaces = currentPolicy.RemoveTrailingWhitespace; //PropertyService.Get ("RemoveTrailingWhitespaces", true);
 		}
 
-		public DefaultSourceEditorOptions WithTextStyle (MonoDevelop.Ide.Gui.Content.TextStylePolicy policy)
+		internal DefaultSourceEditorOptions Create ()
+		{
+			var result = (DefaultSourceEditorOptions)MemberwiseClone ();
+			result.Changed = null;
+			return result;
+		}
+
+		public DefaultSourceEditorOptions WithTextStyle (TextStylePolicy policy)
 		{
 			if (policy == null)
-				throw new ArgumentNullException ("policy");
+				throw new ArgumentNullException (nameof (policy));
 			var result = (DefaultSourceEditorOptions)MemberwiseClone ();
 			result.UpdateStylePolicy (policy);
 			result.Changed = null;
@@ -293,6 +306,10 @@ namespace MonoDevelop.Ide.Editor
 
 		internal void SetContext (ICodingConventionContext context)
 		{
+			if (this.context == context)
+				return;
+			if (this.context != null)
+				this.context.CodingConventionsChangedAsync -= UpdateContextOptions;
 			this.context = context;
 			context.CodingConventionsChangedAsync += UpdateContextOptions;
 			UpdateContextOptions (null, null);
@@ -456,14 +473,13 @@ namespace MonoDevelop.Ide.Editor
 
 		#endregion
 
-		ConfigurationProperty<bool> onTheFlyFormatting = ConfigurationProperty.Create ("OnTheFlyFormatting", true);
+		[Obsolete ("Deprecated - use the roslyn FeatureOnOffOptions.FormatXXX per document options.")]
 		public bool OnTheFlyFormatting {
 			get {
-				return onTheFlyFormatting;
+				return true;
 			}
 			set {
-				if (onTheFlyFormatting.Set (value))
-					OnChanged (EventArgs.Empty);
+				// unused
 			}
 		}
 

@@ -34,6 +34,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 
 using AppKit;
+using CoreFoundation;
 using Foundation;
 using CoreGraphics;
 
@@ -55,6 +56,7 @@ using System.Diagnostics;
 using Xwt.Mac;
 using MonoDevelop.Components.Mac;
 using System.Reflection;
+using MacPlatform;
 
 namespace MonoDevelop.MacIntegration
 {
@@ -264,6 +266,7 @@ namespace MonoDevelop.MacIntegration
 						e.Reply = NSApplicationTerminateReply.Now;
 					}
 				};
+				appDelegate.ShowDockMenu += AppDelegate_ShowDockMenu;
 			}
 
 			// Listen to the AtkCocoa notification for the presence of VoiceOver
@@ -271,9 +274,8 @@ namespace MonoDevelop.MacIntegration
 
 			var nc = NSNotificationCenter.DefaultCenter;
 			nc.AddObserver ((NSString)"AtkCocoaAccessibilityEnabled", (NSNotification) => {
-				Console.WriteLine ($"VoiceOver on {IdeTheme.AccessibilityEnabled}");
+				LoggingService.LogInfo ($"VoiceOver on {IdeTheme.AccessibilityEnabled}");
 				if (!IdeTheme.AccessibilityEnabled) {
-					Console.WriteLine ("Showing notice");
 					ShowVoiceOverNotice ();
 				}
 			}, NSApplication.SharedApplication);
@@ -288,6 +290,7 @@ namespace MonoDevelop.MacIntegration
 				Gtk.Rc.ParseString ("style \"default\" { engine \"xamarin\" { focusstyle = 2 } }");
 				Gtk.Rc.ParseString ("style \"radio-or-check-box\" { engine \"xamarin\" { focusstyle = 2 } } ");
 			}
+			AccessibilityKeyboardFocusInUse = (keyboardMode != 0);
 
 			// Disallow window tabbing globally
 			if (MacSystemInformation.OsVersion >= MacSystemInformation.Sierra)
@@ -295,6 +298,27 @@ namespace MonoDevelop.MacIntegration
 
 			return loaded;
 		}
+
+		void AppDelegate_ShowDockMenu (object sender, ShowDockMenuArgs e)
+		{
+			if (((FilePath)NSBundle.MainBundle.BundlePath).Extension != ".app")
+				return;
+			var menu = new NSMenu ();
+			var newInstanceMenuItem = new NSMenuItem ();
+			newInstanceMenuItem.Title = GettextCatalog.GetString ("New Instance");
+			newInstanceMenuItem.Activated += NewInstanceMenuItem_Activated;
+			menu.AddItem (newInstanceMenuItem);
+			e.DockMenu = menu;
+		}
+
+		static void NewInstanceMenuItem_Activated (object sender, EventArgs e)
+		{
+			var bundlePath = NSBundle.MainBundle.BundlePath;
+			NSWorkspace.SharedWorkspace.LaunchApplication (NSUrl.FromFilename (bundlePath), NSWorkspaceLaunchOptions.NewInstance, new NSDictionary (), out NSError error);
+			if (error != null)
+				LoggingService.LogError ($"Failed to start new instance: {error.LocalizedDescription}");
+		}
+
 
 		const string EnabledKey = "com.monodevelop.AccessibilityEnabled";
 		static void ShowVoiceOverNotice ()
@@ -423,7 +447,7 @@ namespace MonoDevelop.MacIntegration
 				return;
 			var m = NSApplication.SharedApplication.MainMenu;
 			if (m != null) {
-				foreach (NSMenuItem item in m.ItemArray ()) {
+				foreach (NSMenuItem item in m.Items) {
 					var submenu = item.Submenu as MDMenu;
 					if (submenu != null && submenu.FlashIfContainsCommand (args.CommandId))
 						return;
@@ -466,20 +490,22 @@ namespace MonoDevelop.MacIntegration
 				}));
 
 
-			Styles.Changed += (s, a) => {
-				var colorPanel = NSColorPanel.SharedColorPanel;
-				if (colorPanel.ContentView?.Superview?.Window == null)
-					LoggingService.LogWarning ("Updating shared color panel appearance failed, no valid window.");
-				IdeTheme.ApplyTheme (colorPanel.ContentView.Superview.Window);
-				var appearance = colorPanel.ContentView.Superview.Window.Appearance;
-				if (appearance == null)
-					appearance = NSAppearance.GetAppearance (IdeApp.Preferences.UserInterfaceTheme == Theme.Light ? NSAppearance.NameAqua : NSAppearance.NameVibrantDark);
-				// The subviews of the shared NSColorPanel do not inherit the appearance of the main panel window
-				// and need to be updated recursively.
-				UpdateColorPanelSubviewsAppearance (colorPanel.ContentView.Superview, appearance);
-			};
-			
-			// FIXME: Immediate theme switching disabled, until NSAppearance issues are fixed 
+			if (MacSystemInformation.OsVersion < MacSystemInformation.Mojave) { // the shared color panel has full automatic theme support on Mojave
+				Styles.Changed += (s, a) => {
+					var colorPanel = NSColorPanel.SharedColorPanel;
+					if (colorPanel.ContentView?.Superview?.Window == null)
+						LoggingService.LogWarning ("Updating shared color panel appearance failed, no valid window.");
+					IdeTheme.ApplyTheme (colorPanel.ContentView.Superview.Window);
+					var appearance = colorPanel.ContentView.Superview.Window.Appearance;
+					if (appearance == null)
+						appearance = IdeTheme.GetAppearance ();
+					// The subviews of the shared NSColorPanel do not inherit the appearance of the main panel window
+					// and need to be updated recursively.
+					UpdateColorPanelSubviewsAppearance (colorPanel.ContentView.Superview, appearance);
+				};
+			}
+
+			// FIXME: Immediate theme switching disabled, until NSAppearance issues are fixed
 			//IdeApp.Preferences.UserInterfaceTheme.Changed += (s,a) => PatchGtkTheme ();
 		}
 
@@ -585,7 +611,14 @@ namespace MonoDevelop.MacIntegration
 				};
 
 				ApplicationEvents.Reopen += delegate (object sender, ApplicationEventArgs e) {
-					if (IdeApp.Workbench != null && IdeApp.Workbench.RootWindow != null) {
+					if (Ide.WelcomePage.WelcomePageService.HasWindowImplementation && !(IdeApp.Workbench.RootWindow?.Visible ?? false)) {
+						if (IdeApp.Workbench.RootWindow != null) {
+							IdeApp.Workbench.RootWindow.Visible = false;
+						}
+						Ide.WelcomePage.WelcomePageService.ShowWelcomeWindow (new Ide.WelcomePage.WelcomeWindowShowOptions (true));
+
+						e.Handled = true;
+					} else if (IdeApp.Workbench != null && IdeApp.Workbench.RootWindow != null) {
 						IdeApp.Workbench.RootWindow.Deiconify ();
 						IdeApp.Workbench.RootWindow.Visible = true;
 
@@ -596,7 +629,9 @@ namespace MonoDevelop.MacIntegration
 
 				ApplicationEvents.OpenDocuments += delegate (object sender, ApplicationDocumentEventArgs e) {
 					//OpenFiles may pump the mainloop, but can't do that from an AppleEvent, so use a brief timeout
-					GLib.Timeout.Add (10, delegate {
+					GLib.Timeout.Add (0, delegate {
+						Ide.WelcomePage.WelcomePageService.HideWelcomePageOrWindow ();
+						IdeApp.ReportTimeToCode = true;
 						IdeApp.OpenFiles (e.Documents.Select (
 							doc => new FileOpenInformation (doc.Key, null, doc.Value, 1, OpenDocumentOptions.DefaultInternal))
 						);
@@ -606,7 +641,8 @@ namespace MonoDevelop.MacIntegration
 				};
 
 				ApplicationEvents.OpenUrls += delegate (object sender, ApplicationUrlEventArgs e) {
-					GLib.Timeout.Add (10, delegate {
+					GLib.Timeout.Add (0, delegate {
+						IdeApp.ReportTimeToCode = true;
 						// Open files via the monodevelop:// URI scheme, compatible with the
 						// common TextMate scheme: http://blog.macromates.com/2007/the-textmate-url-scheme/
 						IdeApp.OpenFiles (e.Urls.Select (url => {
@@ -700,10 +736,12 @@ namespace MonoDevelop.MacIntegration
 		}
 
 		[GLib.ConnectBefore]
-		static void HandleDeleteEvent (object o, Gtk.DeleteEventArgs args)
+		static async void HandleDeleteEvent (object o, Gtk.DeleteEventArgs args)
 		{
 			args.RetVal = true;
-			NSApplication.SharedApplication.Hide (NSApplication.SharedApplication);
+			if (await IdeApp.Workspace.Close ()) {
+				IdeApp.Workbench.RootWindow.Visible = false;
+			}
 		}
 
 		public static Gdk.Pixbuf GetPixbufFromNSImageRep (NSImageRep rep, int width, int height)
@@ -930,6 +968,30 @@ namespace MonoDevelop.MacIntegration
 			NSApplication.SharedApplication.ActivateIgnoringOtherApps (true);
 		}
 
+		public override Window GetParentForModalWindow ()
+		{
+			return NSApplication.SharedApplication.ModalWindow ?? NSApplication.SharedApplication.KeyWindow ?? NSApplication.SharedApplication.MainWindow;
+		}
+
+		public override Window GetFocusedTopLevelWindow ()
+		{
+			return NSApplication.SharedApplication.KeyWindow;
+		}
+
+		public override void FocusWindow (Window window)
+		{
+			try {
+				NSWindow nswindow = window; // will also get an NSWindow from a Gtk.Window
+				if (nswindow != null) {
+					nswindow.MakeKeyAndOrderFront (nswindow);
+					return;
+				}
+			} catch (Exception ex) {
+				LoggingService.LogError ("Focusing window failed: not an NSWindow", ex);
+			}
+			base.FocusWindow (window);
+		}
+
 		static Cairo.Color ConvertColor (NSColor color)
 		{
 			nfloat r, g, b, a;
@@ -1031,7 +1093,7 @@ namespace MonoDevelop.MacIntegration
 				return base.GetIsFullscreen (window);
 			}
 
-			NSWindow nswin = GtkQuartz.GetWindow (window);
+			NSWindow nswin = window;
 			return (nswin.StyleMask & NSWindowStyle.FullScreenWindow) != 0;
 		}
 
@@ -1142,6 +1204,158 @@ namespace MonoDevelop.MacIntegration
 			proc.StartInfo = psi;
 			proc.Start ();
 		}
+
+		internal override IPlatformTelemetryDetails CreatePlatformTelemetryDetails ()
+		{
+			return MacTelemetryDetails.CreateTelemetryDetails ();
+		}
+
+		internal override MemoryMonitor CreateMemoryMonitor () => new MacMemoryMonitor ();
+
+		internal class MacMemoryMonitor : MemoryMonitor, IDisposable
+		{
+			const MemoryPressureFlags notificationFlags = MemoryPressureFlags.Critical | MemoryPressureFlags.Warn | MemoryPressureFlags.Normal;
+			internal DispatchSource.MemoryPressure DispatchSource { get; private set; }
+
+			public MacMemoryMonitor ()
+			{
+				DispatchSource = new DispatchSource.MemoryPressure (notificationFlags, DispatchQueue.DefaultGlobalQueue);
+				DispatchSource.SetEventHandler (() => {
+					var metadata = CreateMemoryMetadata (DispatchSource.PressureFlags);
+
+					var args = new PlatformMemoryStatusEventArgs (metadata);
+					OnStatusChanged (args);
+				});
+				DispatchSource.Resume ();
+			}
+
+			static MacPlatformMemoryMetadata CreateMemoryMetadata (MemoryPressureFlags flags)
+			{
+				var platformMemoryStatus = GetPlatformMemoryStatus (flags);
+				Interop.SysCtl ("vm.compressor_bytes_used", out long osCompressedMemory);
+				Interop.SysCtl ("vm.vm_page_free_target", out long osFreePagesTarget);
+				Interop.SysCtl ("vm.page_free_count", out long osFreePages);
+				Interop.SysCtl ("vm.pagesize", out long pagesize);
+
+				KernelInterop.GetCompressedMemoryInfo (out ulong appCompressedMemory, out ulong appVirtualMemory);
+
+				return new MacPlatformMemoryMetadata {
+					MemoryStatus = platformMemoryStatus,
+					OSVirtualMemoryFreeTarget = osFreePagesTarget * pagesize,
+					OSTotalFreeVirtualMemory = osFreePages * pagesize,
+					OSTotalCompressedMemory = osCompressedMemory,
+					ApplicationVirtualMemory = appVirtualMemory,
+					ApplicationCompressedMemory = appCompressedMemory,
+				};
+			}
+
+			static PlatformMemoryStatus GetPlatformMemoryStatus (MemoryPressureFlags flags)
+			{
+				switch (flags) {
+				case MemoryPressureFlags.Critical:
+					return PlatformMemoryStatus.Critical;
+				case MemoryPressureFlags.Warn:
+					return PlatformMemoryStatus.Low;
+				case MemoryPressureFlags.Normal:
+					return PlatformMemoryStatus.Normal;
+				default:
+					LoggingService.LogError ("Unknown MemoryPressureFlags value {0}", flags.ToString ());
+					return PlatformMemoryStatus.Normal;
+				}
+			}
+
+			public void Dispose ()
+			{
+				if (DispatchSource != null) {
+					DispatchSource.Cancel ();
+					DispatchSource.Dispose ();
+					DispatchSource = null;
+				}
+			}
+
+			class MacPlatformMemoryMetadata : PlatformMemoryMetadata
+			{
+				// sysctl - vm.vm_page_free_target
+				public long OSVirtualMemoryFreeTarget {
+					get => GetProperty<long> ();
+					set => SetProperty (value);
+				}
+
+				// sysctl - vm.compressor_bytes_used
+				public long OSTotalCompressedMemory {
+					get => GetProperty<long> ();
+					set => SetProperty (value);
+				}
+
+				// sysctl - vm.page_free_count
+				public long OSTotalFreeVirtualMemory {
+					get => GetProperty<long> ();
+					set => SetProperty (value);
+				}
+
+				// task_vm_info_t.compressed
+				public ulong ApplicationCompressedMemory {
+					get => GetProperty<ulong> ();
+					set => SetProperty (value);
+				}
+
+				// task_vm_info_t.virtual_size
+				public ulong ApplicationVirtualMemory {
+					get => GetProperty<ulong> ();
+					set => SetProperty (value);
+				}
+			}
+		}
+
+		internal override ThermalMonitor CreateThermalMonitor ()
+		{
+			if (MacSystemInformation.OsVersion < new Version (10, 10, 3))
+				return base.CreateThermalMonitor ();
+
+			return new MacThermalMonitor ();
+		}
+
+		internal class MacThermalMonitor : ThermalMonitor, IDisposable
+		{
+			NSObject observer;
+			public MacThermalMonitor ()
+			{
+				observer = NSProcessInfo.Notifications.ObserveThermalStateDidChange ((o, args) => {
+					var metadata = new PlatformThermalMetadata {
+						ThermalStatus = ToPlatform (NSProcessInfo.ProcessInfo.ThermalState),
+					};
+
+					var thermalArgs = new PlatformThermalStatusEventArgs (metadata);
+					OnStatusChanged (thermalArgs);
+				});
+			}
+
+			static PlatformThermalStatus ToPlatform (NSProcessInfoThermalState status)
+			{
+				switch (status)
+				{
+				case NSProcessInfoThermalState.Nominal:
+					return PlatformThermalStatus.Normal;
+				case NSProcessInfoThermalState.Fair:
+					return PlatformThermalStatus.Fair;
+				case NSProcessInfoThermalState.Critical:
+					return PlatformThermalStatus.Critical;
+				case NSProcessInfoThermalState.Serious:
+					return PlatformThermalStatus.Serious;
+				default:
+					LoggingService.LogError ("Unknown NSProcessInfoThermalState value {0}", status.ToString ());
+					return PlatformThermalStatus.Normal;
+				}
+			}
+
+			public void Dispose ()
+			{
+				if (observer != null) {
+					NSNotificationCenter.DefaultCenter.RemoveObserver (observer);
+					observer = null;
+				}
+			}
+		}
 	}
 
 	public class ThemedMacWindowBackend : Xwt.Mac.WindowBackend
@@ -1155,6 +1369,14 @@ namespace MonoDevelop.MacIntegration
 
 	public class ThemedMacDialogBackend : Xwt.Mac.DialogBackend
 	{
+		public ThemedMacDialogBackend ()
+		{
+		}
+
+		public ThemedMacDialogBackend (IntPtr ptr) : base (ptr)
+		{
+		}
+
 		public override void InitializeBackend (object frontend, Xwt.Backends.ApplicationContext context)
 		{
 			base.InitializeBackend (frontend, context);
@@ -1164,6 +1386,14 @@ namespace MonoDevelop.MacIntegration
 
 	public class ThemedMacAlertDialogBackend : Xwt.Mac.AlertDialogBackend
 	{
+		public ThemedMacAlertDialogBackend ()
+		{
+		}
+
+		public ThemedMacAlertDialogBackend (IntPtr ptr) : base (ptr)
+		{
+		}
+
 		public override void Initialize (Xwt.Backends.ApplicationContext actx)
 		{
 			base.Initialize (actx);

@@ -25,7 +25,7 @@ namespace MonoDevelop.Core.Execution
 		List<MessageListener> listeners = new List<MessageListener> ();
 		object listenersLock = new object ();
 
-		string exePath;
+		string exePath, workingDirectory;
 
 		// This class will ping the remote process every PingPeriod milliseconds
 		// If the remote process doesn't get a message in PingPeriod*2 it assumes
@@ -69,6 +69,12 @@ namespace MonoDevelop.Core.Execution
 			this.syncContext = syncContext;
 			this.console = console;
 			mainCancelSource = new CancellationTokenSource ();
+		}
+
+		public RemoteProcessConnection (string exePath, string workingDirectory, IExecutionHandler executionHandler = null, OperationConsole console = null, SynchronizationContext syncContext = null)
+			: this (exePath, executionHandler, console, syncContext)
+		{
+			this.workingDirectory = workingDirectory;
 		}
 
 		public ConnectionStatus Status {
@@ -148,15 +154,6 @@ namespace MonoDevelop.Core.Execution
 				RegisterMessageTypes (lis.GetMessageTypes ());
 				listeners = newList;
 			}
-		}
-
-		[Obsolete ("Use Disconnect()")]
-		public void Disconnect (bool waitUntilDone)
-		{
-			if (waitUntilDone)
-				Disconnect ().Wait (TimeSpan.FromSeconds (7));
-			else
-				Disconnect ().Ignore ();
 		}
 
 		public async Task Disconnect ()
@@ -279,16 +276,20 @@ namespace MonoDevelop.Core.Execution
 			SetStatus (ConnectionStatus.ConnectionFailed, ex.Message, ex);
 		}
 
+		public ProcessExecutionArchitecture ProcessExecutionArchitecture { get; set; }
+
 		Task StartRemoteProcess ()
 		{
 			return Task.Run (() => {
 				var cmd = Runtime.ProcessService.CreateCommand (exePath);
 				cmd.Arguments = ((IPEndPoint)listener.LocalEndpoint).Port + " " + DebugMode;
+				if (!string.IsNullOrEmpty (workingDirectory))
+					cmd.WorkingDirectory = workingDirectory;
 
 				// Explicitly propagate the PATH var to the process. It ensures that tools required
 				// to run XS are also in the PATH for remote processes.
 				cmd.EnvironmentVariables ["PATH"] = Environment.GetEnvironmentVariable ("PATH");
-
+				cmd.ProcessExecutionArchitecture = ProcessExecutionArchitecture;
 				process = executionHandler.Execute (cmd, console);
 				process.Task.ContinueWith (t => ProcessExited ());
 			});
@@ -341,6 +342,8 @@ namespace MonoDevelop.Core.Execution
 
 			if (cs != null) {
 				lock (messageWaiters) {
+					if (disposed)
+						throw new RemoteProcessException ("Not connected");
 					messageWaiters [message.Id] = new MessageRequest {
 						Request = message,
 						TaskSource = cs
@@ -349,6 +352,8 @@ namespace MonoDevelop.Core.Execution
 			}
 
 			lock (messageQueue) {
+				if (disposed)
+					return;
 				messageQueue.Add (message);
 				if (!senderRunning) {
 					senderRunning = true;
@@ -419,8 +424,8 @@ namespace MonoDevelop.Core.Execution
 		{
 			if (message == null)
 				message = "Disconnected from remote process";
-			AbortPendingMessages ();
 			disposed = true;
+			AbortPendingMessages ();
 			processConnectedEvent.TrySetResult (true);
 			if (isAsync)
 				PostSetStatus (ConnectionStatus.Disconnected, message);
@@ -430,12 +435,15 @@ namespace MonoDevelop.Core.Execution
 
 		void AbortPendingMessages ()
 		{
+			List<MessageRequest> messagesToAbort;
+			lock (messageQueue)
 			lock (messageWaiters) {
-				foreach (var m in messageWaiters.Values)
-					NotifyResponse (m, m.Request.CreateErrorResponse ("Connection closed"));
+				messagesToAbort = messageWaiters.Values.ToList ();
 				messageWaiters.Clear ();
 				messageQueue.Clear ();
 			}
+			foreach (var m in messagesToAbort)
+				NotifyResponse (m, m.Request.CreateErrorResponse ("Connection closed"));
 		}
 
 		void StopPinger ()

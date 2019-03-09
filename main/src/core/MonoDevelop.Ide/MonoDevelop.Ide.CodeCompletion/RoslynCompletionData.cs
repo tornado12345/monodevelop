@@ -40,11 +40,14 @@ using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
 using Microsoft.VisualStudio.Platform;
 using Microsoft.VisualStudio.Text;
+using Microsoft.CodeAnalysis.Editor.Shared.Extensions;
+using Microsoft.CodeAnalysis.Shared.Extensions;
 using MonoDevelop.Ide.CodeTemplates;
 using System.Linq;
 using System.Text;
 using MonoDevelop.Ide.Editor.Highlighting;
 using MonoDevelop.Ide.Fonts;
+using Microsoft.CodeAnalysis.Editor;
 
 namespace MonoDevelop.Ide.CodeCompletion
 {
@@ -186,6 +189,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 			{ "Keyword", 12 },
 
 			{ "Snippet", 13},
+			{ "Intrinsic", 13},
 
 			{ "NewMethod", 14 },
 
@@ -241,6 +245,8 @@ namespace MonoDevelop.Ide.CodeCompletion
 			}
 		}
 
+		public static bool RequestInsertText { get; internal set; }
+
 		public override void InsertCompletionText (CompletionListWindow window, ref KeyActions ka, KeyDescriptor descriptor)
 		{
 			var document = IdeApp.Workbench.ActiveDocument;
@@ -249,7 +255,18 @@ namespace MonoDevelop.Ide.CodeCompletion
 				base.InsertCompletionText (window, ref ka, descriptor);
 				return;
 			}
-			var completionChange = Provider.GetChangeAsync (doc, CompletionItem, null, default (CancellationToken)).WaitAndGetResult (default (CancellationToken));
+			InsertCompletionText (editor, document, ref ka, descriptor);
+		}
+
+		internal void InsertCompletionText (TextEditor editor, DocumentContext context, ref KeyActions ka, KeyDescriptor descriptor)
+		{
+			CompletionChange completionChange;
+			try {
+				RequestInsertText = true;
+				completionChange = Provider.GetChangeAsync (doc, CompletionItem, null, default (CancellationToken)).WaitAndGetResult (default (CancellationToken));
+			} finally {
+				RequestInsertText = false;
+			}
 
 			var currentBuffer = editor.GetPlatformTextBuffer ();
 			var textChange = completionChange.TextChange;
@@ -257,7 +274,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 			var mappedSpan = triggerSnapshotSpan.TranslateTo (currentBuffer.CurrentSnapshot, SpanTrackingMode.EdgeInclusive);
 			using (var undo = editor.OpenUndoGroup ()) {
 				// Work around for https://github.com/dotnet/roslyn/issues/22885
-				if (editor.GetCharAt (mappedSpan.Start) == '@') {
+				if (mappedSpan.Start < editor.Length && editor.GetCharAt (mappedSpan.Start) == '@') {
 					editor.ReplaceText (mappedSpan.Start + 1, mappedSpan.Length - 1, completionChange.TextChange.NewText);
 				} else
 					editor.ReplaceText (mappedSpan.Start, mappedSpan.Length, completionChange.TextChange.NewText);
@@ -267,13 +284,24 @@ namespace MonoDevelop.Ide.CodeCompletion
 					editor.CaretOffset = completionChange.NewPosition.Value;
 
 				if (CompletionItem.Rules.FormatOnCommit) {
-					var endOffset = mappedSpan.Start.Position + completionChange.TextChange.NewText.Length;
-					Format (editor, document, mappedSpan.Start, endOffset);
+					var spanToFormat = triggerSnapshotSpan.TranslateTo (currentBuffer.CurrentSnapshot, SpanTrackingMode.EdgeInclusive);
+					var formattingService = context.AnalysisDocument.GetLanguageService<IEditorFormattingService> ();
+
+					if (formattingService != null) {
+						var changes = formattingService.GetFormattingChangesAsync (context.AnalysisDocument, spanToFormat.Span.ToTextSpan (), CancellationToken.None).WaitAndGetResult (CancellationToken.None);
+						editor.ApplyTextChanges (changes);
+					}
 				}
 			}
 		}
 
-		protected abstract void Format (TextEditor editor, Gui.Document document, int start, int end);
+		protected virtual void Format (TextEditor editor, DocumentContext document, int start, int end)
+		{}
+
+		[Obsolete("Use Format (TextEditor editor, DocumentContext document, int start, int end)")]
+		protected virtual void Format (TextEditor editor, Gui.Document document, int start, int end)
+		{
+		}
 
 		public override Task<TooltipInformation> CreateTooltipInformation (bool smartWrap, CancellationToken cancelToken)
 		{
@@ -294,9 +322,12 @@ namespace MonoDevelop.Ide.CodeCompletion
 			var markup = StringBuilderCache.Allocate ();
 			var theme = SyntaxHighlightingService.GetIdeFittingTheme (DefaultSourceEditorOptions.Instance.GetEditorTheme ());
 			var taggedParts = description.TaggedParts;
+			if (taggedParts.Length == 0) {
+				return null;
+			}
 			int i = 0;
 			while (i < taggedParts.Length) {
-				if (taggedParts [i].Tag == "LineBreak")
+				if (taggedParts [i].Tag == TextTags.LineBreak)
 					break;
 				i++;
 			}
@@ -304,7 +335,9 @@ namespace MonoDevelop.Ide.CodeCompletion
 				markup.AppendTaggedText (theme, taggedParts);
 			} else {
 				markup.AppendTaggedText (theme, taggedParts.Take (i));
-				markup.Append ("<span font='" + FontService.SansFontName + "' size='small'>");
+				markup.Append ("<span font='");
+				markup.Append (FontService.SansFontName);
+				markup.Append ("' size='small'>");
 				markup.AppendLine ();
 				markup.AppendLine ();
 				markup.AppendTaggedText (theme, taggedParts.Skip (i + 1));

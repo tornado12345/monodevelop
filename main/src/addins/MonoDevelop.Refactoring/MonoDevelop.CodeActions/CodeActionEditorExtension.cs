@@ -49,17 +49,18 @@ using MonoDevelop.Ide.Editor.Extension;
 using MonoDevelop.Refactoring;
 using RefactoringEssentials;
 using MonoDevelop.AnalysisCore.Gui;
+using MonoDevelop.SourceEditor;
+using Gdk;
 
 namespace MonoDevelop.CodeActions
 {
 	class CodeActionEditorExtension : TextEditorExtension
 	{
-		const int menuTimeout = 250;
-		uint smartTagPopupTimeoutId;
+		const int menuTimeout = 150;
+		internal uint smartTagPopupTimeoutId { get; set; }
 
-		void CancelSmartTagPopupTimeout ()
+		internal void CancelSmartTagPopupTimeout ()
 		{
-
 			if (smartTagPopupTimeoutId != 0) {
 				GLib.Source.Remove (smartTagPopupTimeoutId);
 				smartTagPopupTimeoutId = 0;
@@ -68,13 +69,10 @@ namespace MonoDevelop.CodeActions
 
 		void RemoveWidget ()
 		{
-			if (currentSmartTag != null) {
-				Editor.RemoveMarker (currentSmartTag);
-				currentSmartTag.CancelPopup -= CurrentSmartTag_CancelPopup;
-				currentSmartTag.ShowPopup -= CurrentSmartTag_ShowPopup;
-
-				currentSmartTag = null;
-				currentSmartTagBegin = -1;
+			if (smartTagMarginMarker != null) {
+				Editor.RemoveMarker (smartTagMarginMarker);
+				smartTagMarginMarker.ShowPopup -= SmartTagMarginMarker_ShowPopup;
+				smartTagMarginMarker = null;
 			}
 			CancelSmartTagPopupTimeout ();
 		}
@@ -85,8 +83,8 @@ namespace MonoDevelop.CodeActions
 			RefactoringPreviewTooltipWindow.HidePreviewTooltip ();
 			Editor.CaretPositionChanged -= HandleCaretPositionChanged;
 			DocumentContext.DocumentParsed -= HandleDocumentDocumentParsed;
-			Editor.MouseMoved -= HandleBeginHover;
 			Editor.TextChanged -= Editor_TextChanged;
+			Editor.BeginAtomicUndoOperation -= Editor_BeginAtomicUndoOperation;
 			Editor.EndAtomicUndoOperation -= Editor_EndAtomicUndoOperation;
 			RemoveWidget ();
 			base.Dispose ();
@@ -106,6 +104,7 @@ namespace MonoDevelop.CodeActions
 			if (Editor.IsInAtomicUndo)
 				return;
 			CancelQuickFixTimer ();
+			var token = quickFixCancellationTokenSource.Token;
 			if (AnalysisOptions.EnableFancyFeatures && DocumentContext.ParsedDocument != null) {
 				if (HasCurrentFixes) {
 					var curOffset = Editor.CaretOffset;
@@ -117,7 +116,7 @@ namespace MonoDevelop.CodeActions
 					}
 				}
 
-				smartTagTask = GetCurrentFixesAsync (quickFixCancellationTokenSource.Token);
+				smartTagTask = GetCurrentFixesAsync (token);
 			} else {
 				RemoveWidget ();
 			}
@@ -129,6 +128,8 @@ namespace MonoDevelop.CodeActions
 		{
 			var loc = Editor.CaretOffset;
 			var ad = DocumentContext.AnalysisDocument;
+			var line = Editor.GetLine (Editor.CaretLine);
+
 			if (ad == null) {
 				return Task.FromResult (CodeActionContainer.Empty);
 			}
@@ -142,9 +143,17 @@ namespace MonoDevelop.CodeActions
 
 			return Task.Run (async delegate {
 				try {
-					var fixes = await codeFixService.GetFixesAsync (ad, span, true, cancellationToken);
-					var refactorings = await codeRefactoringService.GetRefactoringsAsync (ad, span, cancellationToken);
+					var root = await ad.GetSyntaxRootAsync (cancellationToken);
+					if (root.Span.End < span.End) {
+						LoggingService.LogError ($"Error in GetCurrentFixesAsync span {span.Start}/{span.Length} not inside syntax root {root.Span.End} document length {Editor.Length}.");
+						return CodeActionContainer.Empty;
+					}
 
+					var lineSpan = new TextSpan (line.Offset, line.Length);
+					var fixes = await codeFixService.GetFixesAsync (ad, lineSpan, true, cancellationToken);
+					fixes = await Runtime.RunInMainThread(() => FilterOnUIThread (fixes, DocumentContext.RoslynWorkspace));
+
+					var refactorings = await codeRefactoringService.GetRefactoringsAsync (ad, span, cancellationToken);
 					var codeActionContainer = new CodeActionContainer (fixes, refactorings);
 					Application.Invoke ((o, args) => {
 						if (cancellationToken.IsCancellationRequested)
@@ -171,11 +180,62 @@ namespace MonoDevelop.CodeActions
 			}, cancellationToken);
 		}
 
-		async void PopupQuickFixMenu (Gdk.EventButton evt, Action<CodeFixMenu> menuAction)
+		ImmutableArray<CodeFixCollection> FilterOnUIThread (
+			  ImmutableArray<CodeFixCollection> collections, Workspace workspace)
+		{
+			Runtime.AssertMainThread ();
+			var caretOffset = Editor.CaretOffset;
+			return collections.Select (c => FilterOnUIThread (c, workspace)).Where(x => x != null).OrderBy(x => GetDistance (x, caretOffset)).ToImmutableArray ();
+		}
+
+		static int GetDistance (CodeFixCollection fixCollection, int caretOffset)
+		{
+			return fixCollection.TextSpan.End < caretOffset ? caretOffset - fixCollection.TextSpan.End : fixCollection.TextSpan.Start - caretOffset;
+		}
+
+		static CodeFixCollection FilterOnUIThread (
+			CodeFixCollection collection,
+			Workspace workspace)
+		{
+			Runtime.AssertMainThread ();
+
+			var applicableFixes = collection.Fixes.WhereAsArray (f => IsApplicable (f.Action, workspace));
+			return applicableFixes.Length == 0
+				? null
+				: applicableFixes.Length == collection.Fixes.Length
+					? collection
+					: new CodeFixCollection (
+						collection.Provider, collection.TextSpan, applicableFixes,
+						collection.FixAllState, collection.SupportedScopes, collection.FirstDiagnostic);
+		}
+
+		static bool IsApplicable (Microsoft.CodeAnalysis.CodeActions.CodeAction action, Workspace workspace)
+		{
+			if (!action.PerformFinalApplicabilityCheck) {
+				return true;
+			}
+
+			Runtime.AssertMainThread ();
+			return action.IsApplicable (workspace);
+		}
+
+		internal async void PopupQuickFixMenu (Gdk.EventButton evt, Action<CodeFixMenu> menuAction, Xwt.Point? point = null)
+		{
+			using (Refactoring.Counters.FixesMenu.BeginTiming ("Show quick fixes menu")) {
+				var token = quickFixCancellationTokenSource.Token;
+
+				var fixes = await GetCurrentFixesAsync (token);
+				if (token.IsCancellationRequested)
+					return;
+				Editor.SuppressTooltips = true;
+				PopupQuickFixMenu (evt, fixes, menuAction, point);
+			}
+		}
+
+		internal void PopupQuickFixMenu (Gdk.EventButton evt, CodeActionContainer fixes, Action<CodeFixMenu> menuAction, Xwt.Point? point = null)
 		{
 			var token = quickFixCancellationTokenSource.Token;
 
-			var fixes = await GetCurrentFixesAsync (token);
 			if (token.IsCancellationRequested)
 				return;
 
@@ -187,16 +247,19 @@ namespace MonoDevelop.CodeActions
 				return;
 			}
 
-			Editor.SuppressTooltips = true;
 			if (menuAction != null)
 				menuAction (menu);
-
-			var p = Editor.LocationToPoint (Editor.OffsetToLocation (currentSmartTagBegin));
+			Gdk.Rectangle rect;
 			Widget widget = Editor;
-			var rect = new Gdk.Rectangle (
-				(int)p.X + widget.Allocation.X,
-				(int)p.Y + widget.Allocation.Y, 0, 0);
 
+			if (!point.HasValue) {
+				var p = Editor.LocationToPoint (Editor.CaretLocation);
+				rect = new Gdk.Rectangle (
+					(int)p.X + widget.Allocation.X,
+					(int)p.Y + widget.Allocation.Y, 0, 0);
+			} else {
+				rect = new Gdk.Rectangle ((int)point.Value.X, (int)point.Value.Y, 0, 0);
+			}
 			ShowFixesMenu (widget, rect, menu);
 		}
 
@@ -214,18 +277,21 @@ namespace MonoDevelop.CodeActions
 				y = evt.Y;
 
 				// Explicitly release the grab because the menu is shown on the mouse position, and the widget doesn't get the mouse release event
-				Gdk.Pointer.Ungrab (Global.CurrentEventTime);
+				Gdk.Pointer.Ungrab (Gtk.Global.CurrentEventTime);
 				var menu = CreateContextMenu (entrySet);
 				RefactoringPreviewTooltipWindow.HidePreviewTooltip ();
 				menu.Show (parent, x, y, () => {
 					Editor.SuppressTooltips = false;
 					RefactoringPreviewTooltipWindow.HidePreviewTooltip ();
+					FixesMenuClosed?.Invoke (this, EventArgs.Empty);
 				}, true);
 			} catch (Exception ex) {
 				LoggingService.LogError ("Error while context menu popup.", ex);
 			}
+
 			return true;
 		}
+		public event EventHandler FixesMenuClosed;
 
 		ContextMenu CreateContextMenu (CodeFixMenu entrySet)
 		{
@@ -238,6 +304,11 @@ namespace MonoDevelop.CodeActions
 
 				var menuItem = new ContextMenuItem (item.Label);
 				menuItem.Context = item.Action;
+				if (item.Action == null) {
+					if (!(item is CodeFixMenu itemAsMenu) || itemAsMenu.Items.Count <= 0) {
+						menuItem.Sensitive = false;
+					}
+				}
 				var subMenu = item as CodeFixMenu;
 				if (subMenu != null) {
 					menuItem.SubMenu = CreateContextMenu (subMenu);
@@ -261,8 +332,8 @@ namespace MonoDevelop.CodeActions
 			return menu;
 		}
 
-		ISmartTagMarker currentSmartTag;
-		int currentSmartTagBegin;
+		SourceEditor.SmartTagMarginMarker smartTagMarginMarker;
+		private ITextSourceVersion beginVersion;
 
 		void CreateSmartTag (CodeActionContainer fixes, int offset)
 		{
@@ -280,60 +351,52 @@ namespace MonoDevelop.CodeActions
 				return;
 			}
 
-			bool first = true;
-			var smartTagLocBegin = offset;
-			foreach (var fix in fixes.CodeFixActions) {
-				var textSpan = fix.TextSpan;
-				if (textSpan.IsEmpty)
-					continue;
-				if (first || offset < textSpan.Start) {
-					smartTagLocBegin = textSpan.Start;
-				}
-				first = false;
-			}
+			var severity = fixes.GetSmartTagSeverity ();
 
-			if (currentSmartTag != null && currentSmartTagBegin == smartTagLocBegin) {
-				return;
+			if (smartTagMarginMarker?.Line?.LineNumber != editor.CaretLine) {
+				RemoveWidget ();
+				smartTagMarginMarker = new SourceEditor.SmartTagMarginMarker () { SmartTagSeverity = severity };
+				smartTagMarginMarker.ShowPopup += SmartTagMarginMarker_ShowPopup;
+				editor.AddMarker (editor.GetLine (editor.CaretLine), smartTagMarginMarker);
+			} else {
+				smartTagMarginMarker.SmartTagSeverity = severity;
+				var view = editor.GetContent<SourceEditorView> ();
+				view.TextEditor.RedrawMarginLine (view.TextEditor.TextArea.QuickFixMargin, editor.CaretLine);
 			}
-			RemoveWidget ();
-			currentSmartTagBegin = smartTagLocBegin;
-			var realLoc = Editor.OffsetToLocation (smartTagLocBegin);
-
-			currentSmartTag = TextMarkerFactory.CreateSmartTagMarker (Editor, smartTagLocBegin, realLoc);
-			currentSmartTag.CancelPopup += CurrentSmartTag_CancelPopup;
-			currentSmartTag.ShowPopup += CurrentSmartTag_ShowPopup;
-			currentSmartTag.Tag = fixes;
-			currentSmartTag.IsVisible = fixes.CodeFixActions.Sum (x => x.Fixes.Length) > 0;
-			editor.AddMarker (currentSmartTag);
 		}
 
-		void CurrentSmartTag_ShowPopup (object sender, EventArgs e)
+		void SmartTagMarginMarker_ShowPopup (object sender, EventArgs e)
 		{
-			CurrentSmartTagPopup ();
-		}
+			var marker = (SourceEditor.SmartTagMarginMarker)sender;
 
-		void CurrentSmartTag_CancelPopup (object sender, EventArgs e)
-		{
 			CancelSmartTagPopupTimeout ();
+			smartTagPopupTimeoutId = GLib.Timeout.Add (menuTimeout, delegate {
+				PopupQuickFixMenu (null, menu => { }, new Xwt.Point (marker.PopupPosition.X, marker.PopupPosition.Y + marker.Height));
+				smartTagPopupTimeoutId = 0;
+				return false;
+			});
 		}
 
 		protected override void Initialize ()
 		{
 			base.Initialize ();
 			DocumentContext.DocumentParsed += HandleDocumentDocumentParsed;
-			Editor.MouseMoved += HandleBeginHover;
 			Editor.CaretPositionChanged += HandleCaretPositionChanged;
 			Editor.TextChanged += Editor_TextChanged;
+			Editor.BeginAtomicUndoOperation += Editor_BeginAtomicUndoOperation;
 			Editor.EndAtomicUndoOperation += Editor_EndAtomicUndoOperation;
+		}
 
-			DocumentContext.RoslynWorkspace.Options = DocumentContext.RoslynWorkspace.Options.WithChangedOption (
-				Microsoft.CodeAnalysis.SymbolSearch.SymbolSearchOptions.SuggestForTypesInNuGetPackages, LanguageNames.CSharp, true);
-
+		void Editor_BeginAtomicUndoOperation (object sender, EventArgs e)
+		{
+			beginVersion = Editor.Version;
 		}
 
 		void Editor_EndAtomicUndoOperation (object sender, EventArgs e)
 		{
-			RemoveWidget ();
+			if (beginVersion != null && beginVersion.CompareAge (Editor.Version) != 0)
+				RemoveWidget ();
+			beginVersion = null;
 		}
 
 		void Editor_TextChanged (object sender, MonoDevelop.Core.Text.TextChangeEventArgs e)
@@ -342,11 +405,6 @@ namespace MonoDevelop.CodeActions
 				return;
 			RemoveWidget ();
 			HandleCaretPositionChanged (null, EventArgs.Empty);
-		}
-
-		void HandleBeginHover (object sender, EventArgs e)
-		{
-			CancelSmartTagPopupTimeout ();
 		}
 
 		void HandleDocumentDocumentParsed (object sender, EventArgs e)
@@ -367,9 +425,9 @@ namespace MonoDevelop.CodeActions
 		[CommandHandler (RefactoryCommands.QuickFix)]
 		void OnQuickFixCommand ()
 		{
-			if (!AnalysisOptions.EnableFancyFeatures || currentSmartTag == null) {
+			if (!AnalysisOptions.EnableFancyFeatures || smartTagMarginMarker == null) {
 				//Fixes = RefactoringService.GetValidActions (Editor, DocumentContext, Editor.CaretLocation).Result;
-				currentSmartTagBegin = Editor.CaretOffset;
+
 				PopupQuickFixMenu (null, null);
 				return;
 			}

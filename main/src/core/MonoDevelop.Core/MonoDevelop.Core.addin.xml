@@ -2,6 +2,9 @@
 
 	<Runtime>
 		<Import assembly="Newtonsoft.Json.dll" />
+		<Import assembly="System.Collections.Immutable.dll" />
+		<Import assembly="System.Reflection.Metadata.dll" />
+		<Import assembly="System.Memory.dll" />
 	</Runtime>
 	
 	<ConditionType id="PackageInstalled" type="MonoDevelop.Core.AddIns.PackageInstalledCondition" />
@@ -10,10 +13,14 @@
 	<ConditionType id="AssemblyInstalled" type="MonoDevelop.Core.AddIns.AssemblyInstalledCondition" />
 	<ConditionType id="MSBuildTargetIsAvailable" type="MonoDevelop.Projects.MSBuild.TargetsAvailableCondition" />
 	<ConditionType id="Branding" type="MonoDevelop.Core.AddIns.BrandingCondition" />
-
+	<ConditionType id="FeatureSwitch" type="MonoDevelop.Core.FeatureConfiguration.FeatureSwitchCondition" />
 	
 	<!-- Extension points -->
 	
+	<ExtensionPoint path="/MonoDevelop/Core/FeatureConfiguration/FeatureSwitchChecks" name="Feature switch checks">
+  		<Description>Pluggable checks for feature dynamic enabling/disabling</Description>
+  		<ExtensionNode objectType="MonoDevelop.Core.FeatureConfiguration.IFeatureSwitchController" />
+  	</ExtensionPoint>
 	
 	<ExtensionPoint path = "/MonoDevelop/Core/ExecutionModes" name = "Execution modes">
 		<Description>Execution modes such as default, debug, profiler, etc.</Description>
@@ -35,6 +42,11 @@
 	<ExtensionPoint path = "/MonoDevelop/Core/WebCredentialProviders" name = "Web credential providers">
 		<Description>Platform-specific services used for obtaining proxy credentials.</Description>
 		<ExtensionNode name="Class" objectType="MonoDevelop.Core.Web.ICredentialProvider" />
+	</ExtensionPoint>
+
+	<ExtensionPoint path = "/MonoDevelop/Core/HttpMessageHandlerProviders" name = "HttpMessageHandler providers">
+		<Description>Platform-specific services used to create HttpMessageHandlers used by the HttpClient.</Description>
+		<ExtensionNode name="Class" objectType="MonoDevelop.Core.Web.HttpMessageHandlerProvider" />
 	</ExtensionPoint>
 	
 	<ExtensionPoint path = "/MonoDevelop/Core/FileSystemExtensions" name = "File system extensions">

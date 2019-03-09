@@ -44,6 +44,7 @@ using System.Xml.Linq;
 using System.Linq;
 using System.Globalization;
 using System.Threading.Tasks;
+using MonoDevelop.Core.Assemblies;
 
 namespace MonoDevelop.UnitTesting.NUnit
 {
@@ -332,7 +333,8 @@ namespace MonoDevelop.UnitTesting.NUnit
 
 				try {
 					if (File.Exists (ld.Path)) {
-						runner = new ExternalTestRunner ();
+						runner = new ExternalTestRunner (Path.GetDirectoryName (ld.Path));
+						runner.ProcessExecutionArchitecture = AssemblyUtilities.GetProcessExecutionArchitectureForAssembly (ld.Path);
 						runner.Connect (ld.NUnitVersion).Wait ();
 						var supportAssemblies = new List<string> (ld.SupportAssemblies.Result);
 						ld.Info = runner.GetTestInfo (ld.Path, supportAssemblies).Result;
@@ -397,7 +399,8 @@ namespace MonoDevelop.UnitTesting.NUnit
 			var console = testContext.ExecutionContext.ConsoleFactory.CreateConsole (
 				OperationConsoleFactory.CreateConsoleOptions.Default.WithTitle (GettextCatalog.GetString ("Unit Tests")));
 
-			ExternalTestRunner runner = new ExternalTestRunner ();
+			ExternalTestRunner runner = new ExternalTestRunner (Path.GetDirectoryName (AssemblyPath));
+			runner.ProcessExecutionArchitecture = AssemblyUtilities.GetProcessExecutionArchitectureForAssembly (AssemblyPath);
 			runner.Connect (NUnitVersion, testContext.ExecutionContext.ExecutionHandler, console).Wait ();
 			LocalTestMonitor localMonitor = new LocalTestMonitor (testContext, test, suiteName, testName != null);
 
@@ -430,8 +433,9 @@ namespace MonoDevelop.UnitTesting.NUnit
 				GetCustomTestRunner (out testRunnerAssembly, out testRunnerType);
 
 				testContext.Monitor.CancellationToken.ThrowIfCancellationRequested ();
-					
-				result = runner.Run (localMonitor, filter, AssemblyPath, "", new List<string> (SupportAssemblies), testRunnerType, testRunnerAssembly, crashLogFile).Result;
+
+				var supportAssemblies = new List<string> (GetSupportAssembliesAsync ().Result);
+				result = runner.Run (localMonitor, filter, AssemblyPath, "", supportAssemblies, testRunnerType, testRunnerAssembly, crashLogFile).Result;
 				if (testName != null)
 					result = localMonitor.SingleTestResult;
 				

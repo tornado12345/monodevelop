@@ -320,11 +320,15 @@ namespace MonoDevelop.Ide.CodeTemplates
 								s = variableDecarations [name].Default;
 						}
 						if (s != null) {
-							link.AddLink (new TextSegment (sb.Length, s.Length));
-							if (isNew) {
-								link.GetStringFunc = delegate (Func<string, string> callback) {
-									return expansion.RunFunction (context, callback, variableDecarations [name].Function);
-								};
+							if (!link.IsEditable) {
+								result.TextLinks.Remove (link);
+							} else {
+								link.AddLink (new TextSegment (sb.Length, s.Length));
+								if (isNew) {
+									link.GetStringFunc = delegate (Func<string, string> callback) {
+										return expansion.RunFunction (context, callback, variableDecarations [name].Function);
+									};
+								}
 							}
 							sb.Append (s);
 						}
@@ -446,11 +450,14 @@ namespace MonoDevelop.Ide.CodeTemplates
 		public void Insert (TextEditor editor, DocumentContext context)
 		{
 			var handler = context.GetContent<ICodeTemplateHandler> ();
-			if (handler != null) {
-				handler.InsertTemplate (this, editor, context);
-			} else {
-				InsertTemplateContents (editor, context);
-			}	
+			using (var undo = editor.OpenUndoGroup ()) {
+				editor.EnsureCaretIsNotVirtual ();
+				if (handler != null) {
+					handler.InsertTemplate (this, editor, context);
+				} else {
+					InsertTemplateContents (editor, context);
+				}
+			}
 		}
 		
 		/// <summary>
@@ -459,7 +466,6 @@ namespace MonoDevelop.Ide.CodeTemplates
 		public TemplateResult InsertTemplateContents (TextEditor editor, DocumentContext context)
 		{
 			var data = editor;
-			
 			int offset = data.CaretOffset;
 //			string leadingWhiteSpace = GetLeadingWhiteSpace (editor, editor.CursorLine);
 			
@@ -504,7 +510,8 @@ namespace MonoDevelop.Ide.CodeTemplates
 				newoffset = offset + template.Code.Length; 
 			}
 
-			editor.CaretLocation = editor.OffsetToLocation (newoffset) ;
+			editor.CaretLocation = editor.OffsetToLocation (newoffset);
+			editor.FixVirtualIndentation ();
 
 			var prettyPrinter = CodeFormatterService.GetFormatter (data.MimeType);
 			if (prettyPrinter != null && prettyPrinter.SupportsOnTheFlyFormatting) {

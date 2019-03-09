@@ -41,6 +41,7 @@ using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Core.Text;
 using MonoDevelop.Ide.Editor.Highlighting;
 using MonoDevelop.Ide.Gui;
+using System.Reflection.Metadata.Ecma335;
 
 namespace MonoDevelop.SourceEditor.QuickTasks
 {
@@ -143,7 +144,7 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 			parentStrip.TaskProviderUpdated += RedrawOnUpdate;
 			TextEditor = parent.TextEditor;
 			caret = TextEditor.Caret;
-			//			caret.PositionChanged += CaretPositionChanged;
+			caret.PositionChanged += CaretPositionChanged;
 			TextEditor.HighlightSearchPatternChanged += RedrawOnUpdate;
 			textViewMargin = TextEditor.TextViewMargin;
 			textViewMargin.SearchRegionsUpdated += RedrawOnUpdate;
@@ -152,7 +153,8 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 			heightTree.LineUpdateFrom += HandleLineUpdateFrom;
 			TextEditor.HighlightSearchPatternChanged += HandleHighlightSearchPatternChanged;
 			HasTooltip = true;
-
+			parentStrip.SourceEditorView.Breakpoints.BreakEventAdded += BreakpointsChanged;
+			parentStrip.SourceEditorView.Breakpoints.BreakEventRemoved += BreakpointsChanged;
 			fadeInStage.ActorStep += delegate (Actor<QuickTaskOverviewMode> actor) {
 				barColorValue = actor.Percent;
 				return true;
@@ -170,6 +172,11 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 			CanFocus = true;
 		}
 
+		void BreakpointsChanged (object sender, Mono.Debugging.Client.BreakEventArgs e)
+		{
+			DrawIndicatorSurface (0, true);
+		}
+
 		void HandleHighlightSearchPatternChanged (object sender, EventArgs e)
 		{
 			yPositionCache.Clear ();
@@ -182,16 +189,17 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 
 		void CaretPositionChanged (object sender, EventArgs e)
 		{
-			var line = caret.Line;
-			if (caretLine != line) {
-				caretLine = line;
+			if (drawnCaretLine != TextEditor.Caret.Line) {
 				QueueDraw ();
 			}
 		}
 
 		protected override void OnDestroyed ()
 		{
-			DisposeProxies();
+			parentStrip.SourceEditorView.Breakpoints.BreakEventAdded -= BreakpointsChanged;
+			parentStrip.SourceEditorView.Breakpoints.BreakEventRemoved -= BreakpointsChanged;
+
+			DisposeProxies ();
 			DestroyBackgroundSurface ();
 			RemoveIndicatorIdleHandler ();
 			DestroyIndicatorSwapSurface ();
@@ -208,6 +216,7 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 				heightTree.LineUpdateFrom -= HandleLineUpdateFrom;
 				heightTree = null;
 			}
+
 			TextEditor.HighlightSearchPatternChanged -= RedrawOnUpdate;
 			textViewMargin.SearchRegionsUpdated -= RedrawOnUpdate;
 			textViewMargin.MainSearchResultChanged -= RedrawOnUpdate;
@@ -455,8 +464,7 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 			public bool Run ()
 			{
 				strip.previewPopupTimeout = 0;
-				strip.previewWindow = new Mono.TextEditor.CodeSegmentPreviewWindow (strip.TextEditor, true, segment, w, -1, false);
-				strip.previewWindow.WidthRequest = w;
+				strip.previewWindow = new CodeSegmentPreviewWindow (strip.TextEditor, true, segment, false);
 				strip.previewWindow.Show ();
 				strip.PositionPreviewWindow (y);
 				return false;
@@ -557,7 +565,7 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 
 		internal virtual double IndicatorHeight {
 			get {
-				return MonoDevelop.Core.Platform.IsWindows ? Allocation.Width : 3 + 8 + 3;
+				return errorImage.Height;
 			}
 		}
 
@@ -691,7 +699,6 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 			var q = Math.Max (TextEditor.GetTextEditorData ().TotalHeight, TextEditor.Allocation.Height)
 				+ TextEditor.Allocation.Height
 				- TextEditor.LineHeight;
-
 			return IndicatorHeight + h * p / q;
 		}
 
@@ -701,17 +708,33 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 			return TextEditor.GetTextEditorData ().VisualToLogicalLine ((int)line);
 		}
 
-		protected void DrawCaret (Cairo.Context cr)
+		int drawnCaretLine, drawnCaretY;
+		protected void DrawCaret (Cairo.Context cr, double displayScale)
 		{
-			if (TextEditor.EditorTheme == null || caretLine < 0)
+			if (TextEditor.EditorTheme == null)
 				return;
-			double y = GetYPosition (caretLine);
-			cr.MoveTo (0, y - 4);
-			cr.LineTo (7, y);
-			cr.LineTo (0, y + 4);
-			cr.ClosePath ();
+			drawnCaretLine = TextEditor.Caret.Line;
+			drawnCaretY = (int)((GetYPosition (drawnCaretLine) - 1) * displayScale);
+
 			cr.SetSourceColor (SyntaxHighlightingService.GetColor (TextEditor.EditorTheme, EditorThemeColors.Foreground));
+			var w = Math.Floor (Allocation.Width * 0.618);
+			cr.Rectangle (Allocation.Width - w, drawnCaretY, w, 2);
 			cr.Fill ();
+		}
+
+		void DrawBreakpoints (Cairo.Context cr)
+		{
+			var breakPoints = parentStrip.SourceEditorView.Breakpoints.GetBreakpointsAtFile (TextEditor.FileName);
+			if (breakPoints == null)
+				return;
+			foreach (var point in breakPoints) {
+				int y = (int)GetYPosition (point.Line);
+
+				cr.SetSourceColor (SyntaxHighlightingService.GetColor (TextEditor.EditorTheme, EditorThemeColors.BreakpointMarker));
+				int r = 4;
+				cr.Rectangle (0, y  - r / 2, r, r);
+				cr.Fill ();
+			}
 		}
 
 		Dictionary<int, double> yPositionCache = new Dictionary<int, double> ();
@@ -927,15 +950,14 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 					cr.Paint ();
 				} else {
 					CachedDraw (cr,
-								ref backgroundSurface,
-								allocation,
-								draw: (c, o) => DrawBackground (c, allocation), forceScale: displayScale);
+					            ref backgroundSurface,
+					            e.Area,
+					            draw: (c, o) => DrawBackground (c, allocation), forceScale: displayScale);
 				}
 				if (TextEditor == null)
 					return true;
 
-				DrawCaret (cr);
-
+				DrawCaret (cr, displayScale);
 				if (QuickTaskStrip.MergeScrollBarAndQuickTasks)
 					DrawBar (cr);
 
@@ -967,26 +989,28 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 		CancellationTokenSource src;
 
 		uint indicatorIdleTimout;
-		void DrawIndicatorSurface (uint timeout = 250)
+		void DrawIndicatorSurface (uint timeout = 250, bool forceUpdate = false)
 		{
 			RemoveIndicatorIdleHandler ();
 			if (timeout == 0) {
-				IndicatorSurfaceTimeoutHandler ();
+				IndicatorSurfaceTimeoutHandler (forceUpdate);
 			} else {
-				indicatorIdleTimout = GLib.Timeout.Add (timeout, IndicatorSurfaceTimeoutHandler);
+				indicatorIdleTimout = GLib.Timeout.Add (timeout, delegate {
+					IndicatorSurfaceTimeoutHandler (forceUpdate);
+					return false;
+				});
 			}
 		}
 
-		bool IndicatorSurfaceTimeoutHandler ()
+		void IndicatorSurfaceTimeoutHandler (bool forceUpdate)
 		{
 			indicatorIdleTimout = 0;
 			if (!IsRealized)
-				return false;
+				return;
 			var allocation = Allocation;
 			src?.Cancel ();
 			src = new CancellationTokenSource ();
-			new IdleUpdater (this, src.Token).Start ();
-			return false;
+			new IdleUpdater (this, src.Token) { ForceUpdate = forceUpdate }.Start ();
 		}
 
 		void RemoveIndicatorIdleHandler ()

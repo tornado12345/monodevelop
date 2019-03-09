@@ -264,58 +264,85 @@ namespace MonoDevelop.Projects
 		[Test()]
 		public async Task Reloading ()
 		{
-			Solution sol = TestProjectsChecks.CreateConsoleSolution ("reloading");
-			await sol.SaveAsync (Util.GetMonitor ());
-			Assert.IsFalse (sol.NeedsReload);
-			
-			Project p = sol.Items [0] as Project;
-			Assert.IsFalse (p.NeedsReload);
-			
-			// Changing format must reset the reload flag (it's like we just created a new solution in memory)
-			sol.ConvertToFormat (MSBuildFileFormat.VS2010);
-			Assert.IsFalse (sol.NeedsReload);
-			Assert.IsFalse (p.NeedsReload);
-			sol.ConvertToFormat (MSBuildFileFormat.VS2012);
-			Assert.IsFalse (sol.NeedsReload);
-			Assert.IsFalse (p.NeedsReload);
-			
-			sol.RootFolder.Items.Remove (p);
-			Assert.IsFalse (p.NeedsReload);
-			p.FileFormat = MSBuildFileFormat.VS2012;
-			Assert.IsFalse (p.NeedsReload);
-			sol.RootFolder.Items.Add (p);
-			Assert.IsFalse (p.NeedsReload);
-			sol.RootFolder.Items.Remove (p);
-			Assert.IsFalse (p.NeedsReload);
-			p.FileFormat = MSBuildFileFormat.VS2005;
-			Assert.IsFalse (p.NeedsReload);
-			sol.RootFolder.Items.Add (p);
-			Assert.IsFalse (p.NeedsReload);
+			using (Solution sol = TestProjectsChecks.CreateConsoleSolution ("reloading")) {
+				await sol.SaveAsync (Util.GetMonitor ());
+				Assert.IsFalse (sol.NeedsReload);
+				await FileWatcherService.Add (sol);
 
-			string solFile2 = Util.GetSampleProject ("csharp-console", "csharp-console.sln");
-			Solution sol2 = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile2);
-			Project p2 = sol2.Items [0] as Project;
-			Assert.IsFalse (sol2.NeedsReload);
-			Assert.IsFalse (p2.NeedsReload);
-			
-			// Check reloading flag in another solution
-			
-			string solFile = sol.FileName;
-			Solution sol3 = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile);
-			Assert.IsFalse (sol3.NeedsReload);
-			
-			Project p3 = sol3.Items [0] as Project;
-			Assert.IsFalse (p3.NeedsReload);
-			
-			System.Threading.Thread.Sleep (1000);
-			sol.Description = "Foo"; // Small change to force the solution file save
-			await sol.SaveAsync (Util.GetMonitor ());
-			
-			Assert.IsTrue (sol3.NeedsReload);
+				Project p = sol.Items [0] as Project;
+				Assert.IsFalse (p.NeedsReload);
 
-			sol.Dispose ();
+				// Changing format must reset the reload flag (it's like we just created a new solution in memory)
+				sol.ConvertToFormat (MSBuildFileFormat.VS2010);
+				Assert.IsFalse (sol.NeedsReload);
+				Assert.IsFalse (p.NeedsReload);
+				sol.ConvertToFormat (MSBuildFileFormat.VS2012);
+				Assert.IsFalse (sol.NeedsReload);
+				Assert.IsFalse (p.NeedsReload);
+
+				sol.RootFolder.Items.Remove (p);
+				Assert.IsFalse (p.NeedsReload);
+				p.FileFormat = MSBuildFileFormat.VS2012;
+				Assert.IsFalse (p.NeedsReload);
+				sol.RootFolder.Items.Add (p);
+				Assert.IsFalse (p.NeedsReload);
+				sol.RootFolder.Items.Remove (p);
+				Assert.IsFalse (p.NeedsReload);
+				p.FileFormat = MSBuildFileFormat.VS2005;
+				Assert.IsFalse (p.NeedsReload);
+				sol.RootFolder.Items.Add (p);
+				Assert.IsFalse (p.NeedsReload);
+
+				string solFile2 = Util.GetSampleProject ("csharp-console", "csharp-console.sln");
+				using (Solution sol2 = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile2)) {
+					Project p2 = sol2.Items [0] as Project;
+					Assert.IsFalse (sol2.NeedsReload);
+					Assert.IsFalse (p2.NeedsReload);
+					await FileWatcherService.Add (sol2);
+
+					// Check reloading flag in another solution
+
+					string solFile = sol.FileName;
+					using (Solution sol3 = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+						Assert.IsFalse (sol3.NeedsReload);
+						await FileWatcherService.Add (sol3);
+
+						Project p3 = sol3.Items [0] as Project;
+						Assert.IsFalse (p3.NeedsReload);
+
+						System.Threading.Thread.Sleep (1000);
+						try {
+							fileChangeNotification = new TaskCompletionSource<bool> ();
+							waitForFileChange = sol.FileName;
+							FileService.FileChanged += OnFileChanged;
+							sol.Description = "Foo"; // Small change to force the solution file save
+							await sol.SaveAsync (Util.GetMonitor ());
+
+							// we need to wait for the file notification to be posted
+							await Task.Run (() => {
+								fileChangeNotification.Task.Wait (TimeSpan.FromMilliseconds (10000));
+							});
+
+							Assert.IsTrue (fileChangeNotification.Task.IsCompleted);
+						} finally {
+							FileService.FileChanged -= OnFileChanged;
+						}
+
+						Assert.IsTrue (sol3.NeedsReload);
+					}
+				}
+			}
 		}
-		
+
+		FilePath waitForFileChange;
+		TaskCompletionSource<bool> fileChangeNotification;
+
+		void OnFileChanged (object sender, FileEventArgs e)
+		{
+			if (e.Any (info => info.FileName == waitForFileChange))
+				fileChangeNotification.TrySetResult (true);
+		}
+
 		[Test()]
 		public async Task ReloadingReferencedProject ()
 		{
@@ -728,9 +755,9 @@ namespace MonoDevelop.Projects
 		}
 
 		[Test]
-		[TestCase (true, 1)]
-		[TestCase (false, 3)]
-		public async Task SkipBuildingUnmodifiedProjects (bool enabled, int expectedBuildCount)
+		[TestCase (true, 1, 2)]
+		[TestCase (false, 3, 0)]
+		public async Task SkipBuildingUnmodifiedProjects (bool enabled, int expectedSuccessful, int expectedUpToDate)
 		{
 			var settingBefore = Runtime.Preferences.SkipBuildingUnmodifiedProjects.Value;
 			try {
@@ -744,12 +771,13 @@ namespace MonoDevelop.Projects
 				var buildResult = await lib2.Build (Util.GetMonitor (), sol.Configurations [0].Selector, true);
 				Assert.AreEqual (2, buildResult.BuildCount);
 				buildResult = await sol.Build (Util.GetMonitor (), sol.Configurations [0].Selector);
-				Assert.AreEqual (expectedBuildCount, buildResult.BuildCount);
+				Assert.AreEqual (expectedSuccessful + expectedUpToDate, buildResult.BuildCount);
 
 				FileService.NotifyFileChanged (p.Files.Single (f => Path.GetFileName (f.Name) == "Program.cs").FilePath);
 
 				buildResult = await p.Build (Util.GetMonitor (), sol.Configurations [0].Selector, true);
-				Assert.AreEqual (expectedBuildCount, buildResult.BuildCount);
+				Assert.AreEqual (expectedSuccessful, buildResult.SuccessfulBuildCount);
+				Assert.AreEqual (expectedUpToDate, buildResult.UpToDateBuildCount);
 
 				sol.Dispose ();
 			} finally {
@@ -897,9 +925,11 @@ namespace MonoDevelop.Projects
 					msbuildEndCount++;
 			};
 
-			var oldStatus = Runtime.Preferences.ParallelBuild.Value;
+			var oldPrefParallelBuild = Runtime.Preferences.ParallelBuild.Value;
+			var oldPrefSkipUnmodified = Runtime.Preferences.SkipBuildingUnmodifiedProjects.Value;
 			try {
 				Runtime.Preferences.ParallelBuild.Set (false);
+				Runtime.Preferences.SkipBuildingUnmodifiedProjects.Set (false);
 				FilePath solFile = Util.GetSampleProject ("build-session", "build-session.sln");
 				var sol = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile);
 
@@ -976,7 +1006,8 @@ namespace MonoDevelop.Projects
 				WorkspaceObject.UnregisterCustomExtension (en);
 				WorkspaceObject.UnregisterCustomExtension (en2);
 
-				Runtime.Preferences.ParallelBuild.Set (oldStatus);
+				Runtime.Preferences.ParallelBuild.Set (oldPrefParallelBuild);
+				Runtime.Preferences.SkipBuildingUnmodifiedProjects.Set (oldPrefSkipUnmodified);
 			}
 		}
 	}

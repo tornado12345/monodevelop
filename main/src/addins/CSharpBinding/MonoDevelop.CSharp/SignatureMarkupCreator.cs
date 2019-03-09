@@ -1080,13 +1080,13 @@ namespace MonoDevelop.CSharp
 						break;
 					} else if (node.Parent is SwitchStatementSyntax) {
 						result.AddCategory (GettextCatalog.GetString ("Form"),
-						                    GettextCatalog.GetString ("{0} (expression) { \n  {1} constant-expression:\n    statement\n    jump-statement\n  [{2}:\n    statement\n    jump-statement]\n}",
+						                    GettextCatalog.GetString ("{0} (expression) {{ \n  {1} constant-expression:\n    statement\n    jump-statement\n  [{2}:\n    statement\n    jump-statement]\n}}",
 						                    Highlight ("switch", GetThemeColor (keywordOther)), Highlight ("case", GetThemeColor (keywordOther)), Highlight ("default", GetThemeColor (keywordOther))));
 						break;
 					}
 				}
 				result.AddCategory (GettextCatalog.GetString ("Form"),
-						            GettextCatalog.GetString ("{0} (Type)\n\nor\n\n{1} (expression) { \n  {2} constant-expression:\n    statement\n    jump-statement\n  [{3}:\n    statement\n    jump-statement]\n}", 
+						            GettextCatalog.GetString ("{0} (Type)\n\nor\n\n{1} (expression) {{ \n  {2} constant-expression:\n    statement\n    jump-statement\n  [{3}:\n    statement\n    jump-statement]\n}}", 
 						                                      Highlight ("default", GetThemeColor (keywordOther)), Highlight ("switch", GetThemeColor (keywordOther)), Highlight ("case", GetThemeColor (keywordOther)), Highlight ("default", GetThemeColor (keywordOther)))
 						           );
 				break;
@@ -1340,7 +1340,6 @@ namespace MonoDevelop.CSharp
 				result.SummaryMarkup = GettextCatalog.GetString ("The {0} keyword is a member access modifier. A protected member is accessible from within the class in which it is declared, and from within any class derived from the class that declared this member.", Highlight ("protected", GetThemeColor (modifierColor)));
 				break;
 			case SyntaxKind.PublicKeyword:
-				Console.WriteLine ("modifier color:  "+GetThemeColor (modifierColor).ToPangoString ());
 				result.SignatureMarkup = Highlight ("public", GetThemeColor (modifierColor)) + keywordSign;
 				result.SummaryMarkup = GettextCatalog.GetString ("The {0} keyword is an access modifier for types and type members. Public access is the most permissive access level. There are no restrictions on accessing public members.", Highlight ("public", GetThemeColor (modifierColor)));
 				break;
@@ -1845,7 +1844,7 @@ namespace MonoDevelop.CSharp
 				if (arrayType.Rank == 1)
 					result.Append ("index");
 				else
-					result.Append ("i").Append (i + 1);
+					result.Append ("i").Append ((i + 1).ToString ());
 				if (doHighightParameter)
 					result.Append ("</u>");
 			}

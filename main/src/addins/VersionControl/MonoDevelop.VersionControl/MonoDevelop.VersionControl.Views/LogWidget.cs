@@ -36,6 +36,7 @@ using Mono.TextEditor;
 using System.Linq;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Fonts;
+using Humanizer;
 
 namespace MonoDevelop.VersionControl.Views
 {
@@ -68,7 +69,9 @@ namespace MonoDevelop.VersionControl.Views
 		CellRendererImage pixRenderer = new CellRendererImage ();
 		
 		bool currentRevisionShortened;
-		
+
+		Xwt.Menu popupMenu;
+
 		class RevisionGraphCellRenderer : Gtk.CellRenderer
 		{
 			public bool FirstNode {
@@ -239,10 +242,21 @@ namespace MonoDevelop.VersionControl.Views
 			treeviewFiles.Events |= Gdk.EventMask.PointerMotionMask;
 			
 			textviewDetails.WrapMode = Gtk.WrapMode.Word;
+			textviewDetails.AddEvents ((int)Gdk.EventMask.ButtonPressMask);
+			textviewDetails.ButtonPressEvent += TextviewDetails_ButtonPressEvent;
 
 			labelAuthor.Text = "";
 			labelDate.Text = "";
 			labelRevision.Text = "";
+
+			labelDate.AddEvents ((int)Gdk.EventMask.ButtonPressMask);
+			labelDate.ButtonPressEvent += LabelDate_ButtonPressEvent;
+
+			labelAuthor.AddEvents ((int)Gdk.EventMask.ButtonPressMask);
+			labelAuthor.ButtonPressEvent += LabelAuthor_ButtonPressEvent;
+
+			labelRevision.AddEvents ((int)Gdk.EventMask.ButtonPressMask);
+			labelRevision.ButtonPressEvent += LabelRevision_ButtonPressEvent;
 
 			vbox2.Remove (scrolledwindow1);
 			HeaderBox tb = new HeaderBox ();
@@ -255,8 +269,76 @@ namespace MonoDevelop.VersionControl.Views
 			tb.Add (scrolledwindow1);
 			vbox2.PackStart (tb, true, true, 0);
 
+			(Platform.IsMac ? Xwt.Toolkit.NativeEngine : Xwt.Toolkit.CurrentEngine).Invoke (() => {
+				popupMenu = new Xwt.Menu ();
+				var copyItem = new Xwt.MenuItem (GettextCatalog.GetString ("Copy"));
+				popupMenu.Items.Add (copyItem);
+				copyItem.Clicked += (sender, e) => {
+					var selectedText = GetSelectedText ();
+					if (!string.IsNullOrEmpty (selectedText))
+						LogView.CopyToClipboard (selectedText);
+				};
+			});
+
 			UpdateStyle ();
 			Ide.Gui.Styles.Changed += HandleStylesChanged;
+		}
+
+		[GLib.ConnectBeforeAttribute]
+		void LabelRevision_ButtonPressEvent (object o, ButtonPressEventArgs args)
+		{
+			if (args.Event.IsContextMenuButton ()) {
+				if (currentRevisionShortened) {
+					Revision d = SelectedRevision;
+					labelRevision.Text = GettextCatalog.GetString ("Revision: {0}", d.Name);
+					currentRevisionShortened = false;
+				}
+				return;
+			}
+			PopulateLabelMenuAndRaisePopup (labelRevision, args);
+		}
+
+		[GLib.ConnectBeforeAttribute]
+		void LabelAuthor_ButtonPressEvent (object o, ButtonPressEventArgs args)
+		{
+			PopulateLabelMenuAndRaisePopup (labelAuthor, args);
+		}
+
+		[GLib.ConnectBeforeAttribute]
+		void LabelDate_ButtonPressEvent (object o, ButtonPressEventArgs args)
+		{
+			PopulateLabelMenuAndRaisePopup (labelDate, args);
+		}
+
+		void PopulateLabelMenuAndRaisePopup (Label label, ButtonPressEventArgs args)
+		{
+			if (args.Event.IsContextMenuButton ()) {
+				var selectedText = GetSelectedTextFromLabel (label);
+				if (string.IsNullOrEmpty (selectedText)) {
+					args.RetVal = true;
+					return;
+				}
+				PopulateMenuAndRaisePopup (label, selectedText, args);
+			}
+		}
+
+		[GLib.ConnectBeforeAttribute]
+		void TextviewDetails_ButtonPressEvent (object o, ButtonPressEventArgs args)
+		{
+			if (args.Event.IsContextMenuButton ()) {
+				var selectedText = GetSelectedTextFromTextView (textviewDetails);
+				if (string.IsNullOrEmpty (selectedText)) {
+					args.RetVal = true;
+					return;
+				}
+				PopulateMenuAndRaisePopup (textviewDetails, selectedText, args);
+			}
+		}
+
+		void PopulateMenuAndRaisePopup (Gtk.Widget gtkWidget, string selectedText, ButtonPressEventArgs args)
+		{
+			popupMenu.Popup ();
+			args.RetVal = true;
 		}
 
 		protected override void OnRealized ()
@@ -383,7 +465,9 @@ namespace MonoDevelop.VersionControl.Views
 			}
 		}
 
+		const int colFile = 3;
 		const int colOperation = 4;
+		const int colOperationText = 1;
 		const int colPath = 5;
 		const int colDiff = 6;
 		
@@ -497,6 +581,12 @@ namespace MonoDevelop.VersionControl.Views
 
 		protected override void OnDestroyed ()
 		{
+			textviewDetails.ButtonPressEvent -= TextviewDetails_ButtonPressEvent;
+			labelDate.ButtonPressEvent -= LabelDate_ButtonPressEvent;
+
+			labelAuthor.ButtonPressEvent -= LabelAuthor_ButtonPressEvent;
+			labelRevision.ButtonPressEvent -= LabelRevision_ButtonPressEvent;
+
 			revertButton.Clicked -= RevertRevisionClicked;
 			revertToButton.Clicked -= RevertToRevisionClicked;
 			refreshButton.Clicked -= RefreshClicked;
@@ -507,26 +597,22 @@ namespace MonoDevelop.VersionControl.Views
 			textRenderer.Dispose ();
 			treeviewFiles.Dispose ();
 
+			popupMenu.Dispose ();
+
 			base.OnDestroyed ();
 		}
 		
 		static void DateFunc (Gtk.TreeViewColumn tree_column, Gtk.CellRenderer cell, Gtk.TreeModel model, Gtk.TreeIter iter)
 		{
-			CellRendererText renderer = (CellRendererText)cell;
-			var rev = (Revision)model.GetValue (iter, 0);
-			string day;
-
+			var renderer = (CellRendererText)cell;
+			var revision = (Revision)model.GetValue (iter, 0);
 			// Grab today's day and the start of tomorrow's day to make Today/Yesterday calculations.
 			var now = DateTime.Now;
-			var age = new DateTime (now.Year, now.Month, now.Day).AddDays(1) - rev.Time;
-			if (age.Days >= 0 && age.Days < 1) { // Check whether it's a commit that's less than a day away. Also discard future commits.
-				day = GettextCatalog.GetString ("Today");
-			} else if (age.Days < 2) { // Check whether it's a commit from yesterday.
-				day = GettextCatalog.GetString ("Yesterday");
-			} else {
-				day = rev.Time.ToShortDateString ();
-			}
-			renderer.Text = string.Format ("{0} {1:HH:mm}", day, rev.Time);
+			var age = new DateTime (now.Year, now.Month, now.Day).AddDays (1) - revision.Time;
+
+			renderer.Text = age.Days >= 2 ?
+				revision.Time.ToShortDateString () :
+				revision.Time.Humanize (utcDate: false, dateToCompareAgainst: now);
 		}	
 		
 		static void GraphFunc (Gtk.TreeViewColumn tree_column, Gtk.CellRenderer cell, Gtk.TreeModel model, Gtk.TreeIter iter)
@@ -781,27 +867,62 @@ namespace MonoDevelop.VersionControl.Views
 				sb.Append (GLib.Markup.EscapeText (txt.Substring (last, txt.Length - last)));
 			return sb.ToString ();
 		}
-		
-		[GLib.ConnectBeforeAttribute]
-		protected virtual void OnLabelRevisionButtonPressEvent (object o, Gtk.ButtonPressEventArgs args)
+	
+		static string GetSelectedTextFromLabel (Label label)
 		{
-			if (currentRevisionShortened) {
-				Revision d = SelectedRevision;
-				labelRevision.Text = GettextCatalog.GetString ("Revision: {0}", d.Name);
-				currentRevisionShortened = false;
+			label.GetSelectionBounds (out int start, out int end);
+			if (start != end) {
+				return label.Text.Substring (start, end - start);
 			}
+			return null;
 		}
 
-		internal string DiffText {
-			get {
-				TreeIter iter;
-				if (treeviewFiles.Selection.GetSelected (out iter)) {
-					string [] items = changedpathstore.GetValue (iter, colDiff) as string [];
-					if (items != null)
-						return String.Join (Environment.NewLine, items);
+		static string GetSelectedTextFromTextView (TextView textView)
+		{
+			textView.Buffer.GetSelectionBounds (out var A, out var B);
+			return textView.Buffer.GetText (A, B, true);
+		}
+
+		internal string GetSelectedText ()
+		{
+			if (treeviewFiles.HasFocus ) {
+				if (treeviewFiles.Selection.GetSelected (out var iter)) {
+					if (changedpathstore.GetValue (iter, colDiff) is string [] items) {
+						return string.Join (Environment.NewLine, items);
+					}
+					if (changedpathstore.GetValue (iter, colFile) is string file) {
+						var path = changedpathstore.GetValue (iter, colPath) as string;
+						var operation = changedpathstore.GetValue (iter, colOperationText) as string;
+						return string.Format ("{0}, {1}, {2}", file, operation, path);
+					}
 				}
-				return null;
 			}
+
+			if (treeviewLog.HasFocus) {
+				if (treeviewLog.Selection.GetSelected (out var iter)) {
+					if (logstore.GetValue (iter, 0) is Revision revision) {
+						return string.Format ("{0}, {1}, {2}, {3}", revision.ShortMessage, revision.Time, revision.Author, revision.Name);
+					}
+				}
+			}
+
+			if (textviewDetails.HasFocus) {
+				return GetSelectedTextFromTextView (textviewDetails);
+			}
+
+			if (labelDate.HasFocus) {
+				return GetSelectedTextFromLabel (labelDate);
+			}
+
+			if (labelAuthor.HasFocus) {
+				return GetSelectedTextFromLabel (labelAuthor);
+			}
+
+			if (labelRevision.HasFocus) {
+				return GetSelectedTextFromLabel (labelRevision);
+			}
+		
+			return null;
 		}
 	}
 }

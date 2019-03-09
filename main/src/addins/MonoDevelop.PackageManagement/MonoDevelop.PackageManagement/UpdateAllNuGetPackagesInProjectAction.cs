@@ -51,7 +51,6 @@ namespace MonoDevelop.PackageManagement
 		NuGetProject project;
 		IEnumerable<NuGetProjectAction> actions;
 		List<SourceRepository> primarySources;
-		IEnumerable<PackageReference> packageReferences;
 		string projectName;
 
 		public UpdateAllNuGetPackagesInProjectAction (
@@ -60,7 +59,7 @@ namespace MonoDevelop.PackageManagement
 			: this (
 				solutionManager,
 				new DotNetProjectProxy (dotNetProject),
-				new NuGetProjectContext (),
+				new NuGetProjectContext (solutionManager.Settings),
 				new MonoDevelopNuGetPackageManager (solutionManager),
 				new MonoDevelopPackageRestoreManager (solutionManager),
 				PackageManagementServices.PackageManagementEvents)
@@ -107,9 +106,11 @@ namespace MonoDevelop.PackageManagement
 		{
 			await RestoreAnyMissingPackages (cancellationToken);
 
+			var resolutionContext = CreateResolutionContext ();
+
 			actions = await packageManager.PreviewUpdatePackagesAsync (
 				project,
-				CreateResolutionContext (),
+				resolutionContext,
 				context,
 				primarySources,
 				new SourceRepository[0],
@@ -123,12 +124,15 @@ namespace MonoDevelop.PackageManagement
 			await CheckLicenses (cancellationToken);
 
 			using (IDisposable fileMonitor = CreateFileMonitor ()) {
-				using (IDisposable referenceMaintainer = CreateLocalCopyReferenceMaintainer ()) {
+				using (var referenceMaintainer = new ProjectReferenceMaintainer (project)) {
 					await packageManager.ExecuteNuGetProjectActionsAsync (
 						project,
 						actions,
 						context,
+						resolutionContext.SourceCacheContext,
 						cancellationToken);
+
+					await referenceMaintainer.ApplyChanges ();
 				}
 			}
 
@@ -216,11 +220,6 @@ namespace MonoDevelop.PackageManagement
 		protected virtual ILicenseAcceptanceService GetLicenseAcceptanceService ()
 		{
 			return new LicenseAcceptanceService ();
-		}
-
-		LocalCopyReferenceMaintainer CreateLocalCopyReferenceMaintainer ()
-		{
-			return new LocalCopyReferenceMaintainer (packageManagementEvents);
 		}
 
 		IDisposable CreateFileMonitor ()

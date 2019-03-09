@@ -268,6 +268,9 @@ namespace MonoDevelop.Projects
 
 		public bool SupportsRoslyn { get; protected set; }
 
+		// TODO: slightly differs from LanguageName we should unify those at some point.
+		public string RoslynLanguageName { get; protected set; }
+
 		protected virtual DotNetProjectFlags OnGetDotNetProjectFlags ()
 		{
 			return DotNetProjectFlags.GeneratesDebugInfoFile;
@@ -607,11 +610,11 @@ namespace MonoDevelop.Projects
 			}
 		}
 
+		[Obsolete]
 		internal protected override void PopulateOutputFileList (List<FilePath> list, ConfigurationSelector configuration)
 		{
 			base.PopulateOutputFileList (list, configuration);
-			DotNetProjectConfiguration conf = GetConfiguration (configuration) as DotNetProjectConfiguration;
-			if (conf == null)
+			if (!(GetConfiguration (configuration) is DotNetProjectConfiguration conf))
 				return;
 
 			// Debug info file
@@ -645,6 +648,7 @@ namespace MonoDevelop.Projects
 		[ThreadStatic]
 		static HashSet<DotNetProject> processedProjects;
 
+		[Obsolete]
 		internal protected override void PopulateSupportFileList (FileCopySet list, ConfigurationSelector configuration)
 		{
 			try {
@@ -660,6 +664,7 @@ namespace MonoDevelop.Projects
 			}
 		}
 
+		[Obsolete]
 		void PopulateSupportFileListInternal (FileCopySet list, ConfigurationSelector configuration)
 		{
 			if (supportReferDistance <= 2)
@@ -934,6 +939,9 @@ namespace MonoDevelop.Projects
 				}
 			}
 
+			// HACK: all the logic below is replicating things MSBuild does in ResolveReferences but not
+			// in the subtargets we currently call, ResolveAssemblyReferences
+
 			var config = (DotNetProjectConfiguration)GetConfiguration (configuration);
 			bool noStdLib = false;
 			if (config != null)
@@ -943,48 +951,77 @@ namespace MonoDevelop.Projects
 			if (!noStdLib) {
 				var sa = AssemblyContext.GetAssemblies (TargetFramework).FirstOrDefault (a => a.Name == "System.Core" && a.Package.IsFrameworkPackage);
 				if (sa != null) {
-					var ar = new AssemblyReference (sa.Location);
+					var props = new MSBuildPropertyGroupEvaluated (null);
+					var trueString = "true";
+					var property = new MSBuildPropertyEvaluated (null, "Implicit", trueString, trueString);
+					props.SetProperty (property.Name, property);
+
+					var ar = new AssemblyReference (sa.Location, props);
 					if (!result.Contains (ar))
 						result.Add (ar);
 				}
 			}
-			var addFacadeAssemblies = false;
-			foreach (var r in GetReferencedAssemblyProjects (configuration)) {
-				// Facade assemblies need to be referenced if this project is referencing a PCL or .NET Standard project.
-				if (r.IsPortableLibrary || r.TargetFramework.Id.Identifier == ".NETStandard") {
-					addFacadeAssemblies = true;
-					break;
-				}
-			}
-			if (!addFacadeAssemblies) {
-				foreach (var refFilename in result) {
-					string fullPath = null;
-					if (!Path.IsPathRooted (refFilename.FilePath)) {
-						fullPath = Path.Combine (Path.GetDirectoryName (FileName), refFilename.FilePath);
-					} else {
-						fullPath = Path.GetFullPath (refFilename.FilePath);
-					}
-					if (await SystemAssemblyService.ContainsReferenceToSystemRuntimeAsync (fullPath)) {
+			var expandDesignTimeFacades = MSBuildProject.EvaluatedProperties.GetValue ("ImplicitlyExpandDesignTimeFacades", true);
+			if (expandDesignTimeFacades) {
+				var addFacadeAssemblies = false;
+				foreach (var r in GetReferencedAssemblyProjects (configuration)) {
+					// Facade assemblies need to be referenced if this project is referencing a PCL or .NET Standard project.
+					if (r.IsPortableLibrary || r.TargetFramework.Id.Identifier == ".NETStandard") {
 						addFacadeAssemblies = true;
 						break;
 					}
 				}
-			}
+				if (!addFacadeAssemblies) {
+					foreach (var refFilename in result) {
+						string fullPath = null;
+						if (!Path.IsPathRooted (refFilename.FilePath)) {
+							fullPath = Path.Combine (Path.GetDirectoryName (FileName), refFilename.FilePath);
+						} else {
+							fullPath = Path.GetFullPath (refFilename.FilePath);
+						}
+						if (await SystemAssemblyService.RequiresFacadeAssembliesAsync (fullPath)) {
+							addFacadeAssemblies = true;
+							break;
+						}
+					}
+				}
 
-			if (addFacadeAssemblies) {
-				var facades = await ProjectExtension.OnGetFacadeAssemblies ();
-				if (facades != null) {
-					foreach (var facade in facades) {
-						if (!result.Contains (facade))
-							result.Add (facade);
+				if (addFacadeAssemblies) {
+					var facades = await ProjectExtension.OnGetFacadeAssemblies ();
+					if (facades != null) {
+						foreach (var facade in facades) {
+							if (!result.Contains (facade))
+								result.Add (facade);
+						}
 					}
 				}
 			}
+
+			// we do this here rather than PortableDotNetProjectFlavor because F# doesn't use the flavor for PCLs
+			if (TargetFramework.Id.Identifier == ".NETPortable" && TargetFramework.Id.Version != "5.0") {
+				var props = new MSBuildPropertyGroupEvaluated (null);
+				const string resolvedFrom = "ImplicitlyExpandTargetFramework";
+				var property = new MSBuildPropertyEvaluated (null, "ResolvedFrom", resolvedFrom, resolvedFrom);
+				props.SetProperty (property.Name, property);
+
+				foreach (var asm in TargetRuntime.AssemblyContext.GetAssemblies (TargetFramework)) {
+					if (asm.Package.IsFrameworkPackage) {
+						var ar = new AssemblyReference (asm.Location, props);
+						result.Add (ar);
+					}
+				}
+			}
+
 			return result;
 		}
 
 		internal protected virtual Task<List<AssemblyReference>> OnGetFacadeAssemblies ()
 		{
+			var sharedProperties = new MSBuildPropertyGroupEvaluated (null);
+			var resolvedFrom = "ImplicitlyExpandDesignTimeFacades";
+			var property = new MSBuildPropertyEvaluated (null, "ResolvedFrom", resolvedFrom, resolvedFrom);
+			sharedProperties.SetProperty (property.Name, property);
+
 			List<AssemblyReference> result = null;
 			var runtime = TargetRuntime ?? Runtime.SystemAssemblyService.DefaultRuntime;
 			var facades = runtime.FindFacadeAssembliesForPCL (TargetFramework);
@@ -993,7 +1030,8 @@ namespace MonoDevelop.Projects
 					continue;
 				if (result == null)
 					result = new List<AssemblyReference> ();
-				var ar = new AssemblyReference (facade);
+
+				var ar = new AssemblyReference (facade, sharedProperties);
 				result.Add (ar);
 			}
 			return Task.FromResult (result);
@@ -1031,6 +1069,7 @@ namespace MonoDevelop.Projects
 				context.BuilderQueue = BuilderQueue.ShortOperations;
 				context.LoadReferencedProjects = false;
 				context.LogVerbosity = MSBuildVerbosity.Quiet;
+				context.GlobalProperties.SetValue ("Silent", true);
 
 				var result = await RunTarget (monitor, "ResolveAssemblyReferences", configuration, context);
 
@@ -1180,12 +1219,14 @@ namespace MonoDevelop.Projects
 			return project?.FileName;
 		}
 
+		[Obsolete]
 		protected override Task<BuildResult> DoBuild (ProgressMonitor monitor, ConfigurationSelector configuration)
 		{
 			var handler = new MD1DotNetProjectHandler (this);
 			return handler.RunTarget (monitor, "Build", configuration);
 		}
 
+		[Obsolete]
 		protected override Task<BuildResult> DoClean (ProgressMonitor monitor, ConfigurationSelector configuration)
 		{
 			var handler = new MD1DotNetProjectHandler (this);
@@ -1282,8 +1323,14 @@ namespace MonoDevelop.Projects
 
 			var config = (DotNetProjectConfiguration) GetConfiguration (configuration);
 			return Files.Any (file => file.BuildAction == BuildAction.EmbeddedResource
-					&& String.Compare (Path.GetExtension (file.FilePath), ".resx", StringComparison.OrdinalIgnoreCase) == 0
-					&& MD1DotNetProjectHandler.IsResgenRequired (file.FilePath, config.IntermediateOutputDirectory.Combine (file.ResourceId)));
+					&& file.FilePath.HasExtension (".resx")
+					&& IsResourceUpToDate (file.FilePath, config.IntermediateOutputDirectory.Combine (file.ResourceId)));
+
+			bool IsResourceUpToDate (string resxFile, string outputResources)
+			{
+				var outInfo = new FileInfo (outputResources);
+				return !outInfo.Exists || new FileInfo (resxFile).LastWriteTime < outInfo.LastWriteTime;
+			}
 		}
 
 		protected internal override DateTime OnGetLastBuildTime (ConfigurationSelector configuration)
@@ -1494,11 +1541,13 @@ namespace MonoDevelop.Projects
 			return baseFiles;
 		}
 
+		[Obsolete ("Use MSBuild")]
 		internal Task<BuildResult> Compile (ProgressMonitor monitor, BuildData buildData)
 		{
 			return ProjectExtension.OnCompile (monitor, buildData);
 		}
 
+		[Obsolete ("Use MSBuild")]
 		protected virtual Task<BuildResult> OnCompile (ProgressMonitor monitor, BuildData buildData)
 		{
 			return MD1DotNetProjectHandler.Compile (monitor, this, buildData);
@@ -1668,6 +1717,7 @@ namespace MonoDevelop.Projects
 
 		protected abstract DotNetCompilerParameters OnCreateCompilationParameters (DotNetProjectConfiguration config, ConfigurationKind kind);
 
+		[Obsolete]
 		internal protected virtual BuildResult OnCompileSources (ProjectItemCollection items, DotNetProjectConfiguration configuration, ConfigurationSelector configSelector, ProgressMonitor monitor)
 		{
 			throw new NotSupportedException ();
@@ -1865,8 +1915,14 @@ namespace MonoDevelop.Projects
 		{
 			bool externalConsole = false, pauseConsole = false;
 
-			var dotNetExecutionCommand = executionCommand as DotNetExecutionCommand;
-			if (dotNetExecutionCommand != null) {
+			if (executionCommand is ProcessExecutionCommand processExecutionCommand) {
+				if (!string.IsNullOrEmpty (processExecutionCommand.WorkingDirectory) && !Directory.Exists (processExecutionCommand.WorkingDirectory)) {
+					monitor.ReportError (GettextCatalog.GetString ("Can not execute. The run configuration working directory doesn't exist at {0}", processExecutionCommand.WorkingDirectory), null);
+					return;
+				}
+			}
+
+			if (executionCommand is DotNetExecutionCommand dotNetExecutionCommand) {
 				dotNetExecutionCommand.UserAssemblyPaths = GetUserAssemblyPaths (configuration);
 				externalConsole = dotNetExecutionCommand.ExternalConsole;
 				pauseConsole = dotNetExecutionCommand.PauseConsoleOutput;
@@ -2076,6 +2132,7 @@ namespace MonoDevelop.Projects
 				Project.OnReferencedAssembliesChanged ();
 			}
 
+			[Obsolete]
 			internal protected override Task<BuildResult> OnCompile (ProgressMonitor monitor, BuildData buildData)
 			{
 				return Project.OnCompile (monitor, buildData);

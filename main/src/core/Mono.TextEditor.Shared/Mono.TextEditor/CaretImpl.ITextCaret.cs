@@ -25,15 +25,11 @@
 // THE SOFTWARE.
 
 using System;
-using System.Linq;
-using MonoDevelop.Core.Text;
-using MonoDevelop.Ide.Editor;
-using System;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
-using Mono.TextEditor;
 using MonoDevelop.Ide.Editor;
+using MonoDevelop.Core;
 
 namespace Mono.TextEditor
 {
@@ -44,7 +40,13 @@ namespace Mono.TextEditor
 		VirtualSnapshotPoint insertionPoint;
 		PositionAffinity _caretAffinity;
 
-		ITextViewLine ITextCaret.ContainingTextViewLine => TextEditor.GetTextViewLineContainingBufferPosition (((ITextCaret)this).Position.VirtualBufferPosition.Position);
+		ITextViewLine ITextCaret.ContainingTextViewLine {
+			get {
+				var position = ((ITextCaret)this).Position.BufferPosition;
+				var line = TextEditor.GetTextViewLineContainingBufferPosition (position);
+				return line;
+			}
+		}
 
 		double ITextCaret.Left => TextEditor.TextArea.TextViewMargin.caretX;
 
@@ -115,14 +117,34 @@ namespace Mono.TextEditor
 			insertionPoint = vsp;
 			if (args.CaretChangeReason == CaretChangeReason.Movement) {
 				oldCaretLocation = args.Location;
-				var oldOffset = TextEditor.LocationToOffset (args.Location);
-				var snapshotPoint = new SnapshotPoint (TextEditor.TextSnapshot, oldOffset);
+				var snapShot = args.Snapshot;
+				var snapshotLine = snapShot.GetLineFromLineNumber (args.Location.Line - 1);
+				if (snapshotLine == null) {
+					LoggingService.LogError ("PositionChanged_ITextCaret line number : " + args.Location.Line + " is out of range.");
+					return;
+				}
+				var oldOffset = snapshotLine.Start.Position + Math.Min (snapshotLine.Length, args.Location.Column - 1);
+				var snapshotPoint = new SnapshotPoint (snapShot, oldOffset);
 				var mappingPoint = TextEditor.BufferGraph.CreateMappingPoint (snapshotPoint, PointTrackingMode.Positive);
 				var oldCaretPosition = new CaretPosition (vsp, mappingPoint, _caretAffinity);
 				var eventArgs = new CaretPositionChangedEventArgs (TextEditor, oldCaretPosition, ((ITextCaret)this).Position);
 
 				ITextCaret_PositionChanged?.Invoke (this, eventArgs);
 			}
+
+			// Synchronize the MultiSelectionBroker with Caret.
+			// In VS Editor 15.8 the MultiSelectionBroker is the single source of truth about carets and selections 
+			// (no selection / single caret, no selection / multiple carets, simple selection, block selection, multiple selections).
+			// In our world, we still have our own Caret and Selection, so when our Caret moves, we need to synchronize 
+			// the MultiSelectionBroker to our values, and when the MultiSelectionBroker changes 
+			// (e.g. as a result of EditorOperations such as InsertNewLine), we need to synchronize our caret and selection 
+			// to the MultiSelectionBroker values.
+			// Note that EditorOperations only updates the MultiSelectionBroker, it no longer moves caret or selection 
+			// (since in Editor 15.8 the Caret and Selection are shims implemented in terms of MultiSelectionBroker)
+			// TODO: synchronize all our selections as well.
+			TextEditorData.Parent.MultiSelectionBroker.PerformActionOnAllSelections (transformer => {
+				transformer.MoveTo (vsp, select: false, PositionAffinity.Successor);
+			});
 		}
 
 		event EventHandler<CaretPositionChangedEventArgs> ITextCaret_PositionChanged;
@@ -226,9 +248,15 @@ namespace Mono.TextEditor
 			int col;
 			if (bufferPosition.IsInVirtualSpace) {
 				col = bufferPosition.VirtualSpaces;
+
+				if (!TextEditor.Options.TabsToSpaces) {
+					col = col / TextEditor.Options.TabSize;
+				}
 			} else {
-				col = requestedPosition - snapshotLine.Start + 1;
+				col = requestedPosition - snapshotLine.Start;
 			}
+
+			col += 1;
 
 			TextEditor.SetCaretTo (line, col, false, false);
 		}

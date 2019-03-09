@@ -60,12 +60,14 @@ namespace MonoDevelop.Projects
 			return next.SupportsFlavor (guid);
 		}
 
+		[Obsolete ("This property is ignored, msbuild is now always used")]
 		internal bool IsMicrosoftBuildRequired {
 			get {
 				return RequiresMicrosoftBuild || (next != null && next.IsMicrosoftBuildRequired);
 			}
 		}
 
+		[Obsolete ("This property is ignored, msbuild is now always used")]
 		protected bool RequiresMicrosoftBuild {
 			get; set;
 		}
@@ -168,7 +170,12 @@ namespace MonoDevelop.Projects
 			return next.OnReevaluateProject (monitor);
 		}
 
-		internal protected virtual Task<ProjectFile []> OnGetSourceFiles (ProgressMonitor monitor, ConfigurationSelector configuration)
+		internal protected virtual Task<ImmutableArray<FilePath>> OnGetAnalyzerFiles (ProgressMonitor monitor, ConfigurationSelector configuration)
+		{
+			return next.OnGetAnalyzerFiles (monitor, configuration);
+		}
+
+		internal protected virtual Task<ImmutableArray<ProjectFile>> OnGetSourceFiles (ProgressMonitor monitor, ConfigurationSelector configuration)
 		{
 			return next.OnGetSourceFiles (monitor, configuration);
 		}
@@ -215,11 +222,13 @@ namespace MonoDevelop.Projects
 			return next.OnCreateProjectItem (item);
 		}
 
+		[Obsolete ("Use MSBuild")]
 		internal protected virtual void OnPopulateSupportFileList (FileCopySet list, ConfigurationSelector configuration)
 		{
 			next.OnPopulateSupportFileList (list, configuration);
 		}
 
+		[Obsolete ("Use MSBuild")]
 		internal protected virtual void OnPopulateOutputFileList (List<FilePath> list, ConfigurationSelector configuration)
 		{
 			next.OnPopulateOutputFileList (list, configuration);

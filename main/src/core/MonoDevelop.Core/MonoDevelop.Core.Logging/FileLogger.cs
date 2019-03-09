@@ -2,7 +2,7 @@
 // FileLogger.cs
 // 
 // Author:
-//   Michael Hutchinson <mhutchinson@novell.com>
+//   Mikayla Hutchinson <mhutchinson@novell.com>
 // 
 // Copyright (C) 2007 Novell, Inc (http://www.novell.com)
 // 
@@ -31,12 +31,10 @@ using System.IO;
 
 namespace MonoDevelop.Core.Logging
 {
-	
 	public class FileLogger : ILogger, IDisposable
 	{
 		TextWriter writer;
-		string name;
-		EnabledLoggingLevel enabledLevel = EnabledLoggingLevel.UpToInfo;
+		object lockObject = new object ();
 		
 		public FileLogger (string filename)
 			: this (filename, false)
@@ -46,9 +44,9 @@ namespace MonoDevelop.Core.Logging
 		public FileLogger (string filename, bool append)
 		{
 			writer = new StreamWriter (filename, append) {
-				AutoFlush = true	
+				AutoFlush = true
 			};
-			name = filename;
+			Name = filename;
 		}
 
 		public void Log (LogLevel level, string message)
@@ -75,20 +73,16 @@ namespace MonoDevelop.Core.Logging
 				header = "LOG";
 				break;
 			}
-			
-			writer.WriteLine ("{0}[{1}]: {2}", header, DateTime.Now.ToString ("u"), message);
-		}
-		
-		public EnabledLoggingLevel EnabledLevel {
-			get { return enabledLevel; }
-			set { enabledLevel = value; }
+
+			lock (lockObject) {
+				// Can be null if invoked from a finalizer of another object after this one has been disposed/finalized
+				writer?.WriteLine ("{0}[{1}]: {2}", header, DateTime.Now.ToString ("u"), message);
+			}
 		}
 
-		public string Name {
-			get { return name; }
-			set { name = value; }
-		}
-		
+		public EnabledLoggingLevel EnabledLevel { get; set; } = EnabledLoggingLevel.UpToInfo;
+		public string Name { get; set; }
+
 		public void Dispose ()
 		{
 			Dispose (true);
@@ -97,8 +91,10 @@ namespace MonoDevelop.Core.Logging
 
 		protected void Dispose (bool disposing)
 		{
-			if (disposing && writer != null) {
-				writer.Dispose ();
+			lock (lockObject) {
+				if (disposing && writer != null) {
+					writer.Dispose ();
+				}
 				writer = null;
 			}
 		}

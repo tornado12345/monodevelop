@@ -424,14 +424,7 @@ namespace MonoDevelop.Ide.Editor
 			}
 		}
 
-		public event EventHandler ZoomLevelChanged {
-			add {
-				textEditorImpl.ZoomLevelChanged += value;
-			}
-			remove {
-				textEditorImpl.ZoomLevelChanged -= value;
-			}
-		}
+		public event EventHandler ZoomLevelChanged;
 
 		public string ContextMenuPath {
 			get {
@@ -484,6 +477,12 @@ namespace MonoDevelop.Ide.Editor
 			}
 			if (usePulseAnimation)
 				StartCaretPulseAnimation ();
+		}
+
+		public void InformLoadComplete ()
+		{
+			Runtime.AssertMainThread ();
+			textEditorImpl.InformLoadComplete ();
 		}
 
 		public void ClearSelection ()
@@ -978,6 +977,7 @@ namespace MonoDevelop.Ide.Editor
 			DetachExtensionChain ();
 			FileNameChanged -= TextEditor_FileNameChanged;
 			MimeTypeChanged -= TextEditor_MimeTypeChanged;
+			textEditorImpl.ZoomLevelChanged -= TextEditor_ZoomLevelChanged;
 			foreach (var provider in textEditorImpl.TooltipProvider)
 				provider.Dispose ();
 			textEditorImpl.Dispose ();
@@ -1048,16 +1048,34 @@ namespace MonoDevelop.Ide.Editor
 			ExtensionContext = AddinManager.CreateExtensionContext ();
 			ExtensionContext.RegisterCondition ("FileType", fileTypeCondition);
 
+			textEditorImpl.ZoomLevelChanged += TextEditor_ZoomLevelChanged;
 			FileNameChanged += TextEditor_FileNameChanged;
 			MimeTypeChanged += TextEditor_MimeTypeChanged;
+
 			TextEditor_MimeTypeChanged (null, null);
 
 			this.TextView = Microsoft.VisualStudio.Platform.PlatformCatalog.Instance.TextEditorFactoryService.CreateTextView(this);
 		}
 
-		void TextEditor_FileNameChanged (object sender, EventArgs e)
+		void TextEditor_ZoomLevelChanged (object sender, EventArgs e)
+		{
+			ZoomLevelChanged?.Invoke (this, e);
+		}
+
+		async void TextEditor_FileNameChanged (object sender, EventArgs e)
 		{
 			fileTypeCondition.SetFileName (FileName);
+
+			// This is a sync call to remove from the cache, then async to dispose the context after the load is awaited.
+			EditorConfigService.RemoveEditConfigContext (FileName).Ignore ();
+
+			// There is no use to try and create a cached context if we won't use it.
+			if (!(Options is DefaultSourceEditorOptions options))
+				return;
+
+			var context = await EditorConfigService.GetEditorConfigContext (FileName);
+			if (context != null)
+				options.SetContext (context);
 		}
 
 		void TextEditor_MimeTypeChanged (object sender, EventArgs e)
@@ -1180,14 +1198,19 @@ namespace MonoDevelop.Ide.Editor
 			
 			TextEditorExtension last = null;
 			foreach (var ext in extensions) {
-				if (ext.IsValidInContext (documentContext)) {
-					if (last != null) {
-						last.Next = ext;
+				try {
+					if (ext.IsValidInContext (documentContext)) {
+						ext.Initialize (this, documentContext);
+						//if either call to ext throws, it will be omitted from the chain
+						if (last != null) {
+							last.Next = ext;
+						} else {
+							textEditorImpl.EditorExtension = ext;
+						}
 						last = ext;
-					} else {
-						textEditorImpl.EditorExtension = last = ext;
 					}
-					ext.Initialize (this, documentContext);
+				} catch (Exception e) {
+					LoggingService.LogError ($"Error while initializing text editor extension: {ext.GetType ().FullName}", e);
 				}
 			}
 			DocumentContext = documentContext;
@@ -1213,10 +1236,13 @@ namespace MonoDevelop.Ide.Editor
 			return GetContents<T> ().FirstOrDefault ();
 		}
 
-		public IEnumerable<T> GetContents<T>() where T : class
+		public IEnumerable<T> GetContents<T> () where T : class
 		{
-			T result = textEditorImpl as T;
-			if (result != null)
+			if (isDisposed) {
+				LoggingService.LogError ($"Error retrieving TextEditor.GetContents<{typeof(T)}>\n {Environment.StackTrace}");
+				yield break;
+			}
+			if (textEditorImpl is T result)
 				yield return result;
 			var ext = textEditorImpl.EditorExtension;
 			while (ext != null) {
@@ -1230,6 +1256,10 @@ namespace MonoDevelop.Ide.Editor
 		public IEnumerable<object> GetContents (Type type)
 		{
 			var res = Enumerable.Empty<object> ();
+			if (isDisposed) {
+				LoggingService.LogError ($"Error retrieving TextEditor.GetContents({type})\n {Environment.StackTrace}");
+				return res;
+			}
 			if (type.IsInstanceOfType (textEditorImpl))
 				res = res.Concat (textEditorImpl);
 			
@@ -1249,7 +1279,7 @@ namespace MonoDevelop.Ide.Editor
 			return GetMarkup (offset, length, new MarkupOptions (MarkupFormat.Pango, fitIdeStyle));
 		}
 
-		[Obsolete ("Use GetMarkup")]
+		[Obsolete ("Use GetMarkupAsync")]
 		public string GetPangoMarkup (ISegment segment, bool fitIdeStyle = false)
 		{
 			if (segment == null)
@@ -1271,6 +1301,22 @@ namespace MonoDevelop.Ide.Editor
 			if (segment == null)
 				throw new ArgumentNullException (nameof (segment));
 			return textEditorImpl.GetMarkup (segment.Offset, segment.Length, options);
+		}
+
+		public Task<string> GetMarkupAsync (int offset, int length, MarkupOptions options, CancellationToken cancellationToken = default)
+		{
+			if (options == null)
+				throw new ArgumentNullException (nameof (options));
+			return textEditorImpl.GetMarkupAsync (offset, length, options, cancellationToken);
+		}
+
+		public Task<string> GetMarkupAsync (ISegment segment, MarkupOptions options, CancellationToken cancellationToken = default)
+		{
+			if (options == null)
+				throw new ArgumentNullException (nameof (options));
+			if (segment == null)
+				throw new ArgumentNullException (nameof (segment));
+			return textEditorImpl.GetMarkupAsync (segment.Offset, segment.Length, options, cancellationToken);
 		}
 
 		public static implicit operator Microsoft.CodeAnalysis.Text.SourceText (TextEditor editor)

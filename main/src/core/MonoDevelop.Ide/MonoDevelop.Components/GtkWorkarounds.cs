@@ -1529,28 +1529,35 @@ namespace MonoDevelop.Components
 			GLib.Signal.Emit(container, "remove", child);
 #endif
 		}
+
+		[DllImport ("libgtk-win32-2.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern IntPtr gtk_get_current_event ();
+
+		public static IntPtr GetCurrentEventHandle () => gtk_get_current_event ();
+
+		[DllImport ("libgdk-win32-2.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern void gdk_event_free (IntPtr raw);
+
+		public static void FreeEvent (IntPtr raw)
+		{
+			if (raw != IntPtr.Zero)
+				gdk_event_free (raw);
+		}
 	}
 
-	public struct KeyboardShortcut : IEquatable<KeyboardShortcut>
+	public readonly struct KeyboardShortcut : IEquatable<KeyboardShortcut>
 	{
 		public static readonly KeyboardShortcut Empty = new KeyboardShortcut ((Gdk.Key) 0, (Gdk.ModifierType) 0);
 
-		Gdk.ModifierType modifier;
-		Gdk.Key key;
-
 		public KeyboardShortcut (Gdk.Key key, Gdk.ModifierType modifier)
 		{
-			this.modifier = modifier;
-			this.key = key;
+			this.Modifier = modifier;
+			this.Key = key;
 		}
 
-		public Gdk.Key Key {
-			get { return key; }
-		}
+		public Gdk.Key Key { get; }
 
-		public Gdk.ModifierType Modifier {
-			get { return modifier; }
-		}
+		public Gdk.ModifierType Modifier { get; }
 
 		public bool IsEmpty {
 			get { return Key == (Gdk.Key) 0; }

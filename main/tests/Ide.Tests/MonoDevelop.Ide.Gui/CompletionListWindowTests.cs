@@ -362,13 +362,13 @@ namespace MonoDevelop.Ide.Gui
 			listWindow.ShowListWindow (list, listWindow.CodeCompletionContext);
 		}
 
-		[TearDown]
-		public void TearDown ()
+		public override void TearDown ()
 		{
 			if (listWindow != null) {
 				listWindow.Destroy ();
 				listWindow = null;
 			}
+			base.TearDown ();
 		}
 
 		void AssertCompletionList (params string[] items)
@@ -1164,6 +1164,7 @@ namespace MonoDevelop.Ide.Gui
 		/// Bug 55298 - Autocomplete () doesn't work
 		/// </summary>
 		[Test]
+		[Ignore("The case in https://bugzilla.xamarin.com/show_bug.cgi?id=55298 is handled differently but propertly by the roslyn engine. This beahivor in that test collides with VSTS 760389 and produces a bug on default string prefix equality which was tested here.")]
 		public void TestBug55298 ()
 		{
 			string output = RunSimulation (new SimulationSettings () {
@@ -1564,6 +1565,42 @@ namespace MonoDevelop.Ide.Gui
 
 			Assert.IsFalse (visible);
 			Assert.IsFalse (listWindow.Visible);
+		}
+
+		/// <summary>
+		/// Completion still commits on ENTER when an item is soft-selected #6142
+		/// </summary>
+		[Test]
+		public void TestIssue6142 ()
+		{
+			CreateListWindow ("", false, true, false,
+				"foo",
+				"bar");
+
+			var word = SimulateInput ("b\b\n");
+			Assert.IsTrue (string.IsNullOrEmpty (word));
+
+		}
+
+
+		/// <summary>
+		/// VSTS 760389: [Feedback] Autocomplete chooses wrong variable name
+		/// </summary>
+		[Test]
+		public void TestVSTS760389 ()
+		{
+			var word = RunSimulation (new SimulationSettings {
+				SimulatedInput = "i\t",
+				AutoSelect = true,
+				CompleteWithSpaceOrPunctuation = true,
+				AutoCompleteEmptyMatch = false,
+				CompletionData = new [] {
+					"iFoo",
+					"i"
+				},
+				DefaultCompletionString = "iFoo"
+			});
+			Assert.AreEqual ("i", word);
 		}
 	}
 }

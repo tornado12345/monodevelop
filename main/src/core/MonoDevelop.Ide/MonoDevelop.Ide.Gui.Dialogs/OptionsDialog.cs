@@ -182,9 +182,6 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 			this.mainDataObject = dataObject;
 			this.extensionPath = extensionPath;
 			
-			if (parentWindow != null)
-				TransientFor = parentWindow;
-			
 			ImageService.EnsureStockIconIsLoaded (emptyCategoryIcon);
 
 			store = new TreeStore (typeof(OptionsDialogSection));
@@ -598,7 +595,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 					((Notebook)c).Page = 0;
 			}
 
-			if (!DesktopService.AccessibilityInUse) {
+			if (!DesktopService.AccessibilityInUse && !DesktopService.AccessibilityKeyboardFocusInUse) {
 				// Don't automatically expand trees if using accessibility
 				// as it can be confusing with screen readers
 				tree.ExpandToPath (store.GetPath (page.Iter));
@@ -767,7 +764,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 					nb.InsertPage (box, blab, -1);
 				}
 				foreach (PanelInstance pi in tabPanels) {
-					Gtk.Label lab = new Gtk.Label (GettextCatalog.GetString (pi.Node.Label));
+					Gtk.Label lab = new Gtk.Label (pi.Node.Label);
 					lab.Show ();
 					Gtk.Alignment a = new Alignment (0, 0, 1, 1);
 					a.BorderWidth = 9;

@@ -1,4 +1,4 @@
-﻿//
+//
 // ProgressMonitorTests.cs
 //
 // Author:
@@ -28,6 +28,10 @@ using System.Collections.Generic;
 using MonoDevelop.Projects;
 using NUnit.Framework;
 using MonoDevelop.Core.ProgressMonitoring;
+using System.Threading;
+using System.Text;
+using System.Collections.Concurrent;
+using UnitTests;
 
 namespace MonoDevelop.Core
 {
@@ -104,6 +108,107 @@ namespace MonoDevelop.Core
 			Assert.AreEqual ("one", m.LoggedObjects [0]);
 			Assert.AreSame (foo, m.LoggedObjects [1]);
 			Assert.AreEqual ("two", m.LoggedObjects [2]);
+		}
+
+		[Test]
+		public void TestLogSynchronizationContextThroughWrites ()
+		{
+			using (var ctx = new TestSingleThreadSynchronizationContext ()) {
+				int offset;
+
+				using (var mon = new ChainedProgressMonitor (ctx)) {
+					// These call once into Write.
+					mon.Log.Write ("a");
+					Assert.AreEqual (1, ctx.CallCount);
+
+					mon.Log.Write ('a');
+					Assert.AreEqual (2, ctx.CallCount);
+
+					mon.Log.Write (new [] { 'a' }, 0, 1);
+					Assert.AreEqual (3, ctx.CallCount);
+
+					offset = 3;
+
+					// This calls twice into Write in newer versions of the BCL,
+					//  and once in older versions.
+					mon.Log.WriteLine ("a");
+					Assert.IsTrue (ctx.CallCount - offset <= 2, "WriteLine should produce 1-2 calls");
+					offset = ctx.CallCount;
+
+					// These 2 call twice into Write.
+					mon.Log.WriteLine ('a');
+					Assert.AreEqual (2, ctx.CallCount - offset);
+					offset = ctx.CallCount;
+
+					mon.Log.WriteLine (new [] { 'a' }, 0, 1);
+					Assert.AreEqual (2, ctx.CallCount - offset);
+					offset = ctx.CallCount;
+
+					// Flush performs one call
+					mon.Log.Flush ();
+					Assert.AreEqual (1, ctx.CallCount - offset);
+					offset = ctx.CallCount;
+				}
+
+				// Once for completed, once for Dispose.
+				Assert.AreEqual (2, ctx.CallCount - offset);
+			}
+		}
+	}
+
+	class ChainedProgressMonitor : ProgressMonitor
+	{
+		readonly CustomWriter underlyingLog;
+		public ChainedProgressMonitor (TestSingleThreadSynchronizationContext ctx) : base (ctx)
+		{
+			Log = underlyingLog = new CustomWriter (ctx);
+		}
+
+		protected override void OnDispose (bool disposing)
+		{
+			underlyingLog.Dispose ();
+			base.OnDispose (disposing);
+		}
+
+		class CustomWriter : System.IO.TextWriter
+		{
+			TestSingleThreadSynchronizationContext ctx;
+			public CustomWriter (TestSingleThreadSynchronizationContext ctx)
+			{
+				this.ctx = ctx;
+			}
+
+			public override void Flush ()
+			{
+				Assert.AreEqual (ctx.Thread, Thread.CurrentThread);
+				base.Flush ();
+			}
+
+			public override void Write (char value)
+			{
+				Assert.AreEqual (ctx.Thread, Thread.CurrentThread);
+				base.Write (value);
+			}
+
+			public override void Close ()
+			{
+				Assert.AreEqual (ctx.Thread, Thread.CurrentThread);
+				base.Close ();
+			}
+
+			public override void Write (string value)
+			{
+				Assert.AreEqual (ctx.Thread, Thread.CurrentThread);
+				base.Write (value);
+			}
+
+			public override void Write (char [] buffer, int index, int count)
+			{
+				Assert.AreEqual (ctx.Thread, Thread.CurrentThread);
+				base.Write (buffer, index, count);
+			}
+
+			public override Encoding Encoding => Encoding.Default;
 		}
 	}
 

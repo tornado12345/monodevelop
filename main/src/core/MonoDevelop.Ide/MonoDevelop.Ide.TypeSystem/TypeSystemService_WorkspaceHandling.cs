@@ -150,10 +150,18 @@ namespace MonoDevelop.Ide.TypeSystem
 				if (showStatusIcon)
 					workspace.ShowStatusIcon ();
 
-				await workspace.TryLoadSolution (cancellationToken).ConfigureAwait (false);
-				TaskCompletionSource<MonoDevelopWorkspace> request;
-				if (workspaceRequests.TryGetValue (workspace.MonoDevelopSolution, out request))
-					request.TrySetResult (workspace);
+				var (solution, solutionInfo) = await workspace.TryLoadSolution (cancellationToken).ConfigureAwait (false);
+
+				if (workspaceRequests.TryGetValue (solution, out var request)) {
+					if (solutionInfo == null) {
+						// Check for solutionInfo == null rather than cancellation was requested, as cancellation does not happen
+						// after all project infos are loaded.
+						request.TrySetCanceled ();
+					} else {
+						request.TrySetResult (workspace);
+					}
+				}
+
 				if (showStatusIcon)
 					workspace.HideStatusIcon ();
 
@@ -176,6 +184,11 @@ namespace MonoDevelop.Ide.TypeSystem
 					if (result != emptyWorkspace) {
 						lock (workspaceLock)
 							workspaces = workspaces.Remove (result);
+
+						if (workspaceRequests.TryGetValue (solution, out var request)) {
+							request.TrySetCanceled ();
+						}
+
 						result.Dispose ();
 					}
 					solution.SolutionItemAdded -= OnSolutionItemAdded;
@@ -291,6 +304,15 @@ namespace MonoDevelop.Ide.TypeSystem
 		{
 			if (project == null)
 				throw new ArgumentNullException (nameof(project));
+
+			var roslynProject = GetProject (project, cancellationToken);
+			if (roslynProject != null)
+				return roslynProject.GetCompilationAsync (cancellationToken);
+			return Task.FromResult (default(Compilation));
+		}
+
+		internal static Microsoft.CodeAnalysis.Project GetProject (MonoDevelop.Projects.Project project, CancellationToken cancellationToken = default (CancellationToken))
+		{
 			foreach (var w in workspaces) {
 				var projectId = w.GetProjectId (project);
 				if (projectId == null)
@@ -298,9 +320,9 @@ namespace MonoDevelop.Ide.TypeSystem
 				var roslynProject = w.CurrentSolution.GetProject (projectId);
 				if (roslynProject == null)
 					continue;
-				return roslynProject.GetCompilationAsync (cancellationToken);
+				return roslynProject;
 			}
-			return Task.FromResult<Compilation> (null);
+			return null;
 		}
 
 		static void OnWorkspaceItemAdded (object s, MonoDevelop.Projects.WorkspaceItemEventArgs args)
@@ -338,6 +360,7 @@ namespace MonoDevelop.Ide.TypeSystem
 					else {
 						ws.OnProjectAdded (projectInfo);
 					}
+					ws.ReloadModifiedProject (project);
 				}
 			} catch (Exception ex) {
 				LoggingService.LogError ("OnSolutionItemAdded failed", ex);
@@ -421,10 +444,6 @@ namespace MonoDevelop.Ide.TypeSystem
 			if (project == null)
 				throw new ArgumentNullException (nameof(project));
 			if (IsOutputTrackedProject (project)) {
-				var fileName = project.GetOutputFileName (IdeApp.Workspace.ActiveConfiguration);
-				if (!File.Exists (fileName))
-					return;
-				FileService.NotifyFileChanged (fileName);
 				if (autoUpdate) {
 					// update documents
 					foreach (var openDocument in IdeApp.Workbench.Documents) {

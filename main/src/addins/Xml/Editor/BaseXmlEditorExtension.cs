@@ -110,7 +110,10 @@ namespace MonoDevelop.Xml.Editor
 
 		void HandleProjectChanged (object sender, ProjectFileEventArgs e)
 		{
-			if (e.Any (f => f.ProjectFile.FilePath == DocumentContext.Name))
+			if (DocumentContext.IsDisposed)
+				return;
+			var documentName = DocumentContext.Name;
+			if (e.Any (f => f.ProjectFile.FilePath == documentName))
 				UpdateOwnerProjects ();
 		}
 
@@ -527,6 +530,10 @@ namespace MonoDevelop.Xml.Editor
 				//and is used to show </Element> completion, user can either confirm(Return/Tab keys) this completion
 				//or just start typing inner content of element, in which case we want current completion to be aborted
 				//so we always want to CloseWindow action in PostProcess.
+				if (descriptor.SpecialKey == SpecialKey.Up || descriptor.SpecialKey == SpecialKey.Down) {
+					keyAction = KeyActions.None;
+					return false;
+				}
 				keyAction = KeyActions.CloseWindow;
 				return true;
 			}
@@ -685,8 +692,9 @@ namespace MonoDevelop.Xml.Editor
 				
 				if (elements.Count == 0) {
 					string name = el.Name.FullName;
-					completionList.Add (new BaseXmlCompletionData("/" + name + ">", Gtk.Stock.GoBack,
-					                                              GettextCatalog.GetString ("Closing tag for '{0}'", name)));
+					completionList.Add (new XmlTagCompletionData ("/" + name + ">", 0, true) {
+						Description = GettextCatalog.GetString ("Closing tag for '{0}'", name)
+					});
 				} else {
 					foreach (XElement listEl in elements) {
 						if (listEl.Name == el.Name)
@@ -1266,6 +1274,33 @@ namespace MonoDevelop.Xml.Editor
 					}
 				}
 			}
+		}
+
+		[CommandHandler (TextEditorCommands.ExpandSelection)]
+		public virtual void ExpandSelection ()
+		{
+			Tracker.UpdateEngine ();
+			XmlExpandSelectionHandler.ExpandSelection (Editor, Tracker.Engine.GetTreeParser);
+		}
+
+		[CommandUpdateHandler (TextEditorCommands.ExpandSelection)]
+		public void UpdateExpandSelection (CommandInfo info)
+		{
+			info.Enabled = XmlExpandSelectionHandler.CanExpandSelection (Editor);
+
+		}
+
+		[CommandHandler (TextEditorCommands.ShrinkSelection)]
+		public virtual void ShrinkSelection ()
+		{
+			Tracker.UpdateEngine ();
+			XmlExpandSelectionHandler.ShrinkSelection (Editor, Tracker.Engine.GetTreeParser);
+		}
+
+		[CommandUpdateHandler (TextEditorCommands.ShrinkSelection)]
+		public void UpdateShrinkSelection (CommandInfo info)
+		{
+			info.Enabled = XmlExpandSelectionHandler.CanShrinkSelection (Editor);
 		}
 	}
 }

@@ -232,7 +232,8 @@ namespace MonoDevelop.Projects.MSBuild
 				string xml = File.ReadAllText (file);
 
 				LoadXml (xml, reader);
-
+			} catch (Exception ex) {
+				throw new MSBuildFileFormatException (ex.Message + " " + file, ex);
 			} finally {
 				EnableChangeTracking ();
 			}
@@ -338,6 +339,7 @@ namespace MonoDevelop.Projects.MSBuild
 				case "Target": ob = new MSBuildTarget (); break;
 				case "Choose": ob = new MSBuildChoose (); break;
 				case "ProjectExtensions": ob = new MSBuildProjectExtensions (); break;
+				case "Sdk": ob = new MSBuildSdk (); break;
 				default: ob = new MSBuildXmlElement (); break;
 			}
 			if (ob != null) {
@@ -439,6 +441,12 @@ namespace MonoDevelop.Projects.MSBuild
 			ImportChanged?.Invoke (this, EventArgs.Empty);
 		}
 
+		internal void NotifySdkChanged ()
+		{
+			NotifyChanged ();
+			sdkArray = null;
+		}
+
 		/// <summary>
 		/// Occurs when an import has changed, is added or removed.
 		/// </summary>
@@ -480,7 +488,7 @@ namespace MonoDevelop.Projects.MSBuild
 		internal MSBuildProjectInstanceInfo LoadNativeInstance (bool evaluateItems)
 		{
 			lock (readLock) {
-				var supportsMSBuild = UseMSBuildEngine && GetGlobalPropertyGroup ().GetValue ("UseMSBuildEngine", true);
+				var supportsMSBuild = UseMSBuildEngine && (GetGlobalPropertyGroup ()?.GetValue ("UseMSBuildEngine", true) ?? true);
 
 				if (engineManager == null) {
 					engineManager = new MSBuildEngineManager ();
@@ -553,19 +561,59 @@ namespace MonoDevelop.Projects.MSBuild
 			}
 		}
 
+		string[] sdkArray = null;
+		string[] implicitSdkArray = null;
+		string[] explicitSdkArray = null;
+
+		void GenerateSdkArray()
+		{
+			// Sdks that are defined explicitly
+			var explicitSdks = new HashSet<string> ();
+			// Only defines the sdks that require an implicit import (Project node or Sdk node)
+			var implicitSdks = new HashSet<string> ();
+			if (Sdk != null) {
+				foreach (string sdk in Sdk.Split (new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+					.Select (x => x.Trim ())
+					.Where (x => x.Length > 0)) {
+					implicitSdks.Add (sdk);
+				}
+			}
+
+			MSBuildSdk sdkNode = GetChildren ().OfType<MSBuildSdk> ().FirstOrDefault ();
+			if (sdkNode != null && !string.IsNullOrEmpty (sdkNode.Name)) {
+				// Sdk node defines name and version separately
+				string version = "";
+				if (!string.IsNullOrEmpty (sdkNode.Version)) {
+					version = $"/{sdkNode.Version}";
+				}
+				string sdkName = $"{sdkNode.Name}{version}";
+				implicitSdks.Add (sdkName);
+			}
+
+			// Check all import nodes for other sdks
+			foreach (MSBuildImport import in ImportGroups.SelectMany (x => x.Imports).Concat (Imports)) {
+				if (!string.IsNullOrEmpty(import.Sdk)) {
+					explicitSdks.Add (import.Sdk);
+				}
+			}
+
+			explicitSdkArray = explicitSdks.ToArray ();
+			implicitSdkArray = implicitSdks.Where (x => !explicitSdks.Contains (x)).ToArray ();
+			sdkArray = explicitSdks.Concat (implicitSdks).ToArray ();
+		}
+
 		string sdk;
-		string[] sdkArray;
 		public string Sdk {
 			get => sdk;
 			set {
 				sdk = value;
-				sdkArray = null;
+				NotifySdkChanged ();
 			}
 		}
 
 		public override string Namespace {
 			get {
-				if (Sdk != null)
+				if (GetReferencedSDKs ().Any ())
 					return string.Empty;
 				return Schema;
 			}
@@ -573,19 +621,25 @@ namespace MonoDevelop.Projects.MSBuild
 
 		public string [] ProjectTypeGuids
 		{
-			get { return GetGlobalPropertyGroup ().GetValue ("ProjectTypeGuids", "").Split (new [] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select (t => t.Trim ()).ToArray (); }
-			set { GetGlobalPropertyGroup ().SetValue ("ProjectTypeGuids", string.Join (";", value), preserveExistingCase: true); }
+			get {
+				var propertyGroup = GetGlobalPropertyGroup ();
+				if (propertyGroup == null)
+					return Array.Empty<string> ();
+				return propertyGroup.GetValue ("ProjectTypeGuids", "").Split (new [] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select (t => t.Trim ()).ToArray ();
+			}
+			set { GetOrCreateGlobalPropertyGroup ().SetValue ("ProjectTypeGuids", string.Join (";", value), preserveExistingCase: true); }
 		}
 
 		public bool AddProjectTypeGuid (string guid)
 		{
-			var guids = GetGlobalPropertyGroup ().GetValue ("ProjectTypeGuids", "").Trim ();
+			var propertyGroup = GetOrCreateGlobalPropertyGroup ();
+			var guids = propertyGroup.GetValue ("ProjectTypeGuids", "").Trim ();
 			if (guids.IndexOf (guid, StringComparison.OrdinalIgnoreCase) == -1) {
 				if (!string.IsNullOrEmpty (guids))
 					guids += ";" + guid;
 				else
 					guids = guid;
-				GetGlobalPropertyGroup ().SetValue ("ProjectTypeGuids", guids, preserveExistingCase: true);
+				propertyGroup.SetValue ("ProjectTypeGuids", guids, preserveExistingCase: true);
 				return true;
 			}
 			return false;
@@ -705,6 +759,17 @@ namespace MonoDevelop.Projects.MSBuild
 		public MSBuildPropertyGroup GetGlobalPropertyGroup ()
 		{
 			return PropertyGroups.FirstOrDefault (g => g.Condition.Length == 0);
+		}
+
+		internal MSBuildPropertyGroup GetOrCreateGlobalPropertyGroup ()
+		{
+			var group = GetGlobalPropertyGroup ();
+			if (group == null) {
+				group = AddNewPropertyGroup (false);
+				// Ensure empty property group is not added on saving if it has no child properties.
+				group.SkipSerializationOnNoChildren = true;
+			}
+			return group;
 		}
 
 		public MSBuildPropertyGroup CreatePropertyGroup ()
@@ -967,13 +1032,23 @@ namespace MonoDevelop.Projects.MSBuild
 		/// </summary>
 		public string[] GetReferencedSDKs ()
 		{
-			if (!string.IsNullOrEmpty (Sdk)) {
-				if (sdkArray == null)
-					sdkArray = Sdk.Split (new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-				return sdkArray;
+			if (sdkArray == null) {
+				GenerateSdkArray ();
 			}
-			else
-				return Array.Empty<string> ();
+			return sdkArray;
+		}
+
+		/// <summary>
+		/// Returns a list of SDKs referenced by this project that are not imported using an
+		/// Import element.
+		/// </summary>
+		internal string[] GetImplicitlyImportedSdks ()
+		{
+			if (sdkArray == null) {
+				GenerateSdkArray ();
+			}
+
+			return implicitSdkArray;
 		}
 
 		XmlNamespaceManager GetNamespaceManagerForProject ()
@@ -1133,7 +1208,7 @@ namespace MonoDevelop.Projects.MSBuild
 			elem.ParentNode.RemoveChild (elem);
 
 			while (ws != null) {
-				var t = ws.InnerText;
+				var t = ws.InnerText.AsSpan ();
 				t = t.TrimEnd (' ');
 				bool hasNewLine = t.Length > 0 && (t [t.Length - 1] == '\r' || t [t.Length - 1] == '\n');
 				if (hasNewLine)
@@ -1146,19 +1221,19 @@ namespace MonoDevelop.Projects.MSBuild
 					if (hasNewLine)
 						break;
 				} else {
-					ws.InnerText = t;
+					ws.InnerText = t.ToString ();
 					break;
 				}
 			}
 		}
 
-		static string RemoveLineEnd (string s)
+		static ReadOnlySpan<char> RemoveLineEnd (ReadOnlySpan<char> s)
 		{
 			if (s [s.Length - 1] == '\n') {
 				if (s.Length > 1 && s [s.Length - 2] == '\r')
-					return s.Substring (0, s.Length - 2);
+					return s.Slice (0, s.Length - 2);
 			}
-			return s.Substring (0, s.Length - 1);
+			return s.Slice (0, s.Length - 1);
 		}
 
 		static string GetIndentString (XmlNode elem)

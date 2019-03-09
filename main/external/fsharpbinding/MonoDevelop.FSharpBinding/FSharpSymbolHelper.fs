@@ -198,6 +198,7 @@ module SymbolUse =
         not symbol.IsConstructor && 
         not symbol.IsPropertyGetterMethod && 
         not symbol.IsPropertySetterMethod &&
+        not symbol.IsProperty &&
         not (symbol.LogicalName = ".ctor")
 
     let (|Method|_|) (symbolUse:FSharpSymbolUse) =
@@ -374,10 +375,15 @@ module Highlight =
         |> Async.AwaitTask 
         |> Async.RunSynchronously
 
-    let syntaxHighlight s =
-        Runtime.RunInMainThread(fun() -> editor.Text <- s) |> Async.AwaitTask |> Async.RunSynchronously
+    let getHighlightedMarkup s =
+        editor.Text <- s
         let data = editor.GetContent<ITextEditorDataProvider>().GetTextEditorData()
         data.GetMarkup(0, s.Length, false, true, false, true)
+
+    let syntaxHighlight s =
+        Runtime.RunInMainThread (fun () -> getHighlightedMarkup s)
+        |> Async.AwaitTask
+        |> Async.RunSynchronously
 
     let asUnderline = sprintf "_STARTUNDERLINE_%s_ENDUNDERLINE_" // we replace with real markup after highlighting
 

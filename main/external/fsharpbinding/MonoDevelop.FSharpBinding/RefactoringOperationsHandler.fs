@@ -129,12 +129,12 @@ module Refactoring =
         lineInfo, symbol
 
     /// Perform the renaming of a symbol
-    let renameSymbol (editor:TextEditor, ctx:DocumentContext, lastIdent, symbol:FSharpSymbolUse) =
+    let renameSymbol (editor:TextEditor, ctx:DocumentContext, lastIdent, symbolUse:FSharpSymbolUse) =
         // Collect the uses of the symbol across the solution.  The use of RunSynchronously  makes this a blocking UI 
         // action and will presumably cause the operation to fail with a timeout exception if it takes too long.
         let symbols =
             let activeDocFileName = editor.FileName.ToString ()
-            languageService.GetUsesOfSymbolInProject (ctx.Project.FileName.ToString(), activeDocFileName, editor.Text, symbol.Symbol)
+            languageService.GetUsesOfSymbolInProject (ctx.Project.FileName.ToString(), activeDocFileName, editor.Text, symbolUse.Symbol)
             |> (fun p -> Async.RunSynchronously(p, timeout=ServiceSettings.maximumTimeout))
 
         let locations =
@@ -159,7 +159,7 @@ module Refactoring =
             links.Add (link)
             editor.StartTextLinkMode (TextLinkModeOptions (links))
         else
-            MessageService.ShowCustomDialog (Dialog.op_Implicit (new Rename.RenameItemDialog("Rename Item", symbol.Symbol.DisplayName, performChanges symbol locations)))
+            MessageService.ShowCustomDialog (Dialog.op_Implicit (new Rename.RenameItemDialog("Rename Item", symbolUse.Symbol.DisplayName, performChanges symbolUse locations)))
             |> ignore
 
     let getJumpTypePartSearchResult (location: Range.range) =
@@ -183,7 +183,7 @@ module Refactoring =
                                    |> ignore
                 | None -> ()
             ()
-        } |> Async.Start
+        } |> Async.StartAndLogException
 
     let findDeclarationSymbol documentationIdString (symbols: FSharpSymbolUse seq) =
         symbols
@@ -241,6 +241,9 @@ module Refactoring =
         p.GetOutputFileName(config).ToString() |> Path.GetFileNameWithoutExtension
 
     let getDependentProjects (project:Project) (symbolUse:FSharpSymbolUse) =
+      match symbolUse with
+      | Val _local -> []
+      | _ ->
       try
           let allProjects = project.ParentSolution.GetAllProjects() |> Seq.toList
           let config = IdeApp.Workspace.ActiveConfiguration
@@ -276,7 +279,7 @@ module Refactoring =
 
     let findReferences (editor:TextEditor, ctx:DocumentContext, symbolUse:FSharpSymbolUse, lastIdent) =
         let monitor = IdeApp.Workbench.ProgressMonitors.GetSearchProgressMonitor (true, true)
-        let findAsync = async {
+        async {
             let dependentProjects = getDependentProjects ctx.Project symbolUse
            
             let! symbolrefs =
@@ -290,13 +293,11 @@ module Refactoring =
             for (filename, startOffset, endOffset) in distinctRefs do
                 let sr = SearchResult (FileProvider (filename), startOffset, endOffset-startOffset)
                 monitor.ReportResult sr
-        }
-        let onComplete _ = monitor.Dispose()
-        Async.StartWithContinuations(findAsync, onComplete, onComplete, onComplete)
+        } |> Async.StartInThreadpoolWithContinuation(fun () -> monitor.Dispose ())
 
     let findDerivedReferences (editor:TextEditor, ctx:DocumentContext, symbolUse:FSharpSymbolUse, lastIdent) =
         let monitor = IdeApp.Workbench.ProgressMonitors.GetSearchProgressMonitor (true, true)
-        let findAsync = async {
+        async {
             let dependentProjects = getDependentProjects ctx.Project symbolUse
 
             let! symbolrefs =
@@ -310,13 +311,11 @@ module Refactoring =
             for (filename, startOffset, endOffset) in distinctRefs do
                 let sr = SearchResult (FileProvider (filename), startOffset, endOffset-startOffset)
                 monitor.ReportResult sr
-        }
-        let onComplete _ = monitor.Dispose()
-        Async.StartWithContinuations(findAsync, onComplete, onComplete, onComplete)
+        } |> Async.StartInThreadpoolWithContinuation(fun () -> monitor.Dispose ())
 
     let findOverloads (editor:TextEditor, _ctx:DocumentContext, symbolUse:FSharpSymbolUse, _lastIdent) =
         let monitor = IdeApp.Workbench.ProgressMonitors.GetSearchProgressMonitor (true, true)
-        let findAsync = async {
+        async {
             //let dependentProjects = getDependentProjects ctx.Project symbolUse
             let overrides = languageService.GetOverridesForSymbol(symbolUse.Symbol)
 
@@ -336,13 +335,11 @@ module Refactoring =
             for (filename, startOffset, endOffset) in distinctRefs do
                 let sr = SearchResult (FileProvider (filename), startOffset, endOffset-startOffset)
                 monitor.ReportResult sr
-        }
-        let onComplete _ = monitor.Dispose()
-        Async.StartWithContinuations(findAsync, onComplete, onComplete, onComplete)
+        } |> Async.StartInThreadpoolWithContinuation(fun () -> monitor.Dispose ())
 
     let findExtensionMethods (editor:TextEditor, ctx:DocumentContext, symbolUse:FSharpSymbolUse, lastIdent) =
         let monitor = IdeApp.Workbench.ProgressMonitors.GetSearchProgressMonitor (true, true)
-        let findAsync = async {
+        async {
             let dependentProjects = getDependentProjects ctx.Project symbolUse
 
             let! symbolrefs =
@@ -356,9 +353,7 @@ module Refactoring =
             for (filename, startOffset, endOffset) in distinctRefs do
                 let sr = SearchResult (FileProvider (filename), startOffset, endOffset-startOffset)
                 monitor.ReportResult sr
-        }
-        let onComplete _ = monitor.Dispose()
-        Async.StartWithContinuations(findAsync, onComplete, onComplete, onComplete)
+        } |> Async.StartInThreadpoolWithContinuation(fun () -> monitor.Dispose ())
 
     module Operations =
         let canRename (symbolUse:FSharpSymbolUse) fileName project =
@@ -692,9 +687,107 @@ type FSharpFindReferencesProvider () =
         }
         |> StartAsyncAsTask monitor.CancellationToken :> Task
 
-    override x.FindAllReferences(_documentationCommentId, _hintProject, monitor) =
+    override x.FindAllReferences(_documentationCommentId, _hintProject, _monitor) =
         //TODO:
         Task.CompletedTask
+
+open MonoDevelop.FSharp
+open System.Threading
+open Microsoft.CodeAnalysis
+open Mono.Addins
+open Microsoft.CodeAnalysis.CodeFixes
+open MonoDevelop.FSharp.Editor
+open Microsoft.FSharp.Compiler.Range
+open MonoDevelop.FSharp.Shared
+
+type QuickFixMenuHandler() =
+    inherit CommandHandler()
+    
+    let getSymbolAtLocationInFile(projectFilename, fileName, version, source, line:int, col, lineStr) =
+        asyncMaybe {
+            let! results = languageService.GetTypedParseResultWithTimeout(projectFilename, fileName, version, source, AllowStaleResults.MatchingSource)
+
+            let! range = 
+                results.GetErrors() 
+                |> Seq.filter (fun x -> x.Severity = FSharpErrorSeverity.Error)
+                |> Seq.filter (fun x -> x.StartLineAlternate = x.EndLineAlternate)
+                |> Seq.filter (fun x -> x.StartLineAlternate = line)
+                |> Seq.filter (fun x -> x.StartColumn < col && col < x.EndColumn)
+                |> Seq.map (fun x -> 
+                    let startPos = mkPos line x.StartColumn
+                    let endPos = mkPos line x.EndColumn
+                    mkRange fileName startPos endPos
+                )
+                |> Seq.distinct
+                |> Seq.tryHead
+            return range
+        }
+
+    let getSymbolUseForEditorCaret (editor: TextEditor) = 
+        match IdeApp.Workbench.ActiveDocument with
+        | null -> async { return None }
+        | doc when doc.FileName = FilePath.Null || doc.FileName <> editor.FileName || doc.ParsedDocument = null -> async { return None }
+        | _doc ->
+            let documentContext = _doc
+            async {
+                LoggingService.logDebug "HighlightUsagesExtension: ResolveAsync starting on %s" (documentContext.Name |> IO.Path.GetFileName )
+                try
+                    let line, col, lineStr = editor.GetLineInfoByCaretOffset ()
+                    let currentFile = documentContext.Name
+                    let source = editor.Text
+                    let projectFile = documentContext.Project |> function null -> currentFile | project -> project.FileName.ToString()
+
+                    let! symbolReferences = getSymbolAtLocationInFile (projectFile, currentFile, 0, source, line, col, lineStr)
+                    return symbolReferences
+                with
+                | :? TaskCanceledException -> return None
+                | exn -> LoggingService.LogError("Unhandled Exception in F# HighlightingUsagesExtension", exn)
+                         return None 
+            }
+
+    let getCodeFixes () = 
+        asyncMaybe {
+            let! document = IdeApp.Workbench.ActiveDocument |> Option.ofObj
+            let editor = document.Editor
+            let! ast = editor.DocumentContext.TryGetAst()
+            let! range = getSymbolUseForEditorCaret editor
+
+            use monitor = IdeApp.Workbench.ProgressMonitors.GetBackgroundProgressMonitor (GettextCatalog.GetString("Add Open"), IconId());
+            let assemblyProvider = AssemblyContentProvider ()
+            let! codeFixes = FSharpAddOpenCodeFixProvider.getCodeFixesAsync document.Editor assemblyProvider monitor ast range
+            return codeFixes
+        }
+
+    override x.Run (data) =
+        data 
+        |> Option.tryCast<Action> 
+        |> Option.iter (fun data -> data.Invoke ())
+
+    override x.UpdateAsync (info:CommandArrayInfo, cancelToken: CancellationToken) =
+        info.Add (new CommandInfo (GettextCatalog.GetString ("Loading..."), false, false), null);
+        let mainThread = System.Threading.SynchronizationContext.Current
+
+        async {
+            let! codeFixQuery = getCodeFixes ()
+            
+            do! Async.SwitchToContext mainThread
+            info.Clear()
+
+            match codeFixQuery with 
+            | None ->  
+                info.Add (new CommandInfo (GettextCatalog.GetString ("No code fixes available"), false, false), null);
+            | Some codeFixes ->  
+                match codeFixes with 
+                | [] -> 
+                    info.Add (new CommandInfo (GettextCatalog.GetString ("No code fixes available"), false, false), null);
+                | xs -> 
+                    xs |> List.iter (fun (x, action) -> 
+                        info.Add (new CommandInfo (x, true, false), Action(action));
+                    )
+            info.NotifyChanged ();
+        } 
+        |> Async.Ignore
+        |> CommonRoslynHelpers.StartAsyncUnitAsTask cancelToken
 
 type FSharpCommandsTextEditorExtension () =
     inherit Editor.Extension.TextEditorExtension ()
@@ -723,3 +816,4 @@ type FSharpCommandsTextEditorExtension () =
     [<CommandHandler ("MonoDevelop.Refactoring.RefactoryCommands.FindReferences")>]
     member x.FindReferences () =
         FindReferencesHandler().Run(x.Editor, x.DocumentContext)
+       

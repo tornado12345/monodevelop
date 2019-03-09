@@ -23,11 +23,12 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
+/*
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using Gdk;
 using GLib;
 using Gtk;
@@ -44,36 +45,7 @@ using MonoDevelop.SourceEditor.QuickTasks;
 
 namespace MonoDevelop.CodeIssues
 {
-	class CodeIssuePanel : OptionsPanel
-	{
-		CodeIssuePanelWidget widget;
 
-		public CodeIssuePanelWidget Widget {
-			get {
-				EnsureWidget ();
-				return widget;
-			}
-		}
-
-		void EnsureWidget ()
-		{
-			if (widget != null)
-				return;
-			widget = new CodeIssuePanelWidget ("text/x-csharp");
-		}
-		
-		public override Control CreatePanelWidget ()
-		{
-			EnsureWidget ();
-			return widget;
-		}
-		
-		public override void ApplyChanges ()
-		{
-			widget.ApplyChanges ();
-		}
-	}
-	
 	partial class CodeIssuePanelWidget : Bin
 	{
 		readonly string mimeType;
@@ -81,12 +53,10 @@ namespace MonoDevelop.CodeIssues
 		readonly Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, DiagnosticSeverity?> severities = new Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, DiagnosticSeverity?> ();
 		readonly Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, bool> enableState = new Dictionary<Tuple<CodeDiagnosticDescriptor, DiagnosticDescriptor>, bool> ();
 
-		static MonoDevelopWorkspaceDiagnosticAnalyzerProviderService.OptionsTable options =
-			((MonoDevelopWorkspaceDiagnosticAnalyzerProviderService)Ide.Composition.CompositionManager.GetExportedValue<IWorkspaceDiagnosticAnalyzerProviderService> ()).Options; 
-		
 		void GetAllSeverities ()
 		{
 			var language = CodeRefactoringService.MimeTypeToLanguage (mimeType);
+			var options = ((MonoDevelopWorkspaceDiagnosticAnalyzerProviderService)Ide.Composition.CompositionManager.GetExportedValue<IWorkspaceDiagnosticAnalyzerProviderService> ()).GetOptionsAsync ().Result;
 			foreach (var node in options.AllDiagnostics) {
 				if (!node.Languages.Contains (language))
 					continue;
@@ -111,10 +81,7 @@ namespace MonoDevelop.CodeIssues
 
 		public void SelectCodeIssue (string idString)
 		{
-			TreeIter iter;
-			if (!treeStore.GetIterFirst (out iter))
-				return;
-			SelectCodeIssue (idString, iter);
+			searchentryFilter.Entry.Text = idString;
 		}
 
 		bool SelectCodeIssue (string idString, TreeIter iter)
@@ -198,22 +165,6 @@ namespace MonoDevelop.CodeIssues
 			treeviewInspections.ExpandAll ();
 		}
 
-		public static void MarkupSearchResult (string filter, ref string title)
-		{
-			if (!string.IsNullOrEmpty (filter)) {
-				var idx = title.IndexOf (filter, StringComparison.OrdinalIgnoreCase);
-				if (idx >= 0) {
-					title =
-						Markup.EscapeText (title.Substring (0, idx)) +
-						"<span bgcolor=\"yellow\">" +
-						Markup.EscapeText (title.Substring (idx, filter.Length)) +
-						"</span>" +
-						Markup.EscapeText (title.Substring (idx + filter.Length));
-					return;
-				}
-			}
-			title = Markup.EscapeText (title);
-		}
 
 
 		class CustomCellRenderer : CellRendererCombo
@@ -416,3 +367,4 @@ namespace MonoDevelop.CodeIssues
 		}
 	}
 }
+*/

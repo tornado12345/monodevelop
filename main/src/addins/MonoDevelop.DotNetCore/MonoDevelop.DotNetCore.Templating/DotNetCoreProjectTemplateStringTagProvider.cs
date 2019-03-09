@@ -37,22 +37,31 @@ namespace MonoDevelop.DotNetCore.Templating
 	[Extension]
 	class DotNetCoreProjectTemplateStringTagProvider : IStringTagProvider
 	{
+		string [] SupportedSDK = { "2.1", "2.2", "3.0" };
+
 		public IEnumerable<StringTagDescription> GetTags (Type type)
 		{
-			yield return new StringTagDescription (
-				"DotNetCoreSdk.2.1.Templates.Common.ProjectTemplates.nupkg",
-				GettextCatalog.GetString (".NET Core SDK 2.1 Common Project Templates NuGet package path")
-			);
+			for (var i = 0; i < SupportedSDK.Length; i++) {
+				yield return new StringTagDescription (
+					$"DotNetCoreSdk.{SupportedSDK[i]}.Templates.Common.ProjectTemplates.nupkg",
+					GettextCatalog.GetString (string.Format (".NET Core SDK {0} Common Project Templates NuGet package path", SupportedSDK [i]))
+				);
 
-			yield return new StringTagDescription (
-				"DotNetCoreSdk.2.1.Templates.Test.ProjectTemplates.nupkg",
-				GettextCatalog.GetString (".NET Core SDK 2.1 Test Project Templates NuGet package path")
-			);
+				yield return new StringTagDescription (
+					$"DotNetCoreSdk.{SupportedSDK [i]}.Templates.Test.ProjectTemplates.nupkg",
+					GettextCatalog.GetString (string.Format (".NET Core SDK {0} Test Project Templates NuGet package path", SupportedSDK[i]))
+				);
 
-			yield return new StringTagDescription (
-				"DotNetCoreSdk.2.1.Templates.Web.ProjectTemplates.nupkg",
-				GettextCatalog.GetString (".NET Core SDK 2.1 Web Project Templates NuGet package path")
-			);
+				yield return new StringTagDescription (
+					$"DotNetCoreSdk.{SupportedSDK [i]}.Templates.Web.ProjectTemplates.nupkg",
+					GettextCatalog.GetString (string.Format (".NET Core SDK {0} Web Project Templates NuGet package path", SupportedSDK[i]))
+				);
+
+				yield return new StringTagDescription (
+					$"DotNetCoreSdk.{SupportedSDK [i]}.Templates.NUnit3.DotNetNew.Template.nupkg",
+					GettextCatalog.GetString (string.Format (".NET Core SDK {0} NUnit Project Templates NuGet package path", SupportedSDK [i]))
+				);
+			}
 		}
 
 		public object GetTagValue (object instance, string tag)
@@ -103,26 +112,30 @@ namespace MonoDevelop.DotNetCore.Templating
 
 			partialFileName = partialFileName.Substring (0, partialFileName.Length - nupkgTagString.Length + 1);
 
-			return "microsoft.dotnet." + partialFileName.ToLowerInvariant ();
+			return partialFileName.IndexOf ("NUnit3.", StringComparison.OrdinalIgnoreCase) == 0 ?
+				partialFileName.ToLowerInvariant () :
+				"microsoft.dotnet." + partialFileName.ToLowerInvariant ();
 		}
 
 		/// <summary>
-		/// Only .NET Core SDKs 2.1 is supported.
+		/// Only .NET Core SDKs 2.1/2.2/3.0 are supported.
 		/// </summary>
 		string GetDotNetCoreSdkTemplatesDirectory (string tag)
 		{
-			DotNetCoreVersion dotNetCoreSdk21 = GetDotNetCoreSdk21Version ();
-			if (dotNetCoreSdk21 == null) {
-				return null;
+			DotNetCoreVersion dotNetCoreSdk = null;
+
+			foreach (var sdk in SupportedSDK) {
+				if (tag.StartsWith ($"DotNetCoreSdk.{sdk}", StringComparison.OrdinalIgnoreCase)) {
+					dotNetCoreSdk = GetDotNetCoreSdkVersion (DotNetCoreVersion.Parse (sdk));
+				}
 			}
 
-			if (!tag.StartsWith ("DotNetCoreSdk.2.1", StringComparison.OrdinalIgnoreCase)) {
+			if (dotNetCoreSdk == null)
 				return null;
-			}
 
 			string templatesDirectory = Path.Combine (
 				DotNetCoreSdk.SdkRootPath,
-				dotNetCoreSdk21.OriginalString,
+				dotNetCoreSdk.OriginalString,
 				"Templates"
 			);
 
@@ -133,10 +146,15 @@ namespace MonoDevelop.DotNetCore.Templating
 			return string.Empty;
 		}
 
-		DotNetCoreVersion GetDotNetCoreSdk21Version ()
+		DotNetCoreVersion GetDotNetCoreSdkVersion (DotNetCoreVersion version)
 		{
+			//special case 2.1
+			if (version.Major == 2 && version.Minor == 1)
+				return DotNetCoreSdk.Versions
+				.FirstOrDefault (v => v.Major == version.Major && v.Minor == version.Minor && v.Patch >= 300);
+
 			return DotNetCoreSdk.Versions
-				.FirstOrDefault (v => v.Major == 2 && v.Minor == 1 && v.Patch >= 300);
+				.FirstOrDefault (v => v.Major == version.Major && v.Minor == version.Minor);
 		}
 
 		/// <summary>

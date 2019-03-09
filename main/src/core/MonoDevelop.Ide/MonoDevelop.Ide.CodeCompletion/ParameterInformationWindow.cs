@@ -109,7 +109,11 @@ namespace MonoDevelop.Ide.CodeCompletion
 			var ctx = Widget?.CurrentCodeCompletionContext;
 			if (ctx == null)
 				return;
-			var lineHeight = (int)Ext.Editor.LineHeight;
+			var editor = Ext?.Editor;
+			if (editor == null) {
+				return;
+			}
+			var lineHeight = (int)editor.LineHeight;
 			var geometry = Xwt.MessageDialog.RootWindow.Screen.VisibleBounds;
 			var cmg = ParameterInformationWindowManager.CurrentMethodGroup;
 
@@ -118,19 +122,20 @@ namespace MonoDevelop.Ide.CodeCompletion
 			var lastH = (int)Height;
 
 			int X, Y;
-			X = cmg.CompletionContext.TriggerXCoord;
+			var pos = await cmg.CompletionContext.GetCoordinatesAsync ();
+			X = pos.x;
 			if (isCompletionWindowVisible) {
 				// place above
-				Y = ctx.TriggerYCoord - lineHeight - (int)lastH - 10;
+				Y = pos.y - lineHeight - (int)lastH - 10;
 			} else {
 				// place below
-				Y = ctx.TriggerYCoord;
+				Y = pos.y;
 			}
 
 			if (X + lastW > geometry.Right)
 				X = (int)geometry.Right - (int)lastW;
 			if (Y < geometry.Top)
-				Y = ctx.TriggerYCoord;
+				Y = pos.y;
 			if (Y + lastH > geometry.Bottom) {
 				Y = Y - lineHeight - (int)lastH - 4;
 			}

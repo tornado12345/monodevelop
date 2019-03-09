@@ -8,12 +8,13 @@
 # https://github.com/blog/2392-introducing-code-owners
 # https://help.github.com/articles/about-codeowners
 
-/main/src/core/MonoDevelop.Core @slluis @mrward
+/main/src/core/MonoDevelop.Core @mono/monodevelop-core-owners
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Components.AtkCocoaHelper @iainx
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Components.Commands @slluis
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Components.Docking @slluis @sevoku
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Components.Theming @sevoku
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Components @slluis @sevoku
+/main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.BuildOutputView @netonjm @rodrmoya
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.CodeCompletion @slluis @mkrueger
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.CodeFormatting @slluis @mkrueger
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.CodeTemplates @mkrueger
@@ -27,6 +28,7 @@
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.Execution @slluis
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.Gui.Components @slluis @sevoku
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.Gui.Content @slluis
+/main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.Gui.Pads/ErrorListPad.cs @netonjm @rodrmoya
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.Gui @slluis
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.ProgressMonitoring @slluis
 /main/src/core/MonoDevelop.Ide/MonoDevelop.Ide.TypeSystem @mkrueger @DavidKarlas
