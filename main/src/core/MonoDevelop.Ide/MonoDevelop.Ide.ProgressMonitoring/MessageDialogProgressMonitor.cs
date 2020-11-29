@@ -39,7 +39,9 @@ namespace MonoDevelop.Ide.ProgressMonitoring
 		ProgressDialog dialog;
 		bool hideWhenDone;
 		bool showDetails;
-		
+
+		public ProgressDialog ProgressDialog => dialog;
+
 		public MessageDialogProgressMonitor (): this (false)
 		{
 		}
@@ -66,7 +68,7 @@ namespace MonoDevelop.Ide.ProgressMonitoring
 			: base (Runtime.MainSynchronizationContext)
 		{
 			if (showProgress) {
-				var parentWindow = parent ?? DesktopService.GetFocusedTopLevelWindow ();
+				var parentWindow = parent ?? IdeServices.DesktopService.GetFocusedTopLevelWindow ();
 				dialog = new ProgressDialog (parentWindow, allowCancel, showDetails);
 				dialog.Message = "";
 				MessageService.PlaceDialog (dialog, parentWindow);
@@ -122,7 +124,7 @@ namespace MonoDevelop.Ide.ProgressMonitoring
 		protected override void OnErrorReported (string message, Exception exception)
 		{
 			if (dialog != null) {
-				dialog.WriteText (GettextCatalog.GetString ("ERROR: ") + Errors [Errors.Length - 1] + "\n");
+				dialog.WriteText (GettextCatalog.GetString ("ERROR: ") + Errors [Errors.Length - 1].DisplayMessage + "\n");
 				DispatchService.RunPendingEvents ();
 			}
 			base.OnErrorReported (message, exception);

@@ -42,6 +42,7 @@ using Mono.Addins;
 using Mono.Addins.Setup;
 using MonoDevelop.Core.Assemblies;
 using MonoDevelop.Core.Execution;
+using MonoDevelop.Core.FeatureConfiguration;
 using MonoDevelop.Core.Instrumentation;
 using MonoDevelop.Core.Setup;
 using MonoDevelop.Core.Web;
@@ -59,6 +60,8 @@ namespace MonoDevelop.Core
 		static SynchronizationContext defaultSynchronizationContext;
 		static RuntimePreferences preferences = new RuntimePreferences ();
 		static Thread mainThread;
+		static BasicServiceProvider mainServiceProvider = new BasicServiceProvider ();
+		static bool serviceProviderSealed = false;
 
 		public static void GetAddinRegistryLocation (out string configDir, out string addinsDir, out string databaseDir)
 		{
@@ -81,7 +84,7 @@ namespace MonoDevelop.Core
 			if (initialized)
 				return;
 
-			Counters.RuntimeInitialization.BeginTiming ();
+			using var initTimer = Counters.RuntimeInitialization.BeginTiming ();
 			SetupInstrumentation ();
 
 			Platform.Initialize ();
@@ -112,7 +115,7 @@ namespace MonoDevelop.Core
 			AddinManager.AddinAssembliesLoaded += OnAssembliesLoaded;
 
 			try {
-				Counters.RuntimeInitialization.Trace ("Initializing Addin Manager");
+				initTimer.Trace ("Initializing Addin Manager");
 
 				string configDir, addinsDir, databaseDir;
 				GetAddinRegistryLocation (out configDir, out addinsDir, out databaseDir);
@@ -122,7 +125,7 @@ namespace MonoDevelop.Core
 				if (updateAddinRegistry)
 					AddinManager.Registry.Update (null);
 				setupService = new AddinSetupService (AddinManager.Registry);
-				Counters.RuntimeInitialization.Trace ("Initialized Addin Manager");
+				initTimer.Trace ("Initialized Addin Manager");
 				
 				PropertyService.Initialize ();
 
@@ -132,16 +135,19 @@ namespace MonoDevelop.Core
 
 				//have to do this after the addin service and property service have initialized
 				if (UserDataMigrationService.HasSource) {
-					Counters.RuntimeInitialization.Trace ("Migrating User Data from MD " + UserDataMigrationService.SourceVersion);
+					initTimer.Trace ("Migrating User Data from MD " + UserDataMigrationService.SourceVersion);
 					UserDataMigrationService.StartMigration ();
 				}
 				
 				RegisterAddinRepositories ();
 
-				Counters.RuntimeInitialization.Trace ("Initializing Assembly Service");
+				initTimer.Trace ("Initializing Assembly Service");
 				systemAssemblyService = new SystemAssemblyService ();
 				systemAssemblyService.Initialize ();
 				LoadMSBuildLibraries ();
+
+				// Initialize extra services
+				FeatureSwitchService.Initialize ();
 				
 				initialized = true;
 				
@@ -150,8 +156,6 @@ namespace MonoDevelop.Core
 				AddinManager.AddinLoadError -= OnLoadError;
 				AddinManager.AddinLoaded -= OnLoad;
 				AddinManager.AddinUnloaded -= OnUnload;
-			} finally {
-				Counters.RuntimeInitialization.EndTiming ();
 			}
 		}
 		
@@ -196,7 +200,7 @@ namespace MonoDevelop.Core
 		
 		static void SetupInstrumentation ()
 		{
-			InstrumentationService.Enabled = Runtime.Preferences.EnableInstrumentation;
+			InstrumentationService.Enabled = IsInstrumentationServiceEnabled ();
 			if (InstrumentationService.Enabled) {
 				LoggingService.LogInfo ("Instrumentation Service started");
 				try {
@@ -206,9 +210,12 @@ namespace MonoDevelop.Core
 					LoggingService.LogError ("Instrumentation service could not be published", ex);
 				}
 			}
-			Runtime.Preferences.EnableInstrumentation.Changed += (s,e) => InstrumentationService.Enabled = Runtime.Preferences.EnableInstrumentation;
+			Runtime.Preferences.EnableInstrumentation.Changed += (s,e) => InstrumentationService.Enabled = IsInstrumentationServiceEnabled ();
 		}
-		
+
+		static bool IsInstrumentationServiceEnabled ()
+			=> !string.IsNullOrEmpty (Environment.GetEnvironmentVariable ("MONO_AUTOTEST_CLIENT")) || Runtime.Preferences.EnableInstrumentation;
+
 		static void OnLoadError (object s, AddinErrorEventArgs args)
 		{
 			string msg = "Add-in error (" + args.AddinId + "): " + args.Message;
@@ -323,15 +330,15 @@ namespace MonoDevelop.Core
 		/// </summary>
 		public static Task RunInMainThread (Action action)
 		{
-			var ts = new TaskCompletionSource<int> ();
 			if (IsMainThread) {
 				try {
 					action ();
-					ts.SetResult (0);
+					return Task.CompletedTask;
 				} catch (Exception ex) {
-					ts.SetException (ex);
+					return Task.FromException (ex);
 				}
 			} else {
+				var ts = new TaskCompletionSource<int> ();
 				MainSynchronizationContext.Post (state => {
 					var (act, tcs) = (ValueTuple<Action, TaskCompletionSource<int>>)state;
 					try {
@@ -341,8 +348,8 @@ namespace MonoDevelop.Core
 						tcs.SetException (ex);
 					}
 				}, (action, ts));
+				return ts.Task;
 			}
-			return ts.Task;
 		}
 
 		/// <summary>
@@ -350,14 +357,14 @@ namespace MonoDevelop.Core
 		/// </summary>
 		public static Task<T> RunInMainThread<T> (Func<T> func)
 		{
-			var ts = new TaskCompletionSource<T> ();
 			if (IsMainThread) {
 				try {
-					ts.SetResult (func ());
+					return Task.FromResult (func ());
 				} catch (Exception ex) {
-					ts.SetException (ex);
+					return Task.FromException<T> (ex);
 				}
 			} else {
+				var ts = new TaskCompletionSource<T> ();
 				MainSynchronizationContext.Post (state => {
 					var (fun, tcs) = (ValueTuple<Func<T>, TaskCompletionSource<T>>)state;
 					try {
@@ -366,8 +373,8 @@ namespace MonoDevelop.Core
 						tcs.SetException (ex);
 					}
 				}, (func, ts));
+				return ts.Task;
 			}
-			return ts.Task;
 		}
 
 		/// <summary>
@@ -537,8 +544,75 @@ namespace MonoDevelop.Core
 
 			return Assembly.LoadFrom (asmPath);
 		}
+
+		/// <summary>
+		/// Returns the service of the provided type, creating and initializing it if necessary
+		/// </summary>
+		/// <returns>The service.</returns>
+		/// <typeparam name="T">The type of the service being requested</typeparam>
+		public static Task<T> GetService<T> () where T: class
+		{
+			return mainServiceProvider.GetService<T> ();
+		}
+
+		/// <summary>
+		/// Returns the service of the provided type if it has been initialized, null otherwise
+		/// </summary>
+		/// <returns>The service.</returns>
+		/// <typeparam name="T">The type of the service being requested</typeparam>
+		public static T PeekService<T> () where T : class
+		{
+			return mainServiceProvider.PeekService<T> ();
+		}
+
+		/// <summary>
+		/// Registers the implementation of a service
+		/// </summary>
+		/// <typeparam name="ServiceType">The service type.</typeparam>
+		/// <typeparam name="ImplementationType">The implementation type.</typeparam>
+		public static void RegisterServiceType<ServiceType,ImplementationType> () where ServiceType : class where ImplementationType : ServiceType
+		{
+			mainServiceProvider.RegisterServiceType (typeof (ServiceType), typeof (ImplementationType));
+		}
+
+		public static void RegisterService<T> (object service)
+		{
+			mainServiceProvider.RegisterService<T> (service);
+		}
+
+		public static void RegisterService (Type serviceType, object service)
+		{
+			mainServiceProvider.RegisterService (serviceType, service);
+		}
+
+		/// <summary>
+		/// Sets the service provider for this runtime
+		/// </summary>
+		/// <param name="serviceProvider">The new service provider.</param>
+		public static async Task ReplaceServiceProvider (BasicServiceProvider serviceProvider)
+		{
+			if (serviceProviderSealed)
+				throw new InvalidOperationException ("Service provider can't be replaced");
+
+			await mainServiceProvider.Dispose ();
+			mainServiceProvider = serviceProvider;
+		}
+
+		/// <summary>
+		/// Seals the main service provider, so that it can't be replaced anymore
+		/// </summary>
+		public static void SealServiceProvider ()
+		{
+			serviceProviderSealed = true;
+		}
+
+		/// <summary>
+		/// Gets the main service provider.
+		/// </summary>
+		/// <value>The service provider.</value>
+		public static ServiceProvider ServiceProvider => mainServiceProvider;
 	}
-	
+
 	internal static class Counters
 	{
 		public static TimerCounter RuntimeInitialization = InstrumentationService.CreateTimerCounter ("Runtime initialization", "Runtime", id:"Core.RuntimeInitialization");
@@ -553,10 +627,10 @@ namespace MonoDevelop.Core
 		public static TimerCounter TargetRuntimesLoading = InstrumentationService.CreateTimerCounter ("Target runtimes loaded", "Assembly Service", 0, true);
 		public static Counter PcFilesParsed = InstrumentationService.CreateCounter (".pc Files parsed", "Assembly Service");
 		
-		public static Counter FileChangeNotifications = InstrumentationService.CreateCounter ("File change notifications", "File Service");
-		public static Counter FilesRemoved = InstrumentationService.CreateCounter ("Files removed", "File Service");
-		public static Counter FilesCreated = InstrumentationService.CreateCounter ("Files created", "File Service");
-		public static Counter FilesRenamed = InstrumentationService.CreateCounter ("Files renamed", "File Service");
+		public static Counter FileChangeNotifications = InstrumentationService.CreateCounter ("File change notifications", "File Service", id:"FileService.FilesChanged");
+		public static Counter FilesRemoved = InstrumentationService.CreateCounter ("Files removed", "File Service", id:"FileService.FilesRemoved");
+		public static Counter FilesCreated = InstrumentationService.CreateCounter ("Files created", "File Service", id:"FileService.FilesCreated");
+		public static Counter FilesRenamed = InstrumentationService.CreateCounter ("Files renamed", "File Service", id:"FileService.FilesRenamed");
 		public static Counter DirectoriesRemoved = InstrumentationService.CreateCounter ("Directories removed", "File Service");
 		public static Counter DirectoriesCreated = InstrumentationService.CreateCounter ("Directories created", "File Service");
 		public static Counter DirectoriesRenamed = InstrumentationService.CreateCounter ("Directories renamed", "File Service");

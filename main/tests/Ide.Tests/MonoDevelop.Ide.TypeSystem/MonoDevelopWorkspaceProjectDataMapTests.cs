@@ -25,8 +25,10 @@
 // THE SOFTWARE.
 using System;
 using System.Collections.Immutable;
-using Microsoft.CodeAnalysis;
+using System.Threading.Tasks;
+using MonoDevelop.Projects;
 using NUnit.Framework;
+using UnitTests;
 
 namespace MonoDevelop.Ide.TypeSystem
 {
@@ -34,10 +36,10 @@ namespace MonoDevelop.Ide.TypeSystem
 	public class MonoDevelopWorkspaceProjectDataMapTests : IdeTestBase
 	{
 		[Test]
-		public void TestSimpleCreation ()
+		public async Task TestSimpleCreation ()
 		{
 			using (var project = Services.ProjectService.CreateDotNetProject ("C#"))
-			using (var workspace = new MonoDevelopWorkspace (null)) {
+			using (var workspace = await IdeApp.TypeSystemService.CreateEmptyWorkspace ()) {
 				var map = new MonoDevelopWorkspace.ProjectDataMap (workspace);
 
 				var pid = map.GetId (project);
@@ -62,10 +64,70 @@ namespace MonoDevelop.Ide.TypeSystem
 		}
 
 		[Test]
-		public void TestDataHandling ()
+		public async Task TestSimpleCreation_MultiTargetFramework ()
+		{
+			var projectFile = Util.GetSampleProject ("multi-target", "multi-target.csproj");
+			using (var project = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projectFile))
+			using (var workspace = await IdeApp.TypeSystemService.CreateEmptyWorkspace ()) {
+				var map = new MonoDevelopWorkspace.ProjectDataMap (workspace);
+
+				var pid = map.GetOrCreateId (project, null, "netcoreapp1.1");
+				Assert.IsNotNull (pid);
+
+				var pid2 = map.GetOrCreateId (project, null, "netstandard1.0");
+				Assert.IsNotNull (pid2);
+
+				Assert.AreNotEqual (pid, pid2);
+
+				// Returns first project for first framework
+				var defaultPid = map.GetId (project);
+				Assert.IsNotNull (defaultPid);
+				Assert.AreEqual ("multi-target (netcoreapp1.1)", defaultPid.DebugName);
+				Assert.AreEqual (defaultPid, pid);
+
+				var pids = map.GetIds (project);
+				Assert.AreEqual (2, pids.Length);
+				Assert.That (pids, Contains.Item (pid));
+				Assert.That (pids, Contains.Item (pid2));
+
+				var projectInMap = map.GetMonoProject (pid);
+				Assert.AreSame (project, projectInMap);
+
+				projectInMap = map.GetMonoProject (pid2);
+				Assert.AreSame (project, projectInMap);
+
+				var foundPid = map.GetId (project, "netcoreapp1.1");
+				Assert.AreSame (pid, foundPid);
+
+				foundPid = map.GetId (project, "netstandard1.0");
+				Assert.AreSame (pid2, foundPid);
+
+				var projectRemovedFromMap = map.RemoveProject (pid);
+				Assert.AreSame (projectInMap, projectRemovedFromMap);
+
+				projectRemovedFromMap = map.RemoveProject (pid2);
+				Assert.AreSame (projectInMap, projectRemovedFromMap);
+
+				Assert.IsNull (map.GetId (project, "netcoreapp1.1"));
+				Assert.IsNull (map.GetId (project, "netstandard1.0"));
+
+				pid = map.GetOrCreateId (project, null, "netcoreapp1.1");
+				map.RemoveProject (project);
+
+				Assert.IsNull (map.GetId (project, "netcoreapp1.1"));
+
+				pid = map.GetOrCreateId (project, null, "netstandard1.0");
+				map.RemoveProject (project);
+
+				Assert.IsNull (map.GetId (project, "netstandard1.0"));
+			}
+		}
+
+		[Test]
+		public async Task TestDataHandling ()
 		{
 			using (var project = Services.ProjectService.CreateDotNetProject ("C#"))
-			using (var workspace = new MonoDevelopWorkspace (null)) {
+			using (var workspace = await IdeApp.TypeSystemService.CreateEmptyWorkspace ()) {
 				var map = new MonoDevelopWorkspace.ProjectDataMap (workspace);
 
 				var pid = map.GetOrCreateId (project, null);
@@ -74,10 +136,57 @@ namespace MonoDevelop.Ide.TypeSystem
 				Assert.IsNull (data);
 				Assert.IsFalse (map.Contains (pid));
 
-				data = map.CreateData (pid, ImmutableArray<MonoDevelopMetadataReference>.Empty);
+				data = map.ReplaceData (pid, ImmutableArray<MonoDevelopMetadataReference>.Empty, out var oldData);
 
 				Assert.IsNotNull (data);
 				Assert.IsTrue (map.Contains (pid));
+				Assert.IsNull (oldData);
+
+				map.RemoveData (pid);
+
+				oldData = map.GetData (pid);
+
+				Assert.IsNull (oldData);
+				Assert.IsFalse (map.Contains (pid));
+				
+				map.ReplaceData (pid, data, out oldData);
+				
+				Assert.IsNull (oldData);
+				Assert.AreSame (data, map.GetData (pid));
+			}
+		}
+
+		[Test]
+		public async Task TestDataHandling_MultiTargetFramework ()
+		{
+			var projectFile = Util.GetSampleProject ("multi-target", "multi-target.csproj");
+			using (var project = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projectFile))
+			using (var workspace = await IdeApp.TypeSystemService.CreateEmptyWorkspace ()) {
+				var map = new MonoDevelopWorkspace.ProjectDataMap (workspace);
+
+				var pid = map.GetOrCreateId (project, null, "netcoreapp1.1");
+				var data = map.GetData (pid);
+
+				Assert.IsNull (data);
+				Assert.IsFalse (map.Contains (pid));
+
+				var pid2 = map.GetOrCreateId (project, null, "netstandard1.0");
+				var data2 = map.GetData (pid2);
+
+				Assert.IsNull (data2);
+				Assert.IsFalse (map.Contains (pid2));
+
+				data = map.ReplaceData (pid, ImmutableArray<MonoDevelopMetadataReference>.Empty, out var oldData);
+
+				Assert.IsNotNull (data);
+				Assert.IsTrue (map.Contains (pid));
+				Assert.IsNull (oldData);
+
+				data2 = map.ReplaceData (pid2, ImmutableArray<MonoDevelopMetadataReference>.Empty, out var oldData2);
+
+				Assert.IsNotNull (data2);
+				Assert.IsTrue (map.Contains (pid2));
+				Assert.IsNull (oldData2);
 
 				map.RemoveData (pid);
 
@@ -85,15 +194,23 @@ namespace MonoDevelop.Ide.TypeSystem
 
 				Assert.IsNull (data);
 				Assert.IsFalse (map.Contains (pid));
+				Assert.IsTrue (map.Contains (pid2));
+
+				map.RemoveData (pid2);
+
+				data2 = map.GetData (pid2);
+
+				Assert.IsNull (data2);
+				Assert.IsFalse (map.Contains (pid2));
 			}
 		}
 
 		[Test]
-		public void TestMigration ()
+		public async Task TestMigration ()
 		{
 			using (var project = Services.ProjectService.CreateDotNetProject ("C#"))
 			using (var project2 = Services.ProjectService.CreateDotNetProject ("C#"))
-			using (var workspace = new MonoDevelopWorkspace (null)) {
+			using (var workspace = await IdeApp.TypeSystemService.CreateEmptyWorkspace ()) {
 				var map = new MonoDevelopWorkspace.ProjectDataMap (workspace);
 
 				var pid = map.GetOrCreateId (project, null);
@@ -101,6 +218,31 @@ namespace MonoDevelop.Ide.TypeSystem
 
 				var pid2 = map.GetOrCreateId (project2, project);
 				Assert.AreSame (pid, pid2);
+			}
+		}
+
+		[Test]
+		public async Task TestMigration_MultiTargetFramework ()
+		{
+			var projectFile = Util.GetSampleProject ("multi-target", "multi-target.csproj");
+			using (var project = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projectFile))
+			using (var project2 = (DotNetProject)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projectFile))
+			using (var workspace = await IdeApp.TypeSystemService.CreateEmptyWorkspace ()) {
+				var map = new MonoDevelopWorkspace.ProjectDataMap (workspace);
+
+				var pid = map.GetOrCreateId (project, null, "netcoreapp1.1");
+				Assert.IsNotNull (pid);
+
+				var pid2 = map.GetOrCreateId (project, null, "netstandard1.0");
+				Assert.IsNotNull (pid2);
+
+				var pid3 = map.GetOrCreateId (project2, project, "netcoreapp1.1");
+				Assert.AreSame (pid, pid3);
+
+				var pid4 = map.GetOrCreateId (project2, project, "netstandard1.0");
+				Assert.AreSame (pid2, pid4);
+
+				Assert.AreNotEqual (pid, pid2);
 			}
 		}
 	}

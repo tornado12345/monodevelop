@@ -1,4 +1,4 @@
-//
+﻿//
 // FileSelectorDialog.cs
 //
 // Author:
@@ -107,18 +107,18 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 			if (action != Gtk.FileChooserAction.Open)
 				closeWorkspaceCheck.Visible = ShowViewerSelector = false;
 		}
-		
-		public int SelectedEncoding {
+
+		public TextEncoding SelectedEncoding {
 			get {
 				if (!ShowEncodingSelector)
-					return -1;
+					return null;
 				else if (encodingMenu.History < firstEncIndex || encodingMenu.History == selectOption)
-					return -1;
-				return TextEncoding.ConversionEncodings [encodingMenu.History - firstEncIndex].CodePage;
+					return null;
+				return TextEncoding.ConversionEncodings [encodingMenu.History - firstEncIndex];
 			}
 			set {
 				for (uint n=0; n < TextEncoding.ConversionEncodings.Length; n++) {
-					if (TextEncoding.ConversionEncodings [n].CodePage == value) {
+					if (TextEncoding.ConversionEncodings [n] == value) {
 						encodingMenu.SetHistory (n + (uint)firstEncIndex);
 						Menu menu = (Menu)encodingMenu.Menu;
 						RadioMenuItem rm = (RadioMenuItem) menu.Children [n + firstEncIndex];
@@ -165,7 +165,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 				firstEncIndex = 0;
 			
 			foreach (var textEncoding in TextEncoding.ConversionEncodings) {
-				var enc = Encoding.GetEncoding (textEncoding.CodePage);
+				var enc = textEncoding.Encoding;
 				RadioMenuItem mitem = new RadioMenuItem (enc.EncodingName + " (" + enc.WebName + ")");
 				menu.Append (mitem);
 				if (defaultActivated == null) {
@@ -213,7 +213,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 			int selected = -1;
 			int i = 0;
 			
-			if (IdeApp.Services.ProjectService.IsWorkspaceItemFile (Filename) || IdeApp.Services.ProjectService.IsSolutionItemFile (Filename)) {
+			if (IdeServices.ProjectService.IsWorkspaceItemFile (Filename) || IdeServices.ProjectService.IsSolutionItemFile (Filename)) {
 				viewerSelector.AppendText (GettextCatalog.GetString ("Solution Workbench"));
 				currentViewers.Add (null);
 				
@@ -227,7 +227,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 				i++;
 			}
 			
-			foreach (FileViewer vw in DisplayBindingService.GetFileViewers (Filename, null)) {
+			foreach (FileViewer vw in IdeServices.DisplayBindingService.GetFileViewers (Filename, null).Result) {
 				if (!vw.IsExternal) {
 					viewerSelector.AppendText (vw.Title);
 					currentViewers.Add (vw);
@@ -260,7 +260,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 				return;
 			}
 			
-			if (IdeApp.Services.ProjectService.IsWorkspaceItemFile (Filename) || IdeApp.Services.ProjectService.IsSolutionItemFile (Filename)) {
+			if (IdeServices.ProjectService.IsWorkspaceItemFile (Filename) || IdeServices.ProjectService.IsSolutionItemFile (Filename)) {
 				encodingLabel.Sensitive = encodingMenu.Sensitive = (SelectedViewer != null);
 				closeWorkspaceCheck.Visible = viewerLabel.Visible && IdeApp.Workspace.IsOpen;
 			}

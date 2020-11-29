@@ -32,6 +32,7 @@ using System.Linq;
 using System.Collections.ObjectModel;
 using MonoDevelop.Components.AutoTest.Results;
 using MonoDevelop.Core;
+using System.Runtime.Remoting;
 
 namespace MonoDevelop.Components.AutoTest
 {
@@ -39,6 +40,7 @@ namespace MonoDevelop.Components.AutoTest
 	{
 		//public Gtk.Widget ResultWidget { get; private set; }
 
+		List<IDisposable> itemsToDispose;
 		public AppResult ParentNode { get; set; }
 		public AppResult FirstChild { get; set; }
 		public AppResult PreviousSibling { get; set; }
@@ -196,7 +198,7 @@ namespace MonoDevelop.Components.AutoTest
 				}
 			}
 
-			return propertiesObject;
+			return DisposeWithResult (propertiesObject);
 		}
 
 		protected AppResult MatchProperty (string propertyName, object objectToCompare, object value)
@@ -237,10 +239,28 @@ namespace MonoDevelop.Components.AutoTest
 
 		protected virtual void Dispose (bool disposing)
 		{
+			RemotingServices.Disconnect (this);
+
 			FirstChild?.Dispose ();
 			NextSibling?.Dispose ();
 
 			FirstChild = NextSibling = ParentNode = PreviousSibling = null;
+
+			if (itemsToDispose != null) {
+				foreach (var properties in itemsToDispose) {
+					properties.Dispose ();
+				}
+				itemsToDispose = null;
+			}
+		}
+
+		public override object InitializeLifetimeService () => null;
+
+		protected T DisposeWithResult<T> (T item) where T:MarshalByRefObject, IDisposable
+		{
+			itemsToDispose ??= new List<IDisposable> ();
+			itemsToDispose.Add (item);
+			return item;
 		}
 	}
 }

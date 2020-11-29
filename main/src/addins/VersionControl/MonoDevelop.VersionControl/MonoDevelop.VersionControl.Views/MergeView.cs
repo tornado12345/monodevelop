@@ -1,4 +1,4 @@
-//
+﻿//
 // MergeView.cs
 //
 // Author:
@@ -25,49 +25,63 @@
 // THE SOFTWARE.
 using MonoDevelop.Components;
 using MonoDevelop.Core;
+using MonoDevelop.Ide.Gui.Documents;
 using System.Linq;
+using MonoDevelop.Ide;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.VersionControl.Views
 {
 	public interface IMergeView
 	{
 	}
-	
-	class MergeView : BaseView, IMergeView
+
+	class MergeView : DocumentController, IMergeView
 	{
 		readonly VersionControlDocumentInfo info;
-		readonly FileEventInfo fileEventInfo;
+		FileEventInfo fileEventInfo;
 		MergeWidget widget;
-		readonly MergeWidgetContainer widgetContainer;
-		readonly Gtk.Label NoMergeConflictsLabel;
+		MergeWidgetContainer widgetContainer;
+		Gtk.Label NoMergeConflictsLabel;
 
-		public override Control Control => widgetContainer;
-
-		public MergeView (VersionControlDocumentInfo info) : base (GettextCatalog.GetString ("Merge"), GettextCatalog.GetString ("Shows the merge view for the current file"))
+		public MergeView (VersionControlDocumentInfo info)
 		{
 			this.info = info;
 			fileEventInfo = new FileEventInfo (info.Item.Path.FullPath, info.Item.IsDirectory);
+		}
+
+		protected override Control OnGetViewControl (DocumentViewContent view)
+		{
 			widgetContainer = new MergeWidgetContainer ();
 			NoMergeConflictsLabel = new Gtk.Label () { Text = GettextCatalog.GetString ("No merge conflicts detected.") };
+			RefreshContent ();
+			RefreshMergeEditor ();
 			FileService.FileChanged += FileService_FileChanged;
+			return widgetContainer;
 		}
 
 		void RefreshContent ()
 		{
-			var isConflicted = info?.Item?.VersionInfo?.Status.HasFlag (VersionStatus.Conflicted) ?? false;
-			if (isConflicted) {
-				if (widget == null) {
-					widget = new MergeWidget ();
-					widget.Load (info);
+			Task.Run (async () => {
+				var item = info?.Item;
+				if (item == null) return false;
+				var isConflicted = (await item.GetVersionInfoAsync ())?.Status.HasFlag (VersionStatus.Conflicted) ?? false;
+				return isConflicted;
+			}).ContinueWith (t => {
+				if (t.Result) {
+					if (widget == null) {
+						widget = new MergeWidget ();
+						widget.Load (info);
+					}
+					if (widgetContainer.Content != widget) {
+						widgetContainer.Content = widget;
+					}
+				} else {
+					if (widgetContainer.Content != NoMergeConflictsLabel) {
+						widgetContainer.Content = NoMergeConflictsLabel;
+					}
 				}
-				if (widgetContainer.Content != widget) {
-					widgetContainer.Content = widget;
-				}
-			} else {
-				if (widgetContainer.Content != NoMergeConflictsLabel) {
-					widgetContainer.Content = NoMergeConflictsLabel;
-				}
-			}
+			}, Runtime.MainTaskScheduler);
 		}
 
 		void FileService_FileChanged (object sender, FileEventArgs e)
@@ -88,18 +102,12 @@ namespace MonoDevelop.VersionControl.Views
 			RefreshMergeEditor ();
 		}
 
-		protected override void OnSelected ()
-		{
-			info.Start ();
-			RefreshContent ();
-			RefreshMergeEditor ();
-		}
 
 		void RefreshMergeEditor ()
 		{
 			if (widgetContainer.Content is MergeWidget) {
 				widget.UpdateLocalText ();
-				var buffer = info.Document.GetContent<MonoDevelop.Ide.Editor.TextEditor> ();
+				var buffer = info.Controller.GetContent<MonoDevelop.Ide.Editor.TextEditor> ();
 				if (buffer != null) {
 					var loc = buffer.CaretLocation;
 					int line = loc.Line < 1 ? 1 : loc.Line;
@@ -111,13 +119,15 @@ namespace MonoDevelop.VersionControl.Views
 
 		void ClearContainer () => widgetContainer.Clear ();
 
-		protected override void OnDeselected () => ClearContainer ();
+		protected override void OnUnfocused () => ClearContainer ();
 
-		public override void Dispose ()
+		protected override void OnDispose ()
 		{
-			ClearContainer ();
-			FileService.FileChanged -= FileService_FileChanged;
-			base.Dispose ();
+			if (widgetContainer != null) {
+				ClearContainer ();
+				FileService.FileChanged -= FileService_FileChanged;
+			}
+			base.OnDispose ();
 		}
 
 		class MergeWidgetContainer : Gtk.VBox
@@ -146,4 +156,3 @@ namespace MonoDevelop.VersionControl.Views
 		}
 	}
 }
-

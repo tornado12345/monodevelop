@@ -28,18 +28,22 @@ using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.VersionControl.Views;
 using MonoDevelop.Projects.Text;
+using MonoDevelop.Ide.Gui.Documents;
+using MonoDevelop.Ide.Editor;
+using Microsoft.VisualStudio.Text;
 
 namespace MonoDevelop.VersionControl
 {
 	public class DefaultBlameViewHandler : IVersionControlViewHandler
 	{
-		public bool CanHandle (VersionControlItem item, DocumentView primaryView)
+		public static bool DefaultVCSViewCanHandle (VersionControlItem item, DocumentController controller)
 		{
-			return (primaryView == null || primaryView.GetContent <MonoDevelop.SourceEditor.SourceEditorView> () != null)
-				&& item.Repository.GetFileIsText (item.Path);
+			return item.Repository.GetFileIsText (item.Path);
 		}
 
-		public BaseViewContent CreateView (VersionControlDocumentInfo info)
+		public bool CanHandle (VersionControlItem item, DocumentController controller) => DefaultVCSViewCanHandle (item, controller);
+
+		public DocumentController CreateView (VersionControlDocumentInfo info)
 		{
 			return new BlameView (info);
 		}

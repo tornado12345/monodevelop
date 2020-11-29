@@ -399,7 +399,7 @@ namespace MonoDevelop.Projects
 		
 		public Task Execute (ProgressMonitor monitor, ExecutionContext context, ConfigurationSelector configuration)
 		{
-			return Task.FromResult (false);
+			return Task.CompletedTask;
 		}
 
 		public bool CanExecute (ExecutionContext context, ConfigurationSelector configuration)
@@ -409,7 +409,7 @@ namespace MonoDevelop.Projects
 
 		public Task PrepareExecution (ProgressMonitor monitor, ExecutionContext context, ConfigurationSelector configuration)
 		{
-			return Task.FromResult (false);
+			return Task.CompletedTask;
 		}
 
 		// note: although executing folders isn't supported, this may still get called when
@@ -678,8 +678,7 @@ namespace MonoDevelop.Projects
 		void RemoveAllInDirectory (string dirName)
 		{
 			foreach (Project projectEntry in GetAllProjects()) {
-				foreach (ProjectFile file in projectEntry.Files.GetFilesInPath (dirName))
-					projectEntry.Files.Remove (file);
+				projectEntry.Files.RemoveFilesInPath (dirName);
 			}
 		}
 		
@@ -689,13 +688,7 @@ namespace MonoDevelop.Projects
 				sf.Files.Remove (fileName);
 			}
 			foreach (Project projectEntry in GetAllProjects()) {
-				var toDelete = new List<ProjectFile> ();
-				foreach (ProjectFile fInfo in projectEntry.Files) {
-					if (fInfo.Name == fileName)
-						toDelete.Add (fInfo);
-				}
-				foreach (ProjectFile file in toDelete)
-					projectEntry.Files.Remove (file);
+				projectEntry.Files.Remove (fileName);
 			}
 		}
 		
@@ -711,13 +704,13 @@ namespace MonoDevelop.Projects
 		void RenameFileInAllProjects (FilePath oldName, FilePath newName)
 		{
 			foreach (Project projectEntry in GetAllProjects()) {
-				foreach (ProjectFile fInfo in projectEntry.Files) {
-					if (fInfo.FilePath == oldName) {
-						if (fInfo.BuildAction == projectEntry.GetDefaultBuildAction (oldName))
-							fInfo.BuildAction = projectEntry.GetDefaultBuildAction (newName);
-						fInfo.Name = newName;
-					}
-				}
+				var fInfo = projectEntry.Files.GetFile (oldName);
+				if (fInfo == null)
+					continue;
+
+				if (fInfo.BuildAction == projectEntry.GetDefaultBuildAction (oldName))
+					fInfo.BuildAction = projectEntry.GetDefaultBuildAction (newName);
+				fInfo.Name = newName;
 			}
 		}
 

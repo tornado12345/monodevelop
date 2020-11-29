@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
@@ -77,7 +77,7 @@ namespace SubversionAddinWindows
 						AlertButton.Ok);
 
 					if (res == db) {
-						DesktopService.ShowUrl ("https://www.microsoft.com/en-us/download/details.aspx?id=5555");
+						IdeServices.DesktopService.ShowUrl ("https://www.microsoft.com/en-us/download/details.aspx?id=5555");
 					}
 				}
 				return !installError;
@@ -251,8 +251,8 @@ namespace SubversionAddinWindows
 				try {
 					client.CheckOut (new SvnUriTarget (url, GetRevision (rev)), path, args);
 				} catch (SvnOperationCanceledException) {
-					if (Directory.Exists (path.ParentDirectory))
-						FileService.DeleteDirectory (path.ParentDirectory);
+					if (Directory.Exists (path))
+						FileService.DeleteDirectory (path);
 				}
 			}
 		}
@@ -421,11 +421,11 @@ namespace SubversionAddinWindows
 				client.Revert (paths.ToStringArray (), args);
 		}
 
-		public override void RevertRevision (FilePath path, Revision revision, ProgressMonitor monitor)
+		public override async void RevertRevision (FilePath path, Revision revision, ProgressMonitor monitor)
 		{
 			var args = new SvnMergeArgs ();
 			BindMonitor (monitor);
-			Revision prev = ((SvnRevision) revision).GetPrevious ();
+			Revision prev = await ((SvnRevision) revision).GetPreviousAsync (monitor.CancellationToken);
 			var range = new SvnRevisionRange (GetRevision (revision), GetRevision (prev));
 			lock (client) 
 				client.Merge (path, new SvnPathTarget (path), range, args);

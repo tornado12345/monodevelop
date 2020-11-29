@@ -1,4 +1,4 @@
-﻿//
+//
 // CodeActionEditorExtensionTests.cs
 //
 // Author:
@@ -56,18 +56,18 @@ namespace MonoDevelop.Refactoring.Tests
 		protected static async Task AssertExpectedCodeFixes (ExpectedCodeFixes expected, Ide.Gui.Document doc)
 		{
 			var fixes = await doc.GetContent<CodeActionEditorExtension> ().GetCurrentFixesAsync (CancellationToken.None);
-			var fixActions = fixes.CodeFixActions.SelectMany (x => x.Fixes).ToArray ();
+			var fixActions = fixes.CodeFixActions.SelectMany (x => x.Fixes).OrderBy(f => f.Action.Message).ToArray ();
 
 			Assert.AreEqual (expected.CodeFixData.Length, fixActions.Length);
 			for (int j = 0; j < expected.CodeFixData.Length; ++j) {
 				Assert.AreEqual (expected.CodeFixData [j].Message, fixActions [j].Action.Message);
 			}
 
-			var fixRefactorings = fixes.CodeRefactoringActions.SelectMany (x => x.Actions).ToArray ();
+			var fixRefactorings = fixes.CodeRefactoringActions.SelectMany (x => x.CodeActions).OrderBy(f => f.action.Message).ToArray ();
 
 			Assert.AreEqual (expected.CodeRefactoringData.Length, fixRefactorings.Length);
 			for (int j = 0; j < expected.CodeRefactoringData.Length; ++j) {
-				Assert.AreEqual (expected.CodeRefactoringData [j].Message, fixRefactorings [j].Message);
+				Assert.AreEqual (expected.CodeRefactoringData [j].Message, fixRefactorings [j].action.Message);
 			}
 		}
 	}

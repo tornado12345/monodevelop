@@ -24,6 +24,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 using System;
+using System.Timers;
+using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Tasks;
 using Xwt;
@@ -35,6 +37,7 @@ namespace MonoDevelop.Components
 		TaskSeverity severity;
 		Xwt.ImageView imageView;
 		string message;
+		bool markup;
 		TooltipPopoverWindow popover;
 		PopupPosition popupPosition = PopupPosition.Top;
 
@@ -42,8 +45,10 @@ namespace MonoDevelop.Components
 		{
 			severity = TaskSeverity.Information;
 			imageView = new Xwt.ImageView ();
+			Accessible.Role = Xwt.Accessibility.Role.Image;
 			imageView.Accessible.Role = Xwt.Accessibility.Role.Filler;
 			UpdateIcon ();
+			UpdateAccessibility ();
 			Content = imageView;
 			CanGetFocus = true;
 		}
@@ -55,6 +60,7 @@ namespace MonoDevelop.Components
 			set {
 				severity = value;
 				UpdateIcon ();
+				UpdateAccessibility ();
 				UpdatePopover ();
 			}
 		}
@@ -63,12 +69,19 @@ namespace MonoDevelop.Components
 			get {
 				return message;
 			}
-
 			set {
 				message = value;
+				UpdateAccessibility ();
 				UpdatePopover ();
+			}
+		}
 
-				this.Accessible.Label = value;
+		public bool UseMarkup {
+			get { return markup; }
+			set {
+				markup = value;
+				UpdateAccessibility ();
+				UpdatePopover ();
 			}
 		}
 
@@ -85,6 +98,18 @@ namespace MonoDevelop.Components
 			imageView.Image = GetSeverityIcon ();
 		}
 
+		void UpdateAccessibility ()
+		{
+			Accessible.RoleDescription = GetAccessibilityDescription ();
+			var text = message ?? string.Empty;
+			if (UseMarkup) {
+				var cleanText = FormattedText.FromMarkup (text);
+				Accessible.Title = cleanText.Text;
+			} else {
+				Accessible.Title = message ?? string.Empty;
+			}
+		}
+
 		Xwt.Drawing.Image GetSeverityIcon ()
 		{
 			switch (severity) {
@@ -94,6 +119,17 @@ namespace MonoDevelop.Components
 				return ImageService.GetIcon ("md-warning", Gtk.IconSize.Menu);
 			}
 			return ImageService.GetIcon ("md-information", Gtk.IconSize.Menu);
+		}
+
+		string GetAccessibilityDescription ()
+		{
+			switch (severity) {
+			case TaskSeverity.Error:
+				return GettextCatalog.GetString ("Error Icon");
+			case TaskSeverity.Warning:
+				return GettextCatalog.GetString ("Warning Icon");
+			}
+			return GettextCatalog.GetString ("Information Icon");
 		}
 
 		protected override void OnGotFocus (EventArgs args)
@@ -123,52 +159,80 @@ namespace MonoDevelop.Components
 
 		void ShowPopover ()
 		{
-			if (popover != null)
-				popover.Destroy ();
-			popover = TooltipPopoverWindow.Create (!WorkaroundNestedDialogFlickering ());
+			if (hideTooltipTimer?.Enabled == true)
+				hideTooltipTimer.Stop ();
+			if (popover == null)
+				popover = TooltipPopoverWindow.Create (!WorkaroundNestedDialogFlickering ());
 			popover.ShowArrow = true;
-			popover.Text = message;
+			if (markup)
+				popover.Markup = message;
+			else
+				popover.Text = message;
 			popover.Severity = severity;
 			popover.ShowPopup (this, popupPosition);
 		}
 
 		void UpdatePopover ()
 		{
-			if (popover != null)
+			if (popover?.Visible == true)
 				ShowPopover ();
 		}
 
 		protected override void OnLostFocus (EventArgs args)
 		{
 			base.OnLostFocus (args);
-			DestroyPopover ();
+			HidePopover ();
 		}
 
 		protected override void OnMouseExited (EventArgs args)
 		{
 			base.OnMouseExited (args);
-			DestroyPopover ();
+			HidePopover (true);
 		}
 
 		protected override void OnPreferredSizeChanged ()
 		{
 			base.OnPreferredSizeChanged ();
 			if (!Visible)
-				DestroyPopover ();
+				HidePopover ();
 		}
 
-		void DestroyPopover ()
+		Timer hideTooltipTimer;
+
+		void HidePopover (bool delayed = false)
 		{
-			if (popover != null) {
-				popover.Destroy ();
-				popover = null;
+			if (delayed) {
+				// we delay hiding using a timer to avoid tooltip flickering in case of focus stealing
+				// due to weird toolkit behaviour.
+				if (hideTooltipTimer == null) {
+					hideTooltipTimer = new Timer (50) {
+						AutoReset = false,
+						SynchronizingObject = this,
+					};
+					hideTooltipTimer.Elapsed += (sender, e) => {
+						if (popover?.Visible == true)
+							popover.Hide ();
+					};
+				}
+				hideTooltipTimer.Start ();
+			} else {
+				if (hideTooltipTimer?.Enabled == true)
+					hideTooltipTimer.Stop ();
+				if (popover?.Visible == true)
+					popover.Hide ();
 			}
 		}
 
 		protected override void Dispose (bool disposing)
 		{
-			if (disposing)
-				DestroyPopover ();
+			if (disposing) {
+				hideTooltipTimer?.Dispose ();
+				if (popover?.Visible == true)
+					popover.Hide ();
+				popover?.Dispose ();
+			}
+			hideTooltipTimer = null;
+			popover = null;
 			base.Dispose (disposing);
 		}
 	}

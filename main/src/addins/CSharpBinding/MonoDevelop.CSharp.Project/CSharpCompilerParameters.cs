@@ -1,4 +1,4 @@
-//
+﻿//
 // CSharpCompilerParameters.cs
 //
 // Author:
@@ -28,13 +28,14 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Globalization;
+using System.IO;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Host;
 using MonoDevelop.Core;
 using MonoDevelop.Core.Serialization;
+using MonoDevelop.Ide;
 using MonoDevelop.Projects;
 
 namespace MonoDevelop.CSharp.Project
@@ -45,7 +46,7 @@ namespace MonoDevelop.CSharp.Project
 	public class CSharpCompilerParameters : DotNetCompilerParameters
 	{
 		// Configuration parameters
-
+		FilePath codeAnalysisRuleSet;
 		int? warninglevel = 4;
 
 		[ItemProperty ("NoWarn", DefaultValue = "")]
@@ -80,6 +81,11 @@ namespace MonoDevelop.CSharp.Project
 		[ItemProperty ("WarningsNotAsErrors", DefaultValue = "")]
 		string warningsNotAsErrors = "";
 
+		[ItemProperty ("Nullable", DefaultValue = "")]
+		string nullableContextOptions = "";
+
+		string outputType;
+
 		protected override void Write (IPropertySet pset)
 		{
 			pset.SetPropertyOrder ("DebugSymbols", "DebugType", "Optimize", "OutputPath", "DefineConstants", "ErrorReport", "WarningLevel", "TreatWarningsAsErrors", "DocumentationFile");
@@ -106,6 +112,8 @@ namespace MonoDevelop.CSharp.Project
 
 			optimize = pset.GetValue ("Optimize", (bool?)null);
 			warninglevel = pset.GetValue<int?> ("WarningLevel", null);
+			outputType = pset.GetValue ("OutputType", "Library");
+			codeAnalysisRuleSet = pset.GetPathValue ("CodeAnalysisRuleSet");
 		}
 
 		static MetadataReferenceResolver CreateMetadataReferenceResolver (IMetadataService metadataService, string projectDirectory, string outputDirectory)
@@ -127,16 +135,24 @@ namespace MonoDevelop.CSharp.Project
 		public override CompilationOptions CreateCompilationOptions ()
 		{
 			var project = (CSharpProject)ParentProject;
-			var workspace = Ide.TypeSystem.TypeSystemService.GetWorkspace (project.ParentSolution);
+			var workspace = IdeApp.TypeSystemService.GetWorkspace (project.ParentSolution);
 			var metadataReferenceResolver = CreateMetadataReferenceResolver (
 					workspace.Services.GetService<IMetadataService> (),
 					project.BaseDirectory,
 					ParentConfiguration.OutputDirectory
 			);
 
+			var outputKind = outputType == null ? GetOutputKindFromProject (project) : OutputTypeToOutputKind (outputType);
+			bool isLibrary = outputKind == OutputKind.DynamicallyLinkedLibrary;
+			string mainTypeName = project.MainClass;
+			if (isLibrary || mainTypeName == string.Empty) {
+				// empty string is not accepted by Roslyn
+				mainTypeName = null;
+			}
+
 			var options = new CSharpCompilationOptions (
-				OutputKind.ConsoleApplication,
-				mainTypeName: project.MainClass,
+				outputKind,
+				mainTypeName: mainTypeName,
 				scriptClassName: "Script",
 				optimizationLevel: Optimize ? OptimizationLevel.Release : OptimizationLevel.Debug,
 				checkOverflow: GenerateOverflowChecks,
@@ -152,25 +168,79 @@ namespace MonoDevelop.CSharp.Project
 				concurrentBuild: true,
 				metadataReferenceResolver: metadataReferenceResolver,
 				assemblyIdentityComparer: DesktopAssemblyIdentityComparer.Default,
-				strongNameProvider: new DesktopStrongNameProvider ()
+				strongNameProvider: new DesktopStrongNameProvider (),
+				nullableContextOptions: NullableContextOptions
 			);
 
 			return options;
 		}
 
+		static OutputKind GetOutputKindFromProject (CSharpProject project)
+		{
+			switch (project.CompileTarget) {
+			case CompileTarget.Exe:
+				return OutputKind.ConsoleApplication;
+			case CompileTarget.WinExe:
+				return OutputKind.WindowsApplication;
+			case CompileTarget.Module:
+				return OutputKind.NetModule;
+			default:
+				return OutputKind.DynamicallyLinkedLibrary;
+			}
+		}
+
+		static OutputKind OutputTypeToOutputKind (string outputType)
+		{
+			switch (outputType.ToLowerInvariant ()) {
+			case "exe":
+				return OutputKind.ConsoleApplication;
+			case "winexe":
+				return OutputKind.WindowsApplication;
+			case "module":
+				return OutputKind.NetModule;
+			default:
+				return OutputKind.DynamicallyLinkedLibrary;
+			}
+		}
+
 		Dictionary<string, ReportDiagnostic> GetSpecificDiagnosticOptions ()
 		{
 			var result = new Dictionary<string, ReportDiagnostic> ();
-			foreach (var warning in GetSuppressedWarnings ())
-				result [warning] = ReportDiagnostic.Suppress;
 
-			var globalRuleSet = Ide.TypeSystem.TypeSystemService.RuleSetManager.GetGlobalRuleSet ();
+			var globalRuleSet = IdeApp.TypeSystemService.RuleSetManager.GetGlobalRuleSet ();
 			if (globalRuleSet != null) {
-				foreach (var kv in globalRuleSet.SpecificDiagnosticOptions) {
-					result [kv.Key] = kv.Value;
-				}
+				AddSpecificDiagnosticOptions (result, globalRuleSet);
 			}
+
+			var ruleSet = GetRuleSet (codeAnalysisRuleSet);
+			if (ruleSet != null) {
+				AddSpecificDiagnosticOptions (result, ruleSet);
+			}
+
+			foreach (var warning in GetSuppressedWarnings ()) {
+				result [warning] = ReportDiagnostic.Suppress;
+			}
+
 			return result;
+		}
+
+		static RuleSet GetRuleSet (FilePath ruleSetFileName)
+		{
+			try {
+				if (ruleSetFileName.IsNotNull && File.Exists (ruleSetFileName)) {
+					return RuleSet.LoadEffectiveRuleSetFromFile (ruleSetFileName);
+				}
+			} catch (Exception ex) {
+				LoggingService.LogError (string.Format ("Unable to load ruleset from file: {0}", ruleSetFileName), ex);
+			}
+			return null;
+		}
+
+		static void AddSpecificDiagnosticOptions (Dictionary<string, ReportDiagnostic> result, RuleSet ruleSet)
+		{
+			foreach (var kv in ruleSet.SpecificDiagnosticOptions) {
+				result [kv.Key] = kv.Value;
+			}
 		}
 
 		Microsoft.CodeAnalysis.Platform GetPlatform ()
@@ -210,6 +280,35 @@ namespace MonoDevelop.CSharp.Project
 			);
 		}
 
+		public NullableContextOptions NullableContextOptions {
+			get {
+				switch (nullableContextOptions.ToLower ()) {
+				case "enable":
+					return NullableContextOptions.Enable;
+				case "warnings":
+					return NullableContextOptions.Warnings;
+				case "annotations":
+					return NullableContextOptions.Annotations;
+				case "": // NOTE: Will need to update this if default ever changes
+				case "disable":
+					return NullableContextOptions.Disable;
+				default:
+					LoggingService.LogError ("Unknown Nullable string '" + nullableContextOptions + "'");
+					return NullableContextOptions.Disable;
+				}
+			}
+			set {
+				try {
+					if (NullableContextOptions == value) {
+						return;
+					}
+				} catch (Exception) { }
+
+				nullableContextOptions = value.ToString ();
+				NotifyChange ();
+			}
+		}
+
 
 		public LanguageVersion LangVersion {
 			get {
@@ -219,9 +318,11 @@ namespace MonoDevelop.CSharp.Project
 				return val;
 			}
 			set {
-				if (LangVersion == value) {
-					return;
-				}
+				try {
+					if (LangVersion == value) {
+						return;
+					}
+				} catch (Exception) { }
 
 				langVersion = LanguageVersionToString (value);
 				NotifyChange ();
@@ -397,18 +498,7 @@ namespace MonoDevelop.CSharp.Project
 		#endregion
 
 		internal static string LanguageVersionToString (LanguageVersion value)
-		{
-			switch (value) {
-			case LanguageVersion.Default: return "Default";
-			case LanguageVersion.Latest: return "Latest";
-			case LanguageVersion.CSharp1: return "ISO-1";
-			case LanguageVersion.CSharp2: return "ISO-2";
-			case LanguageVersion.CSharp7_1: return "7.1";
-			case LanguageVersion.CSharp7_2: return "7.2";
-			case LanguageVersion.CSharp7_3: return "7.3";
-			default: return ((int)value).ToString ();
-			}
-		}
+			=> LanguageVersionFacts.ToDisplayString (value);
 
 		void NotifyChange ()
 		{

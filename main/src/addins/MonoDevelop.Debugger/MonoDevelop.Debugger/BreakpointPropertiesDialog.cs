@@ -1,4 +1,4 @@
-//
+﻿//
 // BreakpointsPropertiesDialog.cs
 //
 // Author:
@@ -23,21 +23,26 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
-using Mono.Debugging.Client;
-using MonoDevelop.Core;
-using MonoDevelop.Projects;
-using MonoDevelop.Ide;
 using System.Collections.Generic;
-using MonoDevelop.Ide.TypeSystem;
-using ICSharpCode.NRefactory.TypeSystem;
-using MonoDevelop.Ide.CodeCompletion;
-using Xwt;
-using Xwt.Drawing;
-using System.Linq;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
+
 using MetadataReferenceProperties = Microsoft.CodeAnalysis.MetadataReferenceProperties;
+using Microsoft.VisualStudio.Text.Editor;
+
+using Mono.Debugging.Client;
+
+using Xwt.Drawing;
+using Xwt;
+
+using MonoDevelop.Core;
+using MonoDevelop.Ide.CodeCompletion;
+using MonoDevelop.Ide.TypeSystem;
+using MonoDevelop.Ide;
+using MonoDevelop.Projects;
 
 namespace MonoDevelop.Debugger
 {
@@ -101,11 +106,11 @@ namespace MonoDevelop.Debugger
 
 		// Tips labels.
 		readonly Label printMessageTip = new Label (GettextCatalog.GetString ("Place simple C# expressions within {} to interpolate them.")) {
-			Sensitive = false,
+			TextColor = Styles.BreakpointPropertiesSecondaryTextColor,
 			TextAlignment = Alignment.End
 		};
 		readonly Label conditionalExpressionTip = new Label (GettextCatalog.GetString ("A C# boolean expression. Scope is local to the breakpoint.")) {
-			Sensitive = false,
+			TextColor = Styles.BreakpointPropertiesSecondaryTextColor,
 			TextAlignment = Alignment.End
 		};
 
@@ -122,8 +127,8 @@ namespace MonoDevelop.Debugger
 			Task.Run (LoadExceptionList);
 			Initialize ();
 			SetInitialData ();
-			SetAccessibility ();
 			SetLayout ();
+			SetAccessibility ();
 			if (be == null) {
 				switch (breakpointType) {
 				case BreakpointType.Location:
@@ -341,11 +346,12 @@ namespace MonoDevelop.Debugger
 				checkIncludeSubclass.Active = true;
 
 				if (IdeApp.Workbench.ActiveDocument != null &&
-					IdeApp.Workbench.ActiveDocument.Editor != null &&
+					IdeApp.Workbench.ActiveDocument.GetContent<ITextView> () is ITextView textView &&
 					IdeApp.Workbench.ActiveDocument.FileName != FilePath.Null) {
+					var (line, col) = textView.MDCaretLineAndColumn ();
 					breakpointLocation.Update (IdeApp.Workbench.ActiveDocument.FileName,
-						IdeApp.Workbench.ActiveDocument.Editor.CaretLine,
-						IdeApp.Workbench.ActiveDocument.Editor.CaretColumn);
+						line,
+						col);
 					entryLocationFile.Text = breakpointLocation.ToString ();
 					stopOnLocation.Active = true;
 				}
@@ -356,6 +362,12 @@ namespace MonoDevelop.Debugger
 		{
 			fb.FunctionName = parsedFunction;
 			fb.ParamTypes = parsedParamTypes;
+		}
+
+		void SaveCatchpoint (Catchpoint cp)
+		{
+			cp.ExceptionName = entryExceptionType.Text;
+			cp.IncludeSubclasses = checkIncludeSubclass.Active;
 		}
 
 		class ParsedLocation
@@ -455,14 +467,17 @@ namespace MonoDevelop.Debugger
 
 		void OnSave (object sender, EventArgs e)
 		{
+			bool catchpointSaved = false;
+
 			if (be == null) {
 				if (stopOnFunction.Active)
 					be = new FunctionBreakpoint ("", "C#");
 				else if (stopOnLocation.Active)
 					be = breakpointLocation.ToBreakpoint ();
-				else if (stopOnException.Active)
+				else if (stopOnException.Active) {
 					be = new Catchpoint (entryExceptionType.Text, checkIncludeSubclass.Active);
-				else
+					catchpointSaved = true;
+				} else
 					return;
 			}
 
@@ -473,6 +488,13 @@ namespace MonoDevelop.Debugger
 			var bp = be as Breakpoint;
 			if (bp != null)
 				SaveBreakpoint (bp);
+
+			if (!catchpointSaved) {
+				var cp = be as Catchpoint;
+				if (cp != null) {
+					SaveCatchpoint (cp);
+				}
+			}
 
 			if ((HitCountMode)ignoreHitType.SelectedItem == HitCountMode.GreaterThanOrEqualTo && (int)ignoreHitCount.Value == 0) {
 				be.HitCountMode = HitCountMode.None;
@@ -512,10 +534,11 @@ namespace MonoDevelop.Debugger
 			}
 
 			// Check which radio is selected.
-			hboxFunction.Sensitive = stopOnFunction.Active && DebuggingService.IsFeatureSupported (DebuggerFeatures.Breakpoints) && !editing;
-			hboxLocation.Sensitive = stopOnLocation.Active && DebuggingService.IsFeatureSupported (DebuggerFeatures.Breakpoints) && !editing;
-			hboxException.Sensitive = stopOnException.Active && DebuggingService.IsFeatureSupported (DebuggerFeatures.Catchpoints) && !editing;
-			checkIncludeSubclass.Sensitive = stopOnException.Active && !editing;
+			var connected = DebuggingService.DebuggerSession != null ? DebuggingService.DebuggerSession.IsConnected : false;
+			hboxFunction.Sensitive = stopOnFunction.Active && DebuggingService.IsFeatureSupported (DebuggerFeatures.Breakpoints) && !connected;
+			hboxLocation.Sensitive = stopOnLocation.Active && DebuggingService.IsFeatureSupported (DebuggerFeatures.Breakpoints) && !connected;
+			hboxException.Sensitive = stopOnException.Active && DebuggingService.IsFeatureSupported (DebuggerFeatures.Catchpoints) && !connected;
+			checkIncludeSubclass.Sensitive = stopOnException.Active;
 			hboxCondition.Sensitive = DebuggingService.IsFeatureSupported (DebuggerFeatures.ConditionalBreakpoints);
 
 			// Check printing an expression.
@@ -624,7 +647,7 @@ namespace MonoDevelop.Debugger
 
 				var project = IdeApp.ProjectOperations.CurrentSelectedProject;
 				if (project != null) {
-					var roslynProj = TypeSystemService.GetProject (project);
+					var roslynProj = IdeApp.TypeSystemService.GetProject (project);
 					if (roslynProj != null) {
 						workspace = (MonoDevelopWorkspace)roslynProj.Solution.Workspace;
 						compilation = await roslynProj.GetCompilationAsync ();
@@ -632,6 +655,9 @@ namespace MonoDevelop.Debugger
 				}
 
 				if (compilation == null) {
+					// TypeSystemService.Workspace always returns a workspace,
+					// even if it might be empty.
+					workspace = workspace ?? (MonoDevelopWorkspace)IdeServices.TypeSystemService.Workspace;
 					var service = workspace.MetadataReferenceManager;
 					var corlib = service.GetOrCreateMetadataReferenceSnapshot (System.Reflection.Assembly.GetAssembly (typeof (object)).Location, MetadataReferenceProperties.Assembly);
 					var system = service.GetOrCreateMetadataReferenceSnapshot (System.Reflection.Assembly.GetAssembly (typeof (Uri)).Location, MetadataReferenceProperties.Assembly);
@@ -662,14 +688,17 @@ namespace MonoDevelop.Debugger
 		{
 			var accessible = breakpointActionPause.Accessible;
 			accessible.Identifier = "BreakpointPropertiesDialog.Pause";
+			accessible.LabelWidget = actionLabel;
 			accessible.Description = GettextCatalog.GetString ("Cause the program to pause when the breakpoint is hit");
 
 			accessible = breakpointActionPrint.Accessible;
 			accessible.Identifier = "BreakpointPropertiesDialog.Print";
+			accessible.LabelWidget = actionLabel;
 			accessible.Description = GettextCatalog.GetString ("Cause the program to print a message and continue when the breakpoint is hit");
 
 			accessible = entryPrintExpression.Accessible;
 			accessible.Identifier = "BreakpointPropertiesDialog.PrintExpression";
+			accessible.LabelWidget = actionLabel;
 			accessible.Label = GettextCatalog.GetString ("Breakpoint Expression");
 			accessible.Description = GettextCatalog.GetString ("Enter the expression you wish to have printed to the console. Place simple C# expressions within {} to interpolate them.");
 
@@ -722,21 +751,22 @@ namespace MonoDevelop.Debugger
 
 			accessible = ignoreHitType.Accessible;
 			accessible.Identifier = "BreakpointPropertiesDialog.HitType";
-			accessible.Label = GettextCatalog.GetString ("Breakpoint Hit Count Type");
+			accessible.LabelWidget = advancedLabel;
 			accessible.Description = GettextCatalog.GetString ("Select a hit count condition for this breakpoint");
 
 			accessible = ignoreHitCount.Accessible;
 			accessible.Identifier = "BreakpointPropertiesDialog.HitCount";
-			accessible.Label = GettextCatalog.GetString ("Hit Count");
+			accessible.Label = GettextCatalog.GetString ("Condition Hit Count");
 			accessible.Description = GettextCatalog.GetString ("Enter the hit count required for the condition");
 
 			accessible = conditionalHitType.Accessible;
 			accessible.Identifier = "BreakpointPropertiesDialog.ConditionalHit";
-			accessible.Label = GettextCatalog.GetString ("Conditional Breakpoint Hit Type");
+			accessible.LabelWidget = advancedLabel;
 			accessible.Description = GettextCatalog.GetString ("Select an extra condition for this breakpoint");
 
 			accessible = entryConditionalExpression.Accessible;
 			accessible.Identifier = "BreakpointPropertiesDialog.ConditionEntry";
+			accessible.LabelWidget = advancedLabel;
 			accessible.Label = GettextCatalog.GetString ("Conditional Breakpoint Expression");
 			accessible.Description = GettextCatalog.GetString ("Enter a C# boolean expression to act as a condition for this breakpoint. The scope of the expression is local to the breakpoint");
 
@@ -745,13 +775,15 @@ namespace MonoDevelop.Debugger
 			accessible.Description = GettextCatalog.GetString ("There is a warning for the condition expression");
 		}
 
+		Label actionLabel, whenLabel, advancedLabel;
+
 		void SetLayout ()
 		{
 			var vbox = new VBox ();
 			vbox.Accessible.Role = Xwt.Accessibility.Role.Filler;
 			vbox.MinWidth = 450;
 
-			var actionLabel = new Label (GettextCatalog.GetString ("Breakpoint Action")) {
+			actionLabel = new Label (GettextCatalog.GetString ("Breakpoint Action")) {
 				Font = vbox.Font.WithWeight (FontWeight.Bold)
 			};
 			vbox.PackStart (actionLabel);
@@ -774,7 +806,8 @@ namespace MonoDevelop.Debugger
 
 			// We'll ignore this label because the content of the label is included in the accessibility Help text of the 
 			// entryPrintExpression widget
-			warningPrintExpression.Accessible.Role = Xwt.Accessibility.Role.Filler;
+			printMessageTip.Accessible.Role = Xwt.Accessibility.Role.Filler;
+
 			printExpressionGroup.PackStart (warningPrintExpression);
 			breakpointActionGroup.PackStart (printExpressionGroup);
 
@@ -782,7 +815,7 @@ namespace MonoDevelop.Debugger
 
 			vbox.PackStart (breakpointActionGroup);
 
-			var whenLabel = new Label (GettextCatalog.GetString ("When to Take Action")) {
+			whenLabel = new Label (GettextCatalog.GetString ("When to Take Action")) {
 				Font = vbox.Font.WithWeight (FontWeight.Bold)
 			};
 			vbox.PackStart (whenLabel);
@@ -829,7 +862,7 @@ namespace MonoDevelop.Debugger
 			}
 			vbox.PackStart (whenToTakeActionRadioGroup);
 
-			var advancedLabel = new Label (GettextCatalog.GetString ("Advanced Conditions")) {
+			advancedLabel = new Label (GettextCatalog.GetString ("Advanced Conditions")) {
 				Font = vbox.Font.WithWeight (FontWeight.Bold)
 			};
 			vbox.PackStart (advancedLabel);
@@ -863,14 +896,6 @@ namespace MonoDevelop.Debugger
 			Buttons.Add (buttonOk);
 
 			Content = vbox;
-
-			if (IdeApp.Workbench != null) {
-				Gtk.Widget parent = ((Gtk.Widget)Xwt.Toolkit.CurrentEngine.GetNativeWidget (vbox)).Parent;
-				while (parent != null && !(parent is Gtk.Window))
-					parent = parent.Parent;
-				if (parent is Gtk.Window)
-					((Gtk.Window)parent).TransientFor = IdeApp.Workbench.RootWindow;
-			}
 
 			OnUpdateControls (null, null);
 		}

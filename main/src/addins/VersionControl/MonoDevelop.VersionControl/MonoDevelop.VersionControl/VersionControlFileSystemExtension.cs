@@ -7,6 +7,9 @@ using MonoDevelop.Ide;
 using System.Collections.Generic;
 using System.Linq;
 using System;
+using System.Threading.Tasks;
+using System.Threading;
+using System.IO;
 
 namespace MonoDevelop.VersionControl
 {
@@ -15,7 +18,7 @@ namespace MonoDevelop.VersionControl
 		public override bool CanHandlePath (FilePath path, bool isDirectory)
 		{
 			// FIXME: don't load this extension if the ide is not loaded.
-			if (IdeApp.ProjectOperations == null || !IdeApp.Workspace.IsOpen)
+			if (!IdeApp.IsInitialized || !IdeApp.Workspace.IsOpen)
 				return false;
 
 			return GetRepository (path) != null;
@@ -42,11 +45,12 @@ namespace MonoDevelop.VersionControl
 		
 		public override void CopyFile (FilePath source, FilePath dest, bool overwrite)
 		{
-			Repository repo = GetRepository (dest);
-			if (!repo.RequestFileWritePermission (dest))
-				throw new System.IO.IOException ("Write permission denied.");
-
 			base.CopyFile (source, dest, overwrite);
+			Repository repo = GetRepository (dest);
+			if (!repo.RequestFileWritePermission (dest)) {
+				LoggingService.LogError ("Write permission denied.");
+				return;
+			}
 			repo.NotifyFileChanged (dest);
 		}
 		
@@ -58,10 +62,10 @@ namespace MonoDevelop.VersionControl
 			Repository dstRepo = GetRepository (dest);
 			
 			if (dstRepo != null && dstRepo.CanMoveFilesFrom (srcRepo, source, dest))
-				srcRepo.MoveFile (source, dest, true, monitor);
+				srcRepo.MoveFileAsync (source, dest, true, monitor).Wait();
 			else {
 				CopyFile (source, dest, true);
-				srcRepo.DeleteFile (source, true, monitor, false);
+				srcRepo.DeleteFileAsync (source, true, monitor, false).Wait();
 			}
 		}
 		
@@ -78,7 +82,7 @@ namespace MonoDevelop.VersionControl
 		public override void DeleteFile (FilePath file)
 		{
 			Repository repo = GetRepository (file);
-			repo.DeleteFile (file, true, new ProgressMonitor (), false);
+			repo.DeleteFileAsync (file, true, new ProgressMonitor (), false).Wait ();
 		}
 		
 		public override void CreateDirectory (FilePath path)
@@ -88,17 +92,25 @@ namespace MonoDevelop.VersionControl
 			System.IO.Directory.CreateDirectory (path);
 			repo.Add (path, false, new ProgressMonitor ());
 		}
-		
+
 		public override void MoveDirectory (FilePath sourcePath, FilePath destPath)
 		{
 			ProgressMonitor monitor = new ProgressMonitor ();
 			
 			Repository srcRepo = GetRepository (sourcePath);
 			Repository dstRepo = GetRepository (destPath);
-			
-			if (dstRepo.CanMoveFilesFrom (srcRepo, sourcePath, destPath))
-				srcRepo.MoveDirectory (sourcePath, destPath, true, monitor);
-			else {
+
+			if (dstRepo.CanMoveFilesFrom (srcRepo, sourcePath, destPath)) {
+				try {
+					srcRepo.MoveDirectoryAsync (sourcePath, destPath, true, monitor).Wait();
+				} catch (AggregateException e) {
+					foreach (var inner in e.InnerExceptions) {
+						if (inner is OperationCanceledException)
+							continue;
+						LoggingService.LogError ("Error while moving directory.", inner);
+					}
+				}
+			}  else {
 				CopyDirectory (sourcePath, destPath);
 				srcRepo.DeleteDirectory (sourcePath, true, monitor, false);
 			}
@@ -121,12 +133,15 @@ namespace MonoDevelop.VersionControl
 			FileUpdateEventArgs args = new FileUpdateEventArgs ();
 			foreach (var file in files) {
 				var rep = GetRepository (file);
-				if (rep != null) {
+				// FIXME: Remove workaround https://devdiv.visualstudio.com/DevDiv/_workitems/edit/982818
+				if (rep != null && !rep.IsDisposed && File.Exists (file)) {
 					rep.ClearCachedVersionInfo (file);
-					args.Add (new FileUpdateEventInfo (rep, file, false));
+					if (rep.TryGetFileUpdateEventInfo (rep, file, out var eventInfo))
+						args.Add (eventInfo);
 				}
 			}
-			VersionControlService.NotifyFileStatusChanged (args);
+			if (args.Count > 0)
+				VersionControlService.NotifyFileStatusChanged (args);
 		}
 	}
 }

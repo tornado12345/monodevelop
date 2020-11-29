@@ -44,6 +44,7 @@ namespace MonoDevelop.Components.MainToolbar
 	{
 		public FileSearchCategory () : base (GettextCatalog.GetString ("Files"))
 		{
+			sortOrder = HighPriorityResultsOrder;
 		}
 
 		static FileSearchCategory ()
@@ -67,7 +68,7 @@ namespace MonoDevelop.Components.MainToolbar
 				// We only want to check it here if it's not part
 				// of the open combine.  Otherwise, it will get
 				// checked down below.
-				if (doc.Project == null && doc.IsFile) {
+				if (doc.Owner == null && doc.IsFile) {
 					var pf = new ProjectFile (doc.Name);
 					list.Add (new Tuple<string, string, ProjectFile> (System.IO.Path.GetFileName (pf.FilePath), FileSearchResult.GetRelProjectPath (pf), pf));
 				}
@@ -85,18 +86,8 @@ namespace MonoDevelop.Components.MainToolbar
 			return list;
 		}
 
-		string [] validTags = new [] { "file", "f" };
-
-		public override string [] Tags {
-			get {
-				return validTags;
-			}
-		}
-
-		public override bool IsValidTag (string tag)
-		{
-			return validTags.Any (t => t == tag);
-		}
+		public override string [] Tags { get; } = { "file", "f" };
+		public override bool IsValidTag (string tag) => Array.IndexOf (Tags, tag) >= 0;
 
 		static List<Tuple<string, string, ProjectFile>> allFilesCache;
 		static SemaphoreSlim allFilesLock = new SemaphoreSlim (1, 1);

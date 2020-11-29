@@ -1,4 +1,4 @@
-
+﻿
 using System;
 using System.Linq;
 using System.IO;
@@ -18,6 +18,7 @@ using MonoDevelop.Ide;
 using MonoDevelop.Core.ProgressMonitoring;
 using MonoDevelop.Core.Instrumentation;
 using System.Collections.Concurrent;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.VersionControl
 {
@@ -211,7 +212,8 @@ namespace MonoDevelop.VersionControl
 			return String.Empty;
 		}
 
-		internal static ConcurrentDictionary<Repository, InternalRepositoryReference> referenceCache = new ConcurrentDictionary<Repository, InternalRepositoryReference> ();
+		internal static readonly object referenceCacheLock = new object ();
+		internal static Dictionary<Repository, InternalRepositoryReference> referenceCache = new Dictionary<Repository, InternalRepositoryReference> ();
 		public static Repository GetRepository (WorkspaceObject entry)
 		{
 			if (IsGloballyDisabled)
@@ -225,14 +227,20 @@ namespace MonoDevelop.VersionControl
 			InternalRepositoryReference rref = null;
 			if (repo != null) {
 				repo.AddRef ();
-				rref = referenceCache.GetOrAdd (repo, r => new InternalRepositoryReference (r));
+				lock (referenceCacheLock) {
+					if (!referenceCache.TryGetValue (repo, out rref)) {
+						rref = new InternalRepositoryReference (repo);
+						referenceCache [repo] = rref;
+					}
+				}
 			}
 			entry.ExtendedProperties [typeof(InternalRepositoryReference)] = rref;
 			
 			return repo;
 		}
 
-		internal static readonly ConcurrentDictionary<FilePath,Repository> repositoryCache = new ConcurrentDictionary<FilePath,Repository> ();
+		internal static readonly object repositoryCacheLock = new object ();
+		internal static readonly Dictionary<FilePath,Repository> repositoryCache = new Dictionary<FilePath,Repository> ();
 		public static Repository GetRepositoryReference (string path, string id)
 		{
 			VersionControlSystem detectedVCS = null;
@@ -256,21 +264,25 @@ namespace MonoDevelop.VersionControl
 
 			bestMatch = bestMatch.CanonicalPath;
 
-			try {
-				return repositoryCache.GetOrAdd (bestMatch, p => {
-					var result = detectedVCS?.GetRepositoryReference (p, id);
-					if (result != null) {
+			lock (repositoryCacheLock) {
+				if (repositoryCache.TryGetValue (bestMatch, out var repository)) {
+					if (!repository.IsDisposed)
+						return repository;
+					repositoryCache.Remove (bestMatch);
+				}
+
+				try {
+					var repo = detectedVCS?.GetRepositoryReference (bestMatch, id);
+					if (repo != null) {
+						repo.RepositoryPath = bestMatch.CanonicalPath;
+						repositoryCache.Add (bestMatch, repo);
 						Instrumentation.Repositories.Inc (new RepositoryMetadata (detectedVCS));
-						return result;
 					}
-					// never add null values
-					throw new ArgumentNullException ("result");
-				});
-			} catch (Exception e) {
-				// ArgumentNullException for "result" is expected when GetRepositoryReference returns null, no need to log
-				if (!(e is ArgumentNullException ne) || ne.ParamName != "result")
-					LoggingService.LogInternalError ($"Could not query {detectedVCS.Name} repository reference", e);
-				return null;
+					return repo;
+				} catch (Exception e) {
+					LoggingService.LogError ($"Could not query {detectedVCS.Name} repository reference", e);
+					return null;
+				}
 			}
 		}
 		
@@ -495,32 +507,35 @@ namespace MonoDevelop.VersionControl
 		//		NotifyFileStatusChanged (repo, args.ProjectFile.FilePath, false);
 		//}
 
-		static void OnFileAdded (object s, ProjectFileEventArgs e)
+		static async void OnFileAdded (object s, ProjectFileEventArgs e)
 		{
-			FileUpdateEventArgs vargs = new FileUpdateEventArgs ();
+			var vargs = new FileUpdateEventArgs ();
 			ProgressMonitor monitor = null;
 			try {
 				foreach (var repoFiles in e.GroupBy (i => i.Project)) {
-					Repository repo = GetRepository (repoFiles.Key);
+					var repo = GetRepository (repoFiles.Key);
 					if (repo == null)
 						continue;
 					var filePaths = repoFiles.Where (ShouldAddFile).Select (f => f.ProjectFile.FilePath);
-					var versionInfos = repo.GetVersionInfo (filePaths, VersionInfoQueryFlags.IgnoreCache);
-					FilePath[] paths = versionInfos.Where (i => i.CanAdd).Select (i => i.LocalPath).ToArray ();
-					if (paths.Length > 0) {
+					foreach (var file in filePaths) {
 						if (monitor == null)
 							monitor = GetStatusMonitor ();
-						repo.Add (paths, false, monitor);
+
+	  					var gotInfo = repo.TryGetVersionInfo (file, out var versionInfo);
+						if (gotInfo == false || (versionInfo.Status & VersionStatus.Ignored) == 0 && versionInfo.CanAdd)
+							await repo.AddAsync (file, false, monitor);
 					}
 					vargs.AddRange (repoFiles.Select (i => new FileUpdateEventInfo (repo, i.ProjectFile.FilePath, i.ProjectFile.Subtype == Subtype.Directory)));
 				}
+				if (vargs.Count > 0)
+					NotifyFileStatusChanged (vargs);
+			} catch (OperationCanceledException) {
+				return;
+			} catch (Exception ex) {
+				LoggingService.LogInternalError (ex);
+			} finally {
+				monitor?.Dispose ();
 			}
-			finally {
-				if (monitor != null)
-					monitor.Dispose ();
-			}
-			if (vargs.Count > 0)
-				NotifyFileStatusChanged (vargs);
 		}
 		
 /*		static void OnFileRemoved (object s, ProjectFileEventArgs args)
@@ -576,7 +591,7 @@ namespace MonoDevelop.VersionControl
 			}
 		}
 		
-		static void OnEntryAdded (object o, SolutionItemEventArgs args)
+		static async void OnEntryAdded (object o, SolutionItemEventArgs args)
 		{
 			if (args is SolutionItemChangeEventArgs && ((SolutionItemChangeEventArgs) args).Reloading)
 				return;
@@ -608,19 +623,28 @@ namespace MonoDevelop.VersionControl
 
 			var files = new HashSet<string> { path };
 			SolutionItemAddFiles (path, entry, files);
-			
-			using (ProgressMonitor monitor = GetStatusMonitor ()) {
-				var status = repo.GetDirectoryVersionInfo (path, false, true);
-				foreach (var v in status) {
-					if (!v.IsVersioned && files.Contains (v.LocalPath))
-						repo.Add (v.LocalPath, false, monitor);
-				}
-			}
 
 			if (entry is SolutionFolder && files.Count == 1)
 				return;
+			try {
+				using (ProgressMonitor monitor = GetStatusMonitor ()) {
+					foreach (var file in files) {
+						var status = await repo.GetDirectoryVersionInfoAsync (file, false, false, monitor.CancellationToken);
+						foreach (var v in status) {
+							if (!v.IsVersioned && files.Contains (v.LocalPath))
+								await repo.AddAsync (v.LocalPath, false, monitor);
+						}
+					}
+				}
+				if (entry is SolutionFolder && files.Count == 1)
+					return;
 
-			NotifyFileStatusChanged (new FileUpdateEventArgs (repo, parent.BaseDirectory, true));
+				NotifyFileStatusChanged (new FileUpdateEventArgs (repo, parent.BaseDirectory, true));
+			} catch (OperationCanceledException) {
+				return;
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+			}
 		}
 		
 		public static ProgressMonitor GetProgressMonitor (string operation)
@@ -833,8 +857,9 @@ namespace MonoDevelop.VersionControl
 		
 		public void Dispose ()
 		{
-			VersionControlService.referenceCache.TryRemove (repo, out _);
-			VersionControlService.repositoryCache.TryRemove (repo.RootPath.CanonicalPath, out _);
+			lock (VersionControlService.referenceCacheLock) {
+				VersionControlService.referenceCache.Remove (repo);
+			}
 			repo.Unref ();
 		}
 	}

@@ -25,7 +25,6 @@
 // THE SOFTWARE.
 
 using System;
-using System.Linq;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui.Components;
@@ -44,6 +43,7 @@ namespace MonoDevelop.DotNetCore.NodeBuilders
 
 			packageManagementEvents = PackageManagementServices.PackageManagementEvents;
 			packageManagementEvents.PackageOperationsFinished += PackageOperationsFinished;
+			packageManagementEvents.UpdatedPackagesAvailable += UpdatePackagesAvailable;
 
 			IdeApp.Workspace.ReferenceAddedToProject += OnReferencesChanged;
 			IdeApp.Workspace.ReferenceRemovedFromProject += OnReferencesChanged;
@@ -52,6 +52,8 @@ namespace MonoDevelop.DotNetCore.NodeBuilders
 		public override void Dispose ()
 		{
 			packageManagementEvents.PackageOperationsFinished -= PackageOperationsFinished;
+			packageManagementEvents.UpdatedPackagesAvailable -= UpdatePackagesAvailable;
+
 			IdeApp.Workspace.ReferenceAddedToProject -= OnReferencesChanged;
 			IdeApp.Workspace.ReferenceRemovedFromProject -= OnReferencesChanged;
 
@@ -71,7 +73,7 @@ namespace MonoDevelop.DotNetCore.NodeBuilders
 
 		void PackageOperationsFinished (object sender, EventArgs e)
 		{
-			RefreshAllChildNodes (packagesOnly: true);
+			RefreshAllChildNodes (packages: true);
 		}
 
 		public override void BuildChildNodes (ITreeBuilder treeBuilder, object dataObject)
@@ -82,40 +84,33 @@ namespace MonoDevelop.DotNetCore.NodeBuilders
 
 			var folderNode = new DependenciesNode (project);
 			treeBuilder.AddChild (folderNode);
+			folderNode.PackageDependencyCache.Refresh ();
+			folderNode.FrameworkReferencesCache.Refresh ();
 		}
 
-		void RefreshAllChildNodes (bool packagesOnly = false)
+		void RefreshAllChildNodes (bool packages = false)
 		{
 			Runtime.RunInMainThread (() => {
 				foreach (DotNetProject project in IdeApp.Workspace.GetAllItems<DotNetProject> ()) {
 					if (project.IsDotNetCoreProject ())
-						RefreshChildNodes (project, packagesOnly);
+						RefreshChildNodes (project, packages);
 				}
-			});
+			}).Ignore ();
 		}
 
-		void RefreshChildNodes (DotNetProject project, bool packagesOnly)
+		void RefreshChildNodes (DotNetProject project, bool packages)
 		{
 			ITreeBuilder builder = Context.GetTreeBuilder (project);
 			if (builder != null) {
 				if (builder.MoveToChild (DependenciesNode.NodeName, typeof (DependenciesNode))) {
-					if (packagesOnly) {
+					if (packages) {
 						var dependenciesNode = (DependenciesNode)builder.DataItem;
 						dependenciesNode.PackageDependencyCache.Refresh ();
-						UpdateNuGetFolderNode (builder, dependenciesNode);
+						dependenciesNode.FrameworkReferencesCache.Refresh ();
 					} else {
 						builder.UpdateAll ();
 					}
 				}
-			}
-		}
-
-		void UpdateNuGetFolderNode (ITreeBuilder builder, DependenciesNode dependenciesNode)
-		{
-			bool hasPackages = dependenciesNode.Project.Items.OfType<ProjectPackageReference> ().Any ();
-			if (hasPackages && !builder.MoveToChild (PackageDependenciesNode.NodeName, typeof (PackageDependenciesNode))) {
-				var packagesNode = new PackageDependenciesNode (dependenciesNode);
-				builder.AddChild (packagesNode);
 			}
 		}
 
@@ -131,8 +126,13 @@ namespace MonoDevelop.DotNetCore.NodeBuilders
 
 			Runtime.RunInMainThread (() => {
 				if (project.IsDotNetCoreProject ())
-					RefreshChildNodes (project, packagesOnly: false);
-			});
+					RefreshChildNodes (project, packages: false);
+			}).Ignore ();
+		}
+
+		void UpdatePackagesAvailable (object sender, EventArgs e)
+		{
+			RefreshAllChildNodes ();
 		}
 	}
 }

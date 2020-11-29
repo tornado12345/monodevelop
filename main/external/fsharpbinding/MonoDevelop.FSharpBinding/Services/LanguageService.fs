@@ -3,8 +3,9 @@ open System
 open System.Collections.Generic
 open System.IO
 open System.Diagnostics
-open Microsoft.FSharp.Compiler
-open Microsoft.FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler
+open FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler.Text
 open ExtCore.Control
 open ExtCore.Control.Collections
 open MonoDevelop.Core
@@ -66,7 +67,7 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
         async {
             match infoOpt with
             | Some checkResults ->
-                match Parsing.findIdents col lineStr SymbolLookupKind.ByLongIdent with
+                match MonoDevelop.FSharp.Shared.Parsing.findIdents col lineStr MonoDevelop.FSharp.Shared.SymbolLookupKind.ByLongIdent with
                 | None -> return None
                 | Some(col,identIsland) ->
                     let! res = checkResults.GetToolTipText(line, col, lineStr, identIsland, FSharpTokenTag.Identifier)
@@ -77,7 +78,7 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
         async {
             match infoOpt with
             | Some checkResults ->
-                match Parsing.findIdents col lineStr SymbolLookupKind.ByLongIdent with
+                match MonoDevelop.FSharp.Shared.Parsing.findIdents col lineStr MonoDevelop.FSharp.Shared.SymbolLookupKind.ByLongIdent with
                 | None -> return FSharpFindDeclResult.DeclNotFound (FSharpFindDeclFailureReason.Unknown "No idents found")
                 | Some(col,identIsland) -> return! checkResults.GetDeclarationLocation(line, col, lineStr, identIsland, false)
             | None -> return FSharpFindDeclResult.DeclNotFound (FSharpFindDeclFailureReason.Unknown "No check results")}
@@ -86,8 +87,8 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
         async {
             match infoOpt with
             | Some (checkResults) ->
-                match Parsing.findIdents col lineStr SymbolLookupKind.ByLongIdent 
-                      |> Option.orTry (fun () -> Parsing.findIdents col lineStr SymbolLookupKind.Fuzzy) with
+                match MonoDevelop.FSharp.Shared.Parsing.findIdents col lineStr MonoDevelop.FSharp.Shared.SymbolLookupKind.ByLongIdent 
+                      |> Option.orTry (fun () -> MonoDevelop.FSharp.Shared.Parsing.findIdents col lineStr MonoDevelop.FSharp.Shared.SymbolLookupKind.Fuzzy) with
                 | None -> return None
                 | Some(colu, identIsland) ->
                     try
@@ -106,7 +107,7 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
                 let column = lineToCaret |> Seq.tryFindIndexBack (fun c -> c <> '(' && c <> ' ')
                 match column with
                 | Some col ->
-                    match Parsing.findIdents (col-1) lineToCaret SymbolLookupKind.ByLongIdent with
+                    match MonoDevelop.FSharp.Shared.Parsing.findIdents (col-1) lineToCaret MonoDevelop.FSharp.Shared.SymbolLookupKind.ByLongIdent with
                     | None -> return None
                     | Some(colu, identIsland) ->
                         return! checkResults.GetMethodsAsSymbols(line, colu, lineToCaret, identIsland)
@@ -171,6 +172,19 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
         | Some checkResults -> Some(checkResults.GetFormatSpecifierLocationsAndArity())
         | None -> None
 
+    /// Get all the uses of a symbol in the given file
+    member x.GetUsesOfSymbolAtLocationInFile(fileName, line, col, lineStr) =
+        asyncMaybe {
+            LoggingService.logDebug "LanguageService: GetUsesOfSymbolAtLocationInFile: file:%s, line:%i, col:%i" (Path.GetFileName(fileName)) line col
+            let! colu, identIsland = MonoDevelop.FSharp.Shared.Parsing.findIdents col lineStr MonoDevelop.FSharp.Shared.SymbolLookupKind.ByLongIdent |> async.Return
+            let! results = infoOpt |> async.Return
+            let! symbolUse = results.GetSymbolUseAtLocation(line, colu, lineStr, identIsland)
+            let! symbolUse = x.GetSymbolAtLocation(line, col, lineStr)
+            let lastIdent = Seq.last identIsland
+            let! refs = results.GetUsesOfSymbolInFile(symbolUse.Symbol) |> Async.map Some
+            return (lastIdent, refs)
+        }
+
 [<RequireQualifiedAccess>]
 type AllowStaleResults =
     // Allow checker results where the source doesn't even match
@@ -230,11 +244,11 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
 
     let showStatusIcon projectFileName =
         if loadingProjects.Add projectFileName then
-            TypeSystemService.ShowTypeInformationGatheringIcon()
+            IdeApp.TypeSystemService.BeginWorkspaceLoad()
 
     let hideStatusIcon projectFileName =
         if loadingProjects.Remove projectFileName then
-            TypeSystemService.HideTypeInformationGatheringIcon()
+            IdeApp.TypeSystemService.EndWorkspaceLoad()
 
     // Create an instance of interactive checker. The callback is called by the F# compiler service
     // when its view of the prior-typechecking-state of the start of a file has changed, for example
@@ -312,7 +326,7 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
                 let fileName = fixFileName(fileName)
                 LoggingService.LogDebug ("LanguageService: GetScriptCheckerOptions: Creating for stand-alone file or script: {0}", fileName)
                 let opts, _errors =
-                  Async.RunSynchronously (checker.GetProjectOptionsFromScript(fileName, source, fakeDateTimeRepresentingTimeLoaded projFilename),
+                  Async.RunSynchronously (checker.GetProjectOptionsFromScript(fileName, SourceText.ofString source, fakeDateTimeRepresentingTimeLoaded projFilename),
                                           timeout = ServiceSettings.maximumTimeout)
 
               // The InteractiveChecker resolution sometimes doesn't include FSharp.Core and other essential assemblies, so we need to include them by hand
@@ -424,7 +438,7 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
         let res =
             match stale with
             | AllowStaleResults.MatchingFileName -> checker.TryGetRecentCheckResultsForFile(fixFileName fileName, options)
-            | AllowStaleResults.MatchingSource -> checker.TryGetRecentCheckResultsForFile(fixFileName fileName, options, source=src)
+            | AllowStaleResults.MatchingSource -> checker.TryGetRecentCheckResultsForFile(fixFileName fileName, options, sourceText = SourceText.ofString src)
 
         match res with
         | Some (untyped,typed,_) when typed.HasFullTypeCheckInfo -> Some (ParseAndCheckResults(Some typed, Some untyped))
@@ -458,7 +472,7 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
     member x.ParseAndCheckFileInProject(projectFilename, fileName, version:int, src:string, obsoleteCheck) =
         let fileName = if Path.GetExtension fileName = ".sketchfs" then Path.ChangeExtension (fileName, ".fsx") else fileName
         let opts = x.GetCheckerOptions(fileName, projectFilename, src)
-        x.ParseAndCheckFile(fileName, src, version, opts, obsoleteCheck)
+        x.ParseAndCheckFile(fileName, SourceText.ofString src, version, opts, obsoleteCheck)
 
     /// Parses and checks the given file in the given project under the given configuration.
     ///Asynchronously returns the results of checking the file.
@@ -479,7 +493,7 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
                     match timeout with
                     | Some timeout ->
                         LoggingService.logDebug "LanguageService: GetTypedParseResultWithTimeout: No stale results - typechecking with timeout"
-                        let! computation = Async.StartChild(x.ParseAndCheckFile(fileName, src, version, options, obs), timeout)
+                        let! computation = Async.StartChild(x.ParseAndCheckFile(fileName, SourceText.ofString src, version, options, obs), timeout)
                         try
                             let! result = computation
                             return Some(result)
@@ -489,7 +503,7 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
                             return None
                     | None ->
                           LoggingService.logDebug "LanguageService: GetTypedParseResultWithTimeout: No stale results - typechecking without timeout"
-                          let! result = x.ParseAndCheckFile(fileName, src, version, options, obs)
+                          let! result = x.ParseAndCheckFile(fileName, SourceText.ofString src, version, options, obs)
                           return Some(result)
             | None -> return None }
 
@@ -499,21 +513,10 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
         LoggingService.logDebug "LanguageService: GetTypedParseResultIfAvailable: file=%s" (Path.GetFileName(fileName))
         options |> Option.bind(fun opts -> x.TryGetStaleTypedParseResult(fileName, opts, src, stale))
 
-    /// Get all the uses of a symbol in the given file (using 'source' as the source for the file)
-    member x.GetUsesOfSymbolAtLocationInFile(projectFilename, fileName, version, source, line:int, col, lineStr) =
-        asyncMaybe {
-            LoggingService.logDebug "LanguageService: GetUsesOfSymbolAtLocationInFile: file:%s, line:%i, col:%i" (Path.GetFileName(fileName)) line col
-            let! _colu, identIsland = Parsing.findIdents col lineStr SymbolLookupKind.ByLongIdent |> async.Return
-            let! results = x.GetTypedParseResultWithTimeout(projectFilename, fileName, version, source, AllowStaleResults.MatchingSource)
-            let! symbolUse = results.GetSymbolAtLocation(line, col, lineStr)
-            let lastIdent = Seq.last identIsland
-            let! refs = results.GetUsesOfSymbolInFile(symbolUse.Symbol) |> Async.map Some
-            return (lastIdent, refs) }
-
     member x.GetSymbolAtLocationInFile(projectFilename, fileName, version, source, line:int, col, lineStr) =
         asyncMaybe {
             LoggingService.logDebug "LanguageService: GetUsesOfSymbolAtLocationInFile: file:%s, line:%i, col:%i" (Path.GetFileName(fileName)) line col
-            let! _colu, identIsland = Parsing.findIdents col lineStr SymbolLookupKind.ByLongIdent |> async.Return
+            let! _colu, identIsland = MonoDevelop.FSharp.Shared.Parsing.findIdents col lineStr MonoDevelop.FSharp.Shared.SymbolLookupKind.ByLongIdent |> async.Return
             let! results = x.GetTypedParseResultWithTimeout(projectFilename, fileName, version, source, AllowStaleResults.MatchingSource)
             let! symbolUse = results.GetSymbolAtLocation(line, col, lineStr)
             let lastIdent = Seq.last identIsland
@@ -548,7 +551,7 @@ type LanguageService(dirtyNotify, _extraProjectInfo) as x =
         match options with
         | Some opts ->
             let parseOptions, _errors = x.GetParsingOptionsFromProjectOptions opts
-            checker.MatchBraces(filename, source, parseOptions)
+            checker.MatchBraces(filename, SourceText.ofString source, parseOptions)
         | None -> async { return [||] }
 
     /// Get all symbols derived from the specified symbol in the current project and optionally all dependent projects

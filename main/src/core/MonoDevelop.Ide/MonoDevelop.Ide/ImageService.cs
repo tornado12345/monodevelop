@@ -27,19 +27,18 @@
 
 using System;
 using System.Collections.Generic;
-using Mono.Addins;
 using System.IO;
-using MonoDevelop.Ide.Extensions;
-using MonoDevelop.Core;
-using MonoDevelop.Components;
-using System.Text;
 using System.Linq;
-using MonoDevelop.Ide.Gui.Components;
-using System.Threading.Tasks;
-using System.Net;
-using Xwt.Backends;
-using Gtk;
+using System.Text;
 using Gdk;
+using Gtk;
+using Microsoft.VisualStudio.Core.Imaging;
+using Mono.Addins;
+using MonoDevelop.Components;
+using MonoDevelop.Core;
+using MonoDevelop.Ide.Extensions;
+using MonoDevelop.Ide.Gui.Components;
+using Xwt.Backends;
 
 namespace MonoDevelop.Ide
 {
@@ -64,6 +63,7 @@ namespace MonoDevelop.Ide
 
 		// Dictionary of extension nodes by stock icon id. It holds nodes that have not yet been loaded
 		static Dictionary<string, List<StockIconCodon>> iconStock = new Dictionary<string, List<StockIconCodon>> ();
+		static Dictionary<ImageId, string> imageIdToStockId = new Dictionary<ImageId, string> ();
 
 		static Gtk.Requisition[] iconSizes = new Gtk.Requisition[7];
 
@@ -75,8 +75,13 @@ namespace MonoDevelop.Ide
 				StockIconCodon iconCodon = (StockIconCodon)args.ExtensionNode;
 				switch (args.Change) {
 				case ExtensionChange.Add:
-					if (!iconStock.ContainsKey (iconCodon.StockId))
-						iconStock[iconCodon.StockId] = new List<StockIconCodon> ();
+					if (!iconStock.ContainsKey (iconCodon.StockId)) {
+						iconStock [iconCodon.StockId] = new List<StockIconCodon> ();
+
+						foreach (var imageId in iconCodon.GetImageIds ()) {
+							imageIdToStockId[imageId] = iconCodon.StockId;
+						}
+					}
 					iconStock[iconCodon.StockId].Add (iconCodon);
 					break;
 				}
@@ -169,6 +174,36 @@ namespace MonoDevelop.Ide
 			return GetIcon (name).WithSize (size);
 		}
 
+		public static bool TryGetImage (ImageId imageId, out Xwt.Drawing.Image image) => TryGetImage (imageId, true, out image, out _);
+
+		public static bool TryGetImage (ImageId imageId, bool generateDefaultIcon, out Xwt.Drawing.Image image) => TryGetImage (imageId, generateDefaultIcon, out image, out _);
+
+		public static bool TryGetImage (ImageId imageId, bool generateDefaultIcon, out Xwt.Drawing.Image image, out string name)
+		{
+			var success = true;
+			if (!imageIdToStockId.TryGetValue (imageId, out name)) {
+				success = false;
+				if (!generateDefaultIcon) {
+					image = null;
+					return success;
+				}
+				name = "gtk-missing-image";
+			}
+			image = GetIcon (name);
+			return success;
+		}
+
+		public static void AddImage (ImageId imageId, Xwt.Drawing.Image icon)
+		{
+			if (Guid.Empty == imageId.Guid)
+				throw new ArgumentException (nameof (imageId));
+			if (icon == null)
+				throw new ArgumentNullException (nameof (icon));
+			var iconId = $"{imageId.Guid};{imageId.Id}";
+			imageIdToStockId.Add (imageId, iconId);
+			AddIcon (iconId, icon);
+		}
+
 		public static void AddIcon (string iconId, Xwt.Drawing.Image icon)
 		{
 			if (iconId == null)
@@ -181,6 +216,11 @@ namespace MonoDevelop.Ide
 		public static bool HasIcon (string iconId)
 		{
 			return icons.ContainsKey (iconId);
+		}
+
+		public static bool HasImage (ImageId imageId)
+		{
+			return imageIdToStockId.TryGetValue (imageId, out var iconId) && HasIcon (iconId);
 		}
 
 
@@ -533,37 +573,32 @@ namespace MonoDevelop.Ide
 			string cid;
 			if (composedIcons.TryGetValue (id, out cid))
 				return cid;
-			System.Collections.ICollection col = size == Gtk.IconSize.Invalid ? Enum.GetValues (typeof(Gtk.IconSize)) : new object [] { size };
-			var frames = new List<Xwt.Drawing.Image> ();
+			var col = size == Gtk.IconSize.Invalid ? Enum.GetValues (typeof(Gtk.IconSize)) : new object [] { size };
+			var frames = new List<Xwt.Drawing.Image> (col.Length);
 			foreach (Gtk.IconSize sz in col) {
 				if (sz == Gtk.IconSize.Invalid)
 					continue;
-				Xwt.Drawing.ImageBuilder ib = null;
-				Xwt.Drawing.Image icon = null;
+
+				var parts = new List <Xwt.Drawing.Image> (ids.Length);
 				for (int n = 0; n < ids.Length; n++) {
 					var px = GetIcon (ids[n], sz);
 					if (px == null) {
 						LoggingService.LogError ("Error creating composed icon {0} at size {1}. Icon {2} is missing.", id, sz, ids[n]);
-						icon = null;
 						break;
 					}
-
-					if (n == 0) {
-						ib = new Xwt.Drawing.ImageBuilder (px.Width, px.Height);
-						ib.Context.DrawImage (px, 0, 0);
-						icon = px;
-						continue;
-					}
-
-					if (icon.Width != px.Width || icon.Height != px.Height)
-						px = px.WithSize (icon.Width, icon.Height);
-
-					ib.Context.DrawImage (px, 0, 0);
+					parts.Add (px);
 				}
-				frames.Add (ib.ToVectorImage ());
+
+				if (parts.Count > 0)
+					frames.Add (parts.Count > 1 ? Xwt.Drawing.Image.CreateComposedImage (parts) : parts[0]);
 			}
 
-			icons [id] = Xwt.Drawing.Image.CreateMultiSizeIcon (frames);
+			if (frames.Count == 1)
+				icons[id] = frames[0];
+			else if (frames.Count > 1)
+				icons[id] = Xwt.Drawing.Image.CreateMultiSizeIcon (frames);
+			else
+				icons[id] = GetMissingIcon ();
 			composedIcons[id] = id;
 			return id;
 		}
@@ -878,7 +913,7 @@ namespace MonoDevelop.Ide
 	class CustomImageLoader : Xwt.Drawing.IImageLoader
 	{
 		RuntimeAddin addin;
-		Dictionary<System.Reflection.Assembly, string []> resources = new Dictionary<System.Reflection.Assembly, string[]> ();
+		static Dictionary<System.Reflection.Assembly, List<string>> resources = new Dictionary<System.Reflection.Assembly, List<string>> ();
 
 		public CustomImageLoader (RuntimeAddin addin)
 		{
@@ -889,16 +924,54 @@ namespace MonoDevelop.Ide
 		{
 			var r = addin.GetResourceInfo (fileName);
 
-			string [] resourceList;
-			if (!resources.TryGetValue (r.ReferencedAssembly, out resourceList))
-				resourceList = resources [r.ReferencedAssembly] = r.ReferencedAssembly.GetManifestResourceNames ();
+			if (!resources.TryGetValue (r.ReferencedAssembly, out var resourceList)) {
+				resourceList = resources [r.ReferencedAssembly] = r.ReferencedAssembly.GetManifestResourceNames ().ToList ();
+				resourceList.Sort (); // sort resources by name
+			}
 
-			return resourceList;
+			return GetFinalFilelist (resourceList, baseName, ext);
 		}
+
+		IEnumerable<string> GetFinalFilelist (IEnumerable<string> source, string baseName, string ext)
+		{
+			foreach (var name in source) {
+				if (name.StartsWith (baseName) && name.EndsWith (ext)) {
+					yield return name;
+
+					// to avoid duplicate resource entries in project files, add virtual file mappings for
+					// high contrast icons in selected state.
+					// note: we include the "." to ensure that we match "~dark~sel" exactly and not "~dark~sel~xyz".
+					int start = baseName.Length;
+					int length = name.Length - baseName.Length - ext.Length + 1;
+					if (name.IndexOf ("~dark~sel.", start, length, StringComparison.Ordinal) == start ||
+						name.IndexOf ("~dark~sel@2x.", start, length, StringComparison.Ordinal) == start)
+					{
+						var map = name.Replace ("~dark~sel", "~contrast~dark~sel");
+						if (virtualMappings == null) {
+							virtualMappings = new Dictionary<string, string> ();
+						}
+						if (!virtualMappings.ContainsKey (map)) {
+							virtualMappings.Add (map, name);
+						}
+						yield return map;
+					} else {
+						// remove existing mapping if a resource with the same name exists.
+						// note: we know that the source is sorted
+						virtualMappings?.Remove (name);
+					}
+				}
+			}
+		}
+
+		Dictionary<string, string> virtualMappings;
 
 		public Stream LoadImage (string fileName)
 		{
-			return addin.GetResource (fileName, true);
+			// load original resource if a mapping exists
+			if (virtualMappings != null && virtualMappings.TryGetValue (fileName, out var mapsTo))
+				return addin.GetResource (mapsTo, true);
+			else
+				return addin.GetResource (fileName, true);
 		}
 	}
 }

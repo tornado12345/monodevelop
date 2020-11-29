@@ -77,6 +77,11 @@ namespace MonoDevelop.Projects
 			return next.OnCreateRunConfiguration (name);
 		}
 
+		internal protected virtual void OnRemoveRunConfiguration (IEnumerable<SolutionItemRunConfiguration> items)
+		{
+			next.OnRemoveRunConfiguration (items);
+		}
+
 		internal protected virtual void OnReadRunConfiguration (ProgressMonitor monitor, ProjectRunConfiguration config, IPropertySet properties)
 		{
 			next.OnReadRunConfiguration (monitor, config, properties);
@@ -170,9 +175,19 @@ namespace MonoDevelop.Projects
 			return next.OnReevaluateProject (monitor);
 		}
 
+		internal protected virtual Task<ImmutableArray<FilePath>> OnGetAdditionalFiles (ProgressMonitor monitor, ConfigurationSelector configuration)
+		{
+			return next.OnGetAdditionalFiles (monitor, configuration);
+		}
+
 		internal protected virtual Task<ImmutableArray<FilePath>> OnGetAnalyzerFiles (ProgressMonitor monitor, ConfigurationSelector configuration)
 		{
 			return next.OnGetAnalyzerFiles (monitor, configuration);
+		}
+
+		internal protected virtual Task<ImmutableArray<FilePath>> OnGetEditorConfigFiles (ProgressMonitor monitor, ConfigurationSelector configuration)
+		{
+			return next.OnGetEditorConfigFiles (monitor, configuration);
 		}
 
 		internal protected virtual Task<ImmutableArray<ProjectFile>> OnGetSourceFiles (ProgressMonitor monitor, ConfigurationSelector configuration)

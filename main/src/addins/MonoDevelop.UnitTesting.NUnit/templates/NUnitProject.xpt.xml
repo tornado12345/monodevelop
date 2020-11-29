@@ -7,7 +7,7 @@
 		<Category>other/net/general</Category>
 		<Icon>md-test-project</Icon>
 		<Image id="md-test-project" />
-		<_Description>Creates an NUnit library</_Description>
+		<_Description>Creates an NUnit library.</_Description>
 		<LanguageName>C#</LanguageName>
 		<DefaultFilename>NUnitProject</DefaultFilename>
 		<GroupId>md-nunit-library</GroupId>
@@ -32,7 +32,7 @@
 			</References>
 
 			<Packages>
-				<Package ID="NUnit" Version="2.6.4" />
+				<Package ID="NUnit" Version="3.12.0" />
 			</Packages>
 
 			<Files>

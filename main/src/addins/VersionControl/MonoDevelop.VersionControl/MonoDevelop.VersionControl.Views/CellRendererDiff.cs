@@ -1,4 +1,4 @@
-
+﻿
 using System;
 using System.Collections.Generic;
 using Gtk;
@@ -6,7 +6,6 @@ using Gdk;
 using MonoDevelop.Ide;
 using MonoDevelop.Components;
 using System.Text;
-using Mono.TextEditor;
 using MonoDevelop.Ide.Fonts;
 
 namespace MonoDevelop.VersionControl.Views
@@ -93,7 +92,7 @@ namespace MonoDevelop.VersionControl.Views
 			Pango.Layout layout = new Pango.Layout (container.PangoContext);
 			layout.SingleParagraphMode = false;
 			if (diffMode) {
-				layout.FontDescription = FontService.MonospaceFont;
+				layout.FontDescription = IdeServices.FontService.MonospaceFont;
 				layout.SetText (text);
 			} else {
 				layout.SetMarkup (text);
@@ -113,7 +112,7 @@ namespace MonoDevelop.VersionControl.Views
 		
 		protected override void Render (Drawable window, Widget widget, Gdk.Rectangle background_area, Gdk.Rectangle cell_area, Gdk.Rectangle expose_area, CellRendererState flags)
 		{
-			if (isDisposed)
+			if (isDisposed || layout == null)
 				return;
 			if (diffMode) {
 				
@@ -130,7 +129,6 @@ namespace MonoDevelop.VersionControl.Views
 				}
 				var treeview = widget as FileTreeView;
 				var p = treeview != null? treeview.CursorLocation : null;
-				
 				cell_area.Width -= RightPadding;
 				
 				window.DrawRectangle (widget.Style.BaseGC (Gtk.StateType.Normal), true, cell_area.X, cell_area.Y, cell_area.Width - 1, cell_area.Height);
@@ -151,70 +149,8 @@ namespace MonoDevelop.VersionControl.Views
 				// Rendering is done in two steps:
 				// 1) Get a list of blocks to render
 				// 2) render the blocks
-				
-				int y = cell_area.Y + 2;
-				
-				// cline keeps track of the current source code line (the one to jump to when double clicking)
-				int cline = 1;
-				bool inHeader = true;
-				BlockInfo currentBlock = null;
-				
-				List<BlockInfo> blocks = new List<BlockInfo> ();
-				
-				for (int n=0; n<lines.Length; n++, y += lineHeight) {
-					
-					string line = lines [n];
-					if (line.Length == 0) {
-						currentBlock = null;
-						y -= lineHeight;
-						continue;
-					}
-					
-					char tag = line [0];
-	
-					if (line.StartsWith ("---", StringComparison.Ordinal) ||
-						line.StartsWith ("+++", StringComparison.Ordinal)) {
-						// Ignore this part of the header.
-						currentBlock = null;
-						y -= lineHeight;
-						continue;
-					}
-					if (tag == '@') {
-						int l = ParseCurrentLine (line);
-						if (l != -1) cline = l - 1;
-						inHeader = false;
-					} else if (tag == '+' && !inHeader)
-						cline++;
 
-					BlockType type;
-					switch (tag) {
-						case '-': type = BlockType.Removed; break;
-						case '+': type = BlockType.Added; break;
-						case '@': type = BlockType.Info; break;
-						default: type = BlockType.Unchanged; break;
-					}
-
-					if (currentBlock == null || type != currentBlock.Type) {
-						if (y > maxy)
-							break;
-					
-						// Starting a new block. Mark section ends between a change block and a normal code block
-						if (currentBlock != null && IsChangeBlock (currentBlock.Type) && !IsChangeBlock (type))
-							currentBlock.SectionEnd = true;
-						
-						currentBlock = new BlockInfo () {
-							YStart = y,
-							FirstLine = n,
-							Type = type,
-							SourceLineStart = cline,
-							SectionStart = (blocks.Count == 0 || !IsChangeBlock (blocks[blocks.Count - 1].Type)) && IsChangeBlock (type)
-						};
-						blocks.Add (currentBlock);
-					}
-					// Include the line in the current block
-					currentBlock.YEnd = y + lineHeight;
-					currentBlock.LastLine = n;
-				}
+				var blocks = CalculateBlocks (maxy, cell_area.Y + 2);
 
 				// Now render the blocks
 
@@ -316,7 +252,81 @@ namespace MonoDevelop.VersionControl.Views
 				window.DrawLayout (widget.Style.TextGC (GetState(widget, flags)), cell_area.X, y, layout);
 			}
 		}
-		
+
+		List<BlockInfo> CalculateBlocks (int maxy, int y)
+		{
+			// cline keeps track of the current source code line (the one to jump to when double clicking)
+			int cline = 1;
+
+			BlockInfo currentBlock = null;
+
+			var result = new List<BlockInfo> ();
+			int removedLines = 0;
+			for (int n = 0; n < lines.Length; n++, y += lineHeight) {
+
+				string line = lines [n];
+				if (line.Length == 0) {
+					currentBlock = null;
+					y -= lineHeight;
+					continue;
+				}
+
+				char tag = line [0];
+
+				if (line.StartsWith ("---", StringComparison.Ordinal) ||
+					line.StartsWith ("+++", StringComparison.Ordinal)) {
+					// Ignore this part of the header.
+					currentBlock = null;
+					y -= lineHeight;
+					continue;
+				}
+				if (tag == '@') {
+					int l = ParseCurrentLine (line);
+					if (l != -1) cline = l - 1;
+				} else
+					cline++;
+
+				BlockType type;
+				switch (tag) {
+				case '-':
+					type = BlockType.Removed;
+					removedLines++;
+					break;
+				case '+': type = BlockType.Added; break;
+				case '@': type = BlockType.Info; break;
+				default: type = BlockType.Unchanged; break;
+				}
+
+				if (type != BlockType.Removed && removedLines > 0) {
+					cline -= removedLines;
+					removedLines = 0;
+				}
+
+				if (currentBlock == null || type != currentBlock.Type) {
+					if (y > maxy)
+						break;
+
+					// Starting a new block. Mark section ends between a change block and a normal code block
+					if (currentBlock != null && IsChangeBlock (currentBlock.Type) && !IsChangeBlock (type))
+						currentBlock.SectionEnd = true;
+
+					currentBlock = new BlockInfo {
+						YStart = y,
+						FirstLine = n,
+						Type = type,
+						SourceLineStart = cline,
+						SectionStart = (result.Count == 0 || !IsChangeBlock (result [result.Count - 1].Type)) && IsChangeBlock (type)
+					};
+					result.Add (currentBlock);
+				}
+				// Include the line in the current block
+				currentBlock.YEnd = y + lineHeight;
+				currentBlock.LastLine = n;
+			}
+
+			return result;
+		}
+
 		static bool IsChangeBlock (BlockType t)
 		{
 			return t == BlockType.Added || t == BlockType.Removed;

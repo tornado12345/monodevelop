@@ -1,4 +1,4 @@
-﻿// CompletionListWindow.cs
+// CompletionListWindow.cs
 //
 // Author:
 //   Lluis Sanchez Gual <lluis@novell.com>
@@ -40,6 +40,7 @@ using Xwt;
 
 namespace MonoDevelop.Ide.CodeCompletion
 {
+	[Obsolete ("Use the Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion APIs")]
 	public class CompletionListWindow
 	{
 		ICompletionView window;
@@ -194,11 +195,11 @@ namespace MonoDevelop.Ide.CodeCompletion
 
 		internal bool ShowListWindow (ICompletionDataList list, CodeCompletionContext completionContext)
 		{
-			Counters.ProcessCodeCompletion.Trace ("Begin show completion window");
+			completionContext.Trace ("Begin show completion window");
 
 			var r = controller.ShowListWindow (list, completionContext);
 
-			Counters.ProcessCodeCompletion.Trace ("End show completion window");
+			completionContext.Trace ("End show completion window");
 
 			return r;
 		}

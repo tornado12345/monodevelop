@@ -67,31 +67,28 @@ namespace MonoDevelop.Components.Mac
 			return toplevels.FirstOrDefault (w => w.IsRealized && gdk_quartz_window_get_nswindow (w.GdkWindow.Handle) == window.Handle);
 		}
 
-		public static IEnumerable<KeyValuePair<NSWindow,Gtk.Window>> GetToplevels ()
-		{
-			var nsWindows = NSApplication.SharedApplication.Windows;
-			var gtkWindows = Gtk.Window.ListToplevels ();
-			foreach (var n in nsWindows) {
-				var g = gtkWindows.FirstOrDefault (w => {
-					return w.GdkWindow != null && gdk_quartz_window_get_nswindow (w.GdkWindow.Handle) == n.Handle;
-				});
-				yield return new KeyValuePair<NSWindow, Gtk.Window> (n, g);
-			}
-		}
+		//public static IEnumerable<KeyValuePair<NSWindow,Gtk.Window>> GetToplevels ()
+		//{
+		//  // HACK: THIS IS VERY DANGEROUS
+		//	var nsWindows = NSApplication.SharedApplication.Windows;
+		//	var gtkWindows = Gtk.Window.ListToplevels ();
+		//	foreach (var n in nsWindows) {
+		//		var g = gtkWindows.FirstOrDefault (w => {
+		//			return w.GdkWindow != null && gdk_quartz_window_get_nswindow (w.GdkWindow.Handle) == n.Handle;
+		//		});
+		//		yield return new KeyValuePair<NSWindow, Gtk.Window> (n, g);
+		//	}
+		//}
 
 		public static NSWindow GetNSWindow (Gtk.Window window)
 		{
 			var ptr = gdk_quartz_window_get_nswindow (window.GdkWindow.Handle);
-			if (ptr == IntPtr.Zero)
-				return null;
 			return ObjCRuntime.Runtime.GetNSObject<NSWindow> (ptr);
 		}
 
 		public static NSView GetNSView (Gtk.Widget widget)
 		{
 			var ptr = gdk_quartz_window_get_nsview (widget.GdkWindow.Handle);
-			if (ptr == IntPtr.Zero)
-				return null;
 			return ObjCRuntime.Runtime.GetNSObject<NSView> (ptr);
 		}
 
@@ -120,17 +117,23 @@ namespace MonoDevelop.Components.Mac
 			return (int)(frame.Height - rect.Height);
 		}
 
-		internal static Gdk.EventKey ConvertKeyEvent (AppKit.NSEvent ev)
+		internal static Gdk.ModifierType ConvertModifierMask (NSEventModifierMask mask)
 		{
 			var state = Gdk.ModifierType.None;
-			if ((ev.ModifierFlags & AppKit.NSEventModifierMask.ControlKeyMask) != 0)
+			if ((mask & NSEventModifierMask.ControlKeyMask) != 0)
 				state |= Gdk.ModifierType.ControlMask;
-			if ((ev.ModifierFlags & AppKit.NSEventModifierMask.ShiftKeyMask) != 0)
+			if ((mask & NSEventModifierMask.ShiftKeyMask) != 0)
 				state |= Gdk.ModifierType.ShiftMask;
-			if ((ev.ModifierFlags & AppKit.NSEventModifierMask.CommandKeyMask) != 0)
-				state |= Gdk.ModifierType.MetaMask;
-			if ((ev.ModifierFlags & AppKit.NSEventModifierMask.AlternateKeyMask) != 0)
+			if ((mask & NSEventModifierMask.CommandKeyMask) != 0)
+				state |= Gdk.ModifierType.Mod2Mask | Gdk.ModifierType.MetaMask;
+			if ((mask & NSEventModifierMask.AlternateKeyMask) != 0)
 				state |= Gdk.ModifierType.Mod1Mask;
+			return state;
+		}
+
+		internal static Gdk.EventKey ConvertKeyEvent (AppKit.NSEvent ev)
+		{
+			var state = ConvertModifierMask (ev.ModifierFlags);
 
 			var w = GetGtkWindow (ev.Window);
 			return GtkUtil.CreateKeyEventFromKeyCode (ev.KeyCode, state, Gdk.EventType.KeyPress, w != null ? w.GdkWindow : null, (uint)(ev.Timestamp * 1000));
@@ -162,6 +165,14 @@ namespace MonoDevelop.Components.Mac
 			var image  = new NSImage (rect.Size);
 			image.AddRepresentation (imageRep);
 			return image;
+		}
+
+		public static bool IsGdkQuartzWindow (Window window)
+		{
+			if (window.nativeWidget is AppKit.NSWindow nsWindow) {
+				return GetGtkWindow (nsWindow) != null;
+			}
+			return false;
 		}
 	}
 }

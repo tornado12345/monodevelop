@@ -1,4 +1,4 @@
-// 
+﻿// 
 // MacAlertFileDialogHandler.cs
 //  
 // Author:
@@ -42,6 +42,23 @@ using MonoDevelop.Components.AtkCocoaHelper;
 
 namespace MonoDevelop.MacIntegration
 {
+	sealed class AlertDelegate : NSAlertDelegate
+	{
+		readonly string HelpUrl;
+		public AlertDelegate (string helpUrl)
+		{
+			HelpUrl = helpUrl;
+		}
+
+		public override bool ShowHelp (NSAlert alert)
+		{
+			if (!string.IsNullOrEmpty (HelpUrl)) {
+				IdeServices.DesktopService.ShowUrl (HelpUrl);
+			}
+			return true;
+		}
+	}
+
 	class MacAlertDialogHandler : IAlertDialogHandler
 	{
 		public bool Run (AlertDialogData data)
@@ -73,10 +90,15 @@ namespace MonoDevelop.MacIntegration
 						alert.Icon = img.ToNSImage ();
 				} else {
 					//for some reason the NSAlert doesn't pick up the app icon by default
-					alert.Icon = NSApplication.SharedApplication.ApplicationIconImage;
+					alert.Icon = MacPlatformService.ApplicationIcon;
 				}
 
 				alert.MessageText = data.Message.Text;
+
+				if (!string.IsNullOrEmpty (data.Message.HelpUrl)) {
+					alert.Delegate = new AlertDelegate (data.Message.HelpUrl);
+					alert.ShowsHelp = true;
+				}
 
 				int accessoryViewItemsCount = data.Options.Count;
 
@@ -143,8 +165,15 @@ namespace MonoDevelop.MacIntegration
 				}
 
 				var accessoryView = ArrangeAccessoryViews (accessoryViews);
-				if (accessoryView != null)
+				if (accessoryView != null) {
+					if (accessoryViews?[0] == messageView) {
+						accessoryView.SetCustomSpacing (accessoryView.Spacing * 2, messageView);
+						var size = accessoryView.Frame.Size;
+						size.Height += accessoryView.Spacing;
+						accessoryView.SetFrameSize (size);
+					}
 					alert.AccessoryView = accessoryView;
+				}
 
 				NSButton applyToAllCheck = null;
 				if (data.Message.AllowApplyToAll) {
@@ -175,7 +204,9 @@ namespace MonoDevelop.MacIntegration
 
 				int response = -1000;
 
-				var parent = data.TransientFor ?? IdeApp.Workbench.RootWindow;
+				var parent = data.TransientFor;
+				if (parent == null && IdeApp.Workbench?.RootWindow?.Visible == true)
+					parent = IdeApp.Workbench?.RootWindow;
 				NSWindow nativeParent;
 				try {
 					nativeParent = parent;
@@ -187,7 +218,7 @@ namespace MonoDevelop.MacIntegration
 					var sheet = IdeTheme.UserInterfaceTheme != Theme.Dark || MacSystemInformation.OsVersion != MacSystemInformation.HighSierra;
 
 					// We have an issue with accessibility when using sheets, so disable it here
-					sheet &= !DesktopService.AccessibilityInUse;
+					sheet &= !IdeServices.DesktopService.AccessibilityInUse;
 
 					if (!sheet || nativeParent == null) {
 						// Force the alert window to be focused for accessibility
@@ -209,7 +240,17 @@ namespace MonoDevelop.MacIntegration
 							NSApplication.SharedApplication.StopModal ();
 						});
 
-						NSApplication.SharedApplication.RunModalForWindow (alert.Window);
+						if (IdeApp.Workbench.RootWindow?.Visible == true) {
+							// pass parent and not alert so that the Runloop will change
+							// and processing will stop until the sheet is closed.
+							// If we pass alert, then it will run until a second alert is created
+							// which will be shown as a dialog and then the runloop changes and
+							// processing stops
+							NSApplication.SharedApplication.RunModalForWindow (parent);
+						} else {
+							// fixes message dialog below other dialogs issue when no main window is present (at start)
+							NSApplication.SharedApplication.RunModalForWindow (alert.Window);
+						}
 					}
 				}
 
@@ -240,7 +281,7 @@ namespace MonoDevelop.MacIntegration
 				if (nativeParent != null)
 					nativeParent.MakeKeyAndOrderFront (nativeParent);
 				else
-					DesktopService.FocusWindow (parent);
+					IdeServices.DesktopService.FocusWindow (parent);
 
 			}
 
@@ -254,7 +295,7 @@ namespace MonoDevelop.MacIntegration
 
 			var stackView = NSStackView.FromViews (views);
 			stackView.Orientation = NSUserInterfaceLayoutOrientation.Vertical;
-			stackView.Distribution = NSStackViewDistribution.EqualSpacing;
+			stackView.Distribution = NSStackViewDistribution.Fill;
 			stackView.Alignment = NSLayoutAttribute.Left;
 			stackView.Spacing = spacing;
 
@@ -266,7 +307,7 @@ namespace MonoDevelop.MacIntegration
 			return stackView;
 		}
 
-		static bool TryGetMessageView (string text, out NSView messageView, int viewWidth = 450, int topPadding = 10)
+		static bool TryGetMessageView (string text, out NSView messageView, int viewWidth = 450, int topPadding = 0)
 		{
 			messageView = null;
 

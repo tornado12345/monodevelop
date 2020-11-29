@@ -45,7 +45,7 @@ namespace MonoDevelop.Core.Assemblies
 	public sealed class SystemAssemblyService
 	{
 		object frameworkWriteLock = new object ();
-		Dictionary<TargetFrameworkMoniker,TargetFramework> frameworks = new Dictionary<TargetFrameworkMoniker, TargetFramework> ();
+		SortedDictionary<TargetFrameworkMoniker,TargetFramework> frameworks = new SortedDictionary<TargetFrameworkMoniker, TargetFramework> ();
 		List<TargetRuntime> runtimes;
 		TargetRuntime defaultRuntime;
 
@@ -88,7 +88,7 @@ namespace MonoDevelop.Core.Assemblies
 		void UpdateFrameworks (IEnumerable<TargetFramework> toAdd)
 		{
 			lock (frameworkWriteLock) {
-				var newFxList = new Dictionary<TargetFrameworkMoniker,TargetFramework> (frameworks);
+				var newFxList = new SortedDictionary<TargetFrameworkMoniker,TargetFramework> (frameworks);
 				bool changed = false;
 				foreach (var fx in toAdd) {
 					TargetFramework existing;
@@ -234,22 +234,26 @@ namespace MonoDevelop.Core.Assemblies
 			return aname;
 		}
 
+		static readonly ReaderWriterLockSlim readerWriterLock = new ReaderWriterLockSlim ();
 		static readonly Dictionary<string, AssemblyName> assemblyNameCache = new Dictionary<string, AssemblyName> ();
 		internal static AssemblyName GetAssemblyNameObj (string file)
 		{
 			AssemblyName name;
 
-			lock (assemblyNameCache) {
+			using (readerWriterLock.Read ()) {
 				if (assemblyNameCache.TryGetValue (file, out name))
 					return name;
 			}
 
 			try {
 				name = AssemblyName.GetAssemblyName (file);
-				lock (assemblyNameCache) {
-					assemblyNameCache [file] = name;
+
+				using (readerWriterLock.Write ()) {
+					if (assemblyNameCache.TryGetValue (file, out var alreadyAdded))
+						return alreadyAdded;
+
+					return assemblyNameCache [file] = name;
 				}
-				return name;
 			} catch (FileNotFoundException) {
 				// GetAssemblyName is not case insensitive in mono/windows. This is a workaround
 				foreach (string f in Directory.GetFiles (Path.GetDirectoryName (file), Path.GetFileName (file))) {
@@ -339,13 +343,13 @@ namespace MonoDevelop.Core.Assemblies
 		}
 
 		//warning: this may mutate `frameworks` and any newly-added TargetFrameworks in it
-		static void BuildFrameworkRelations (Dictionary<TargetFrameworkMoniker, TargetFramework> frameworks)
+		static void BuildFrameworkRelations (SortedDictionary<TargetFrameworkMoniker, TargetFramework> frameworks)
 		{
 			foreach (TargetFramework fx in frameworks.Values)
 				BuildFrameworkRelations (fx, frameworks);
 		}
 
-		static void BuildFrameworkRelations (TargetFramework fx, Dictionary<TargetFrameworkMoniker, TargetFramework> frameworks)
+		static void BuildFrameworkRelations (TargetFramework fx, SortedDictionary<TargetFrameworkMoniker, TargetFramework> frameworks)
 		{
 			if (fx.RelationsBuilt)
 				return;

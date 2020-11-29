@@ -30,7 +30,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using Microsoft.TestPlatform.VsTestConsole.TranslationLayer.Payloads;
 using Microsoft.VisualStudio.TestPlatform.CommunicationUtilities;
 using Microsoft.VisualStudio.TestPlatform.CommunicationUtilities.Interfaces;
 using Microsoft.VisualStudio.TestPlatform.CommunicationUtilities.ObjectModel;
@@ -63,7 +62,7 @@ namespace MonoDevelop.UnitTesting.VsTest
 		internal static string GetRunSettings (Project project)
 		{
 			return "<RunSettings>" + new Microsoft.VisualStudio.TestPlatform.ObjectModel.RunConfiguration () {
-				TargetFrameworkVersion = Framework.FromString ((project as DotNetProject)?.TargetFramework?.Id?.ToString ()),
+				TargetFramework = Framework.FromString ((project as DotNetProject)?.TargetFramework?.Id?.ToString ()),
 				DisableAppDomain = true,
 				ResultsDirectory = project.BaseIntermediateOutputPath.Combine (Constants.ResultsDirectoryName),
 				ShouldCollectSourceInformation = false,
@@ -210,6 +209,8 @@ namespace MonoDevelop.UnitTesting.VsTest
 		{
 			string vsTestConsoleExeFolder = Path.Combine (Path.GetDirectoryName (typeof (VsTestAdapter).Assembly.Location), "VsTestConsole");
 			string vsTestConsoleExe = Path.Combine (vsTestConsoleExeFolder, "vstest.console.exe");
+			if (!File.Exists (vsTestConsoleExe))
+				LoggingService.LogError ("vstest.console.exe not found : " + vsTestConsoleExe);
 			var executionCommand = Runtime.ProcessService.CreateCommand (vsTestConsoleExe);
 			executionCommand.Arguments = GetVSTestArguments (vsTestConsoleExe, port);
 			executionCommand.WorkingDirectory = vsTestConsoleExeFolder;

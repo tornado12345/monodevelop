@@ -109,7 +109,7 @@ namespace MonoDevelop.CSharp.Completion
 		public CSharpFormattingPolicy FormattingPolicy {
 			get {
 				if (policy == null) {
-					IEnumerable<string> types = MonoDevelop.Ide.DesktopService.GetMimeTypeInheritanceChain (MonoDevelop.CSharp.Formatting.CSharpFormatter.MimeType);
+					IEnumerable<string> types = MonoDevelop.Ide.IdeServices.DesktopService.GetMimeTypeInheritanceChain (MonoDevelop.CSharp.Formatting.CSharpFormatter.MimeType);
 					policy = DocumentContext.GetPolicy<CSharpFormattingPolicy> (types);
 				}
 				return policy;
@@ -133,7 +133,7 @@ namespace MonoDevelop.CSharp.Completion
 		/// Used in testing environment.
 		/// </summary>
 		[System.ComponentModel.Browsable (false)]
-		public CSharpCompletionTextEditorExtension (MonoDevelop.Ide.Gui.Document doc, bool addEventHandlersInInitialization = true)
+		public CSharpCompletionTextEditorExtension (Ide.Gui.RoslynDocumentContext doc, bool addEventHandlersInInitialization = true)
 		{
 			this.addEventHandlersInInitialization = addEventHandlersInInitialization;
 			Initialize (doc.Editor, doc);
@@ -228,7 +228,7 @@ namespace MonoDevelop.CSharp.Completion
 						result.AutoCompleteUniqueMatch = false;
 						result.AutoCompleteEmptyMatch = false;
 						return (ICompletionDataList)result;
-					});
+					}, token, TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Current);
 				} catch (Exception e) {
 					LoggingService.LogError ("Unexpected code completion exception." + Environment.NewLine +
 											 "FileName: " + DocumentContext.Name + Environment.NewLine +
@@ -280,7 +280,10 @@ namespace MonoDevelop.CSharp.Completion
 					syntaxTree.IsPreProcessorDirectiveContext (position, cancellationToken))
 					return;
 
-				var extensionMethodImport = syntaxTree.IsRightOfDotOrArrowOrColonColon (position, cancellationToken);
+				var extensionMethodImport = syntaxTree.IsRightOfDotOrArrowOrColonColon (
+					position,
+					syntaxTree.FindTokenOnLeftOfPosition (position, cancellationToken).GetPreviousTokenIfTouchingWord (position),
+					cancellationToken);
 				ITypeSymbol extensionMethodReceiverType = null;
 
 				if (extensionMethodImport) {
@@ -304,7 +307,7 @@ namespace MonoDevelop.CSharp.Completion
 					syntaxTree.IsStatementContext (position, tokenLeftOfPosition, cancellationToken) ||
 					syntaxTree.IsTypeContext (position, cancellationToken) ||
 					syntaxTree.IsTypeDeclarationContext (position, tokenLeftOfPosition, cancellationToken) ||
-					syntaxTree.IsMemberDeclarationContext (position, tokenLeftOfPosition, cancellationToken) ||
+					// syntaxTree.IsMemberDeclarationContext (position, tokenLeftOfPosition, cancellationToken) ||
 					syntaxTree.IsLabelContext (position, cancellationToken)) {
 					var usedNamespaces = new HashSet<string> ();
 					var node = root.FindNode (TextSpan.FromBounds (position, position));
@@ -440,12 +443,14 @@ namespace MonoDevelop.CSharp.Completion
 				}
 			}
 
-			Counters.ProcessCodeCompletion.Trace ("C#: Getting completions");
+			completionContext.Trace ("C#: Getting completions");
 			var customOptions = DocumentContext.RoslynWorkspace.Options
 				.WithChangedOption (CompletionOptions.TriggerOnDeletion, LanguageNames.CSharp, true)
-				.WithChangedOption (CompletionOptions.HideAdvancedMembers, LanguageNames.CSharp, IdeApp.Preferences.CompletionOptionsHideAdvancedMembers);
+				.WithChangedOption (CompletionOptions.HideAdvancedMembers, LanguageNames.CSharp, IdeApp.Preferences.CompletionOptionsHideAdvancedMembers)
+				// Roslyn's implementation of this feature doesn't work correctly in old editor
+				.WithChangedOption (CompletionOptions.ShowItemsFromUnimportedNamespaces, LanguageNames.CSharp, false);
 			var completionList = await Task.Run (() => cs.GetCompletionsAsync (analysisDocument, Editor.CaretOffset, trigger, options: customOptions, cancellationToken: token)).ConfigureAwait (false);
-			Counters.ProcessCodeCompletion.Trace ("C#: Got completions");
+			completionContext.Trace ("C#: Got completions");
 
 			if (completionList == null)
 				return EmptyCompletionDataList;
@@ -475,25 +480,10 @@ namespace MonoDevelop.CSharp.Completion
 			var semanticModel = await partialDoc.GetSemanticModelAsync (token).ConfigureAwait (false);
 			var syntaxContext = CSharpSyntaxContext.CreateContext (DocumentContext.RoslynWorkspace, semanticModel, completionContext.TriggerOffset, token);
 
-			if (addProtocolCompletion) {
-				var provider = new ProtocolMemberCompletionProvider ();
-
-				var protocolMemberContext = new CompletionContext (provider, analysisDocument, completionContext.TriggerOffset, new TextSpan (completionContext.TriggerOffset, completionContext.TriggerWordLength), trigger, customOptions, token);
-
-				await provider.ProvideCompletionsAsync (protocolMemberContext);
-
-				foreach (var item in protocolMemberContext.Items) {
-					if (string.IsNullOrEmpty (item.DisplayText))
-						continue;
-					var data = new CSharpCompletionData (analysisDocument, triggerSnapshot, cs, item);
-					result.Add (data);
-				}
-			}
-
 			if (forceSymbolCompletion || IdeApp.Preferences.AddImportedItemsToCompletionList) {
-				Counters.ProcessCodeCompletion.Trace ("C#: Adding import completion data");
+				completionContext.Trace ("C#: Adding import completion data");
 				AddImportCompletionData (syntaxContext, result, semanticModel, completionContext.TriggerOffset, token);
-				Counters.ProcessCodeCompletion.Trace ("C#: Added import completion data");
+				completionContext.Trace ("C#: Added import completion data");
 			}
 			if (defaultCompletionData != null) {
 				result.DefaultCompletionString = defaultCompletionData.DisplayText;
@@ -700,7 +690,7 @@ namespace MonoDevelop.CSharp.Completion
 		}
 
 		internal static Lazy<ImmutableArray<ISignatureHelpProvider>> signatureProviders = new Lazy<ImmutableArray<ISignatureHelpProvider>> (() => {
-			var workspace = TypeSystemService.Workspace;
+			var workspace = IdeApp.TypeSystemService.Workspace;
 			var mefExporter = (IMefHostExportProvider)workspace.Services.HostServices;
 			var helpProviders = mefExporter.GetExports<ISignatureHelpProvider, LanguageMetadata> ()
 				.FilterToSpecificLanguage (LanguageNames.CSharp);

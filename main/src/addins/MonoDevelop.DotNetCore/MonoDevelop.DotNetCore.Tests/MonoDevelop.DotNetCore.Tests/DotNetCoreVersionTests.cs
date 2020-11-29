@@ -103,6 +103,15 @@ namespace MonoDevelop.DotNetCore.Tests
 			Assert.IsFalse (result);
 		}
 
+		[Test]
+		public void TryParse_InvalidVersion()
+		{
+			DotNetCoreVersion version = null;
+			bool result = DotNetCoreVersion.TryParse ("INVALID", out version);
+
+			Assert.IsFalse (result);
+		}
+
 		[TestCase ("1.0.2", "1.0.2", true)]
 		[TestCase ("1.2.3", "1.0.2", false)]
 		[TestCase ("1.0.2", "1.0.2-preview1-002912-00", false)]
@@ -216,6 +225,8 @@ namespace MonoDevelop.DotNetCore.Tests
 		[TestCase ("1.0.0", "1.0.2", false)]
 		[TestCase ("1.0.2", "1.0.2-preview1-002912-00", true)]
 		[TestCase ("1.0.2-preview1-002912-00", "1.0.2", false)]
+		[TestCase ("3.0.100-preview3-010431", "3.0.100-preview-010184", true)]
+		[TestCase ("3.0.100-preview3-010431", "3.0.100-preview4-010763", false)]
 		public void GreaterThanOperator_Version (string x, string y, bool expected)
 		{
 			var versionX = DotNetCoreVersion.Parse (x);
@@ -228,6 +239,8 @@ namespace MonoDevelop.DotNetCore.Tests
 		[TestCase ("1.0.0", "1.0.2", false)]
 		[TestCase ("1.0.2", "1.0.2-preview1-002912-00", true)]
 		[TestCase ("1.0.2-preview1-002912-00", "1.0.2", false)]
+		[TestCase ("3.0.100-preview3-010431", "3.0.100-preview-010184", true)]
+		[TestCase ("3.0.100-preview3-010431", "3.0.100-preview4-010763", false)]
 		public void GreaterThanOrEqualtoOperator_Version (string x, string y, bool expected)
 		{
 			var versionX = DotNetCoreVersion.Parse (x);
@@ -271,6 +284,50 @@ namespace MonoDevelop.DotNetCore.Tests
 			Assert.IsFalse (nullVersionX > nonNullVersion);
 			Assert.IsFalse (nonNullVersion < nullVersionY);
 			Assert.IsTrue (nonNullVersion > nullVersionY);
+		}
+
+		[TestCase ("2.1.300-preview1-008174", false)]
+		[TestCase ("2.1.302", false)]
+		[TestCase ("2.1.403", false)]
+		[TestCase ("2.1.505", false)]
+		[TestCase ("2.1.506", false)]
+		[TestCase ("2.1.602", true)]
+		[TestCase ("2.1.603", true)]
+		[TestCase ("2.2.100-preview3-009430", false)]
+		[TestCase ("2.2.106", false)]
+		[TestCase ("2.2.203", true)]
+		[TestCase ("2.3.0", true)]
+		[TestCase ("3.0.100-preview-010184", false)]
+		[TestCase ("3.0.100-preview3-010431", true)]
+		[TestCase ("4.0.0-preview-0", false)]
+		public void CheckSupportedSdkVersion (string version, bool isSupported)
+		{
+			if (!DotNetCoreVersion.TryParse (version, out var dotnetCoreVersion))
+				Assert.Inconclusive ("Unable to parse {0}", version);
+
+			var result = DotNetCoreVersion.IsSdkSupported (dotnetCoreVersion);
+			Assert.True (result == isSupported);
+		}
+
+		[TestCase ("3.0.100", 0)]
+		[TestCase ("3.0.100-preview-010184", 10184)]
+		[TestCase ("3.0.100-preview3-010431", 10431)]
+		[TestCase ("3.0.100-preview3-010431-22", 10431)]
+		public void ParseRevisionNumber(string version, long expected)
+		{
+			var dotNetCoreVersion = DotNetCoreVersion.Parse (version);
+			Assert.That (dotNetCoreVersion.Revision, Is.EqualTo (expected));
+		}
+
+		[TestCase ("3.0.100", 300100999999)]
+		[TestCase ("3.0.100-preview-010184", 300100010184)]
+		[TestCase ("3.0.100-preview3-010431", 300100010431)]
+		[TestCase ("3.0.100-preview3-010431-22", 300100010431)]
+		public void GetVersionId (string version, long expected)
+		{
+			var dotNetCoreVersion = DotNetCoreVersion.Parse (version);
+			var versionId = DotNetCoreSystemInformation.GenerateVersionId (dotNetCoreVersion);
+			Assert.That (versionId, Is.EqualTo (expected));
 		}
 	}
 }

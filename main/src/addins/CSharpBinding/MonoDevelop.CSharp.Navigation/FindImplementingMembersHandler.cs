@@ -70,9 +70,9 @@ namespace MonoDevelop.CSharp.Navigation
 
 		static async Task<RefactoringSymbolInfo> GetNamedTypeAtCaret (Ide.Gui.Document doc)
 		{
-			if (doc == null)
+			if (doc == null || doc.Editor == null)
 				return null;
-			var info = await RefactoringSymbolInfo.GetSymbolInfoAsync (doc, doc.Editor);
+			var info = await RefactoringSymbolInfo.GetSymbolInfoAsync (doc.DocumentContext, doc.Editor);
 
 			if (info.Node?.Parent.IsKind (SyntaxKind.SimpleBaseType) != true)
 				return null;
@@ -83,7 +83,7 @@ namespace MonoDevelop.CSharp.Navigation
 		Task FindImplementingSymbols (Compilation compilation, RefactoringSymbolInfo info, CancellationTokenSource cancellationTokenSource)
 		{
 			if (!TryGetInterfaceType (info, out var interfaceType, out var implementingType))
-				return Task.FromResult (0);
+				return Task.CompletedTask;
 
 			return Task.Run (delegate {
 				var searchMonitor = IdeApp.Workbench.ProgressMonitors.GetSearchProgressMonitor (true, true);

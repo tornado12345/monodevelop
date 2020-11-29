@@ -1,4 +1,4 @@
-// 
+﻿// 
 // FontChooserPanelWidget.cs
 //  
 // Author:
@@ -29,6 +29,13 @@ using MonoDevelop.Core;
 using MonoDevelop.Components.AtkCocoaHelper;
 using Gtk;
 using System.Diagnostics;
+using MonoDevelop.Components;
+using Xwt.Drawing;
+
+#if MAC
+using AppKit;
+using Foundation;
+#endif
 
 namespace MonoDevelop.Ide.Fonts
 {
@@ -41,7 +48,7 @@ namespace MonoDevelop.Ide.Fonts
 		public void SetFont (string fontName, string fontDescription)
 		{
 			customFonts [fontName] = fontDescription;
-			FontService.SetFont (fontName, fontDescription);
+			IdeServices.FontService.SetFont (fontName, fontDescription);
 		}
 
 		
@@ -50,7 +57,7 @@ namespace MonoDevelop.Ide.Fonts
 			if (customFonts.ContainsKey (fontName))
 				return customFonts [fontName];
 			
-			return FontService.GetUnderlyingFontName (fontName);
+			return IdeServices.FontService.GetUnderlyingFontName (fontName);
 		}
 
 		public void Store ()
@@ -63,7 +70,7 @@ namespace MonoDevelop.Ide.Fonts
 		protected override void OnDestroyed ()
 		{
 			foreach (var val in selectedFonts) {
-				FontService.SetFont (val.Key, val.Value);
+				IdeServices.FontService.SetFont (val.Key, val.Value);
 			}
 			base.OnDestroyed ();
 		}
@@ -72,53 +79,57 @@ namespace MonoDevelop.Ide.Fonts
 		{
 			this.Build ();
 
-			foreach (var desc in FontService.FontDescriptions) {
-				selectedFonts [desc.Name] = FontService.GetUnderlyingFontName (desc.Name);
+			foreach (var desc in IdeServices.FontService.FontDescriptions) {
+				selectedFonts [desc.Name] = IdeServices.FontService.GetUnderlyingFontName (desc.Name);
 				var fontNameLabel = new Label (desc.DisplayName);
 				fontNameLabel.Justify = Justification.Left;
 				fontNameLabel.Xalign = 0;
 				mainBox.PackStart (fontNameLabel, false, false, 0);
 				var hBox = new HBox ();
 				var setFontButton = new Button ();
-				setFontButton.Label = FontService.FilterFontName (GetFont (desc.Name));
+				setFontButton.Label = GetDisplayDescription (IdeServices.FontService.GetFont (desc.Name));
 
 				var descStr = GettextCatalog.GetString ("Set the font options for {0}", desc.DisplayName);
 				setFontButton.Accessible.Description = descStr;
 				setFontButton.Clicked += delegate {
-					var selectionDialog = new FontSelectionDialog (GettextCatalog.GetString ("Select Font")) {
-						Modal = true,
-						DestroyWithParent = true,
-						TransientFor = this.Toplevel as Gtk.Window
-					};
-					MonoDevelop.Components.IdeTheme.ApplyTheme (selectionDialog);
-					try {
-						string fontValue = FontService.FilterFontName (GetFont (desc.Name));
-						selectionDialog.SetFontName (fontValue);
-						if (MessageService.RunCustomDialog (selectionDialog) != (int)Gtk.ResponseType.Ok) {
+
+					// var xwtParent = Xwt.Toolkit.CurrentEngine.WrapWindow (this.Toplevel);
+					Xwt.Toolkit.NativeEngine.Invoke (() => {
+						var selectionDialog = new Xwt.SelectFontDialog (GettextCatalog.GetString ("Select Font"));
+						string fontValue = IdeServices.FontService.FilterFontName (GetFont (desc.Name));
+						selectionDialog.SelectedFont = Xwt.Drawing.Font.FromName (fontValue);
+						if (!selectionDialog.Run ()) {
 							return;
 						}
-						fontValue = selectionDialog.FontName;
-						if (fontValue == FontService.FilterFontName (FontService.GetFont (desc.Name).FontDescription))
-							fontValue = FontService.GetFont (desc.Name).FontDescription;
+						fontValue = selectionDialog.SelectedFont.ToString ();
+						if (fontValue == IdeServices.FontService.FilterFontName (IdeServices.FontService.GetFontDescriptionCodon (desc.Name).FontDescription))
+							fontValue = IdeServices.FontService.GetFontDescriptionCodon (desc.Name).FontDescription;
 						SetFont (desc.Name, fontValue);
-						setFontButton.Label = selectionDialog.FontName;
-					} finally {
-						selectionDialog.Destroy ();
-						selectionDialog.Dispose ();
-					}
+						setFontButton.Label = GetDisplayDescription (selectionDialog.SelectedFont);
+					});
 				};
 				hBox.PackStart (setFontButton, true, true, 0);
 
 				var setDefaultFontButton = new Button ();
 				setDefaultFontButton.Label = GettextCatalog.GetString ("Set To Default");
 				setDefaultFontButton.Clicked += delegate {
-					SetFont (desc.Name, FontService.GetFont (desc.Name).FontDescription);
-					setFontButton.Label = FontService.FilterFontName (GetFont (desc.Name));
+					SetFont (desc.Name, IdeServices.FontService.GetFontDescriptionCodon (desc.Name).FontDescription);
+					setFontButton.Label = GetDisplayDescription (IdeServices.FontService.GetFont (desc.Name));
 				};
 				hBox.PackStart (setDefaultFontButton, false, false, 0);
 				mainBox.PackStart (hBox, false, false, 0);
 			}
 			mainBox.ShowAll ();
+		}
+
+		private string GetDisplayDescription (Font selectedFont)
+		{
+#if MAC
+			var nsFont = selectedFont.ToNSFont ();
+			return nsFont.DisplayName + " " + nsFont.PointSize;
+#else
+			return selectedFont.ToString ();
+#endif
 		}
 	}
 }

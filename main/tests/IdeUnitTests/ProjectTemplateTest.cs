@@ -58,14 +58,10 @@ namespace IdeUnitTests
 				templatingService = new TemplatingService ();
 			}
 
-			if (!IdeApp.IsInitialized) {
-				IdeApp.Initialize (Util.GetMonitor ());
-			}
-
 			this.templateId = templateId;
 
 			SolutionDirectory = Util.CreateTmpDir (basename);
-			CreateNuGetConfigFile (SolutionDirectory);
+			CreateNuGetConfigFile (this);
 			ProjectName = GetProjectName (templateId);
 
 			Config = new NewProjectConfiguration {
@@ -81,7 +77,7 @@ namespace IdeUnitTests
 			Directory.CreateDirectory (Config.ProjectLocation);
 		}
 
-		public async Task<SolutionTemplate> CreateAndBuild ()
+		public async Task<SolutionTemplate> CreateAndBuild (Action<Solution> preBuildChecks = null)
 		{
 			var template = FindTemplate ();
 			var result = await templatingService.ProcessTemplate (template, Config, null);
@@ -89,37 +85,30 @@ namespace IdeUnitTests
 			Solution = result.WorkspaceItems.FirstOrDefault () as Solution;
 			await Solution.SaveAsync (Util.GetMonitor ());
 
+			if (preBuildChecks != null) {
+				preBuildChecks (Solution);
+			}
+
 			// RestoreDisableParallel prevents parallel restores which sometimes cause
 			// the restore to fail on Mono.
-			RunMSBuild ($"/t:Restore /p:RestoreDisableParallel=true \"{Solution.FileName}\"");
-			RunMSBuild ($"/t:Build \"{Solution.FileName}\"");
+			Util.RunMSBuild ($"/t:Restore /p:RestoreDisableParallel=true \"{Solution.FileName}\"");
+			Util.RunMSBuild ($"/t:Build \"{Solution.FileName}\"");
 
 			return template;
 		}
 
-		void RunMSBuild (string arguments)
-		{
-			var process = new Process ();
-			process.StartInfo = new ProcessStartInfo ("msbuild", arguments) {
-				RedirectStandardOutput = true,
-				UseShellExecute = false
-			};
-			process.Start ();
-			var standardError = $"Error: {process.StandardOutput.ReadToEnd ()}";
+		protected virtual string GetExtraNuGetSources () => string.Empty;
 
-			Assert.IsTrue (process.WaitForExit (240000), "Timed out waiting for MSBuild.");
-			Assert.AreEqual (0, process.ExitCode, $"msbuild {arguments} failed. Exit code: {process.ExitCode}. {standardError}");
-		}
-
-		static void CreateNuGetConfigFile (FilePath directory)
+		static void CreateNuGetConfigFile (ProjectTemplateTest test)
 		{
-			var fileName = directory.Combine ("NuGet.Config");
+			var fileName = test.SolutionDirectory.Combine ("NuGet.Config");
 
 			string xml =
 				"<configuration>\r\n" +
 				"  <packageSources>\r\n" +
 				"    <clear />\r\n" +
 				"    <add key=\"NuGet v3 Official\" value=\"https://api.nuget.org/v3/index.json\" />\r\n" +
+				test.GetExtraNuGetSources () +
 				"  </packageSources>\r\n" +
 				"</configuration>";
 

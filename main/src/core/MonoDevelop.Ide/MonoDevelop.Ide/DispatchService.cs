@@ -164,11 +164,16 @@ namespace MonoDevelop.Ide
 		static DateTime lastPendingEvents;
 		internal static void RunPendingEvents ()
 		{
+			RunPendingEvents (500);
+		}
+
+		internal static void RunPendingEvents (int minRunInterval)
+		{
 			// The loop is limited to 1000 iterations as a workaround for an issue that some users
 			// have experienced. Sometimes EventsPending starts return 'true' for all iterations,
 			// causing the loop to never end.
 			//
-			// The loop is also limited to running at most twice a second as some of the classes
+			// The loop is also by default limited to running at most twice a second as some of the classes
 			// inheriting from BaseProgressMonitor call RunPendingEvents for every method invocation.
 			// This means we pump the main loop dozens of times a second resulting in many screen
 			// redraws and significantly slow down the running task.
@@ -180,7 +185,7 @@ namespace MonoDevelop.Ide
 
 			// Check for less than zero in case there's a system time change
 			var diff = DateTime.UtcNow - lastPendingEvents;
-			if (diff > TimeSpan.FromMilliseconds (500) || diff < TimeSpan.Zero) {
+			if (diff > TimeSpan.FromMilliseconds (minRunInterval) || diff < TimeSpan.Zero) {
 				lastPendingEvents = DateTime.UtcNow;
 				while (Gtk.Application.EventsPending () && sw.ElapsedMilliseconds < maxLength) {
 					Gtk.Application.RunIteration (false);
@@ -191,7 +196,35 @@ namespace MonoDevelop.Ide
 
 			Gdk.Threads.Leave();
 		}
-		
+
+		/// <summary>
+		/// This method executes an async method on the main thread, but does not
+		/// technically block the calling thread. It does however "loop" and pumps
+		/// events in the mean time. This is a workaround for times when some of our
+		/// model (which is aync) is called by an external party (i.e. Roslyn) which
+		/// does not support async methods and potentially causes a deadlock. 
+		/// </summary>
+		/// <param name="asyncMethod"></param>
+		/// <remarks>See: https://github.com/mono/monodevelop/pull/7823</remarks>
+		internal static void PumpingWait (Func<Task> asyncMethod)
+		{
+			// This method can be called by Roslyn or the editor in a context which is not the GTK UI context
+			// that MonoDevelop uses. In that case, before starting async an operation that may queue
+			// task continuations into the current context, we switch to the GTK context, so that
+			// whatever is queued will be dispatched when we run RunPendingEvents.
+			var oldContext = SynchronizationContext.Current;
+			try {
+				SynchronizationContext.SetSynchronizationContext (Runtime.MainSynchronizationContext);
+				Task task = asyncMethod (); 
+				// Can't wait for the task to finish synchronously since doing so would deadlock the UI thread.
+				while (task != null && !task.IsCompleted) {
+					DispatchService.RunPendingEvents (30);
+				}
+			} finally {
+				SynchronizationContext.SetSynchronizationContext (oldContext);
+			}
+		}
+
 		#region Animations
 
 		/// <summary>

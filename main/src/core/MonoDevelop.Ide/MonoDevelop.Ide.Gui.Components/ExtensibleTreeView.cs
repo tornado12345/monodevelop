@@ -397,7 +397,13 @@ namespace MonoDevelop.Ide.Gui.Components
 				else if (!(nb is NodeBuilderExtension))
 					throw new InvalidOperationException (string.Format ("Invalid NodeBuilder type: {0}. NodeBuilders must inherit either from TypeNodeBuilder or NodeBuilderExtension", nb.GetType()));
 			}
-
+			if (NodeBuilders != null) {
+				var builderHash = new HashSet<NodeBuilder> (builders);
+				foreach (var builder in NodeBuilders) {
+					if (!builderHash.Contains (builder))
+						builder.Dispose ();
+				}
+			}
 			NodeBuilders = builders.ToArray ();
 
 			foreach (NodeBuilder nb in builders)
@@ -503,7 +509,7 @@ namespace MonoDevelop.Ide.Gui.Components
 						var rect = text_render.GetStatusIconArea (tree, cellArea);
 						if (cx >= rect.X && cx <= rect.Right) {
 							tree.ConvertBinWindowToWidgetCoords (rect.X, rect.Y, out rect.X, out rect.Y);
-							ShowStatusMessage (it, rect, info);
+							ShowStatusMessage (path, rect, info);
 							popupShown = true;
 						}
 					}
@@ -514,17 +520,17 @@ namespace MonoDevelop.Ide.Gui.Components
 		}
 
 		bool statusMessageVisible;
-		Gtk.TreeIter statusIconIter;
+		Gtk.TreePath statusIconPath;
 		TooltipPopoverWindow statusPopover;
 
-		void ShowStatusMessage (Gtk.TreeIter it, Gdk.Rectangle rect, NodeInfo info)
+		void ShowStatusMessage (Gtk.TreePath path, Gdk.Rectangle rect, NodeInfo info)
 		{
-			if (statusMessageVisible && store.GetPath (it).Equals (store.GetPath (statusIconIter)))
+			if (statusMessageVisible && path.Equals (statusIconPath))
 				return;
 			if (statusPopover != null)
 				statusPopover.Destroy ();
 			statusMessageVisible = true;
-			statusIconIter = it;
+			statusIconPath = path;
 
 			statusPopover = TooltipPopoverWindow.Create ();
 			statusPopover.ShowArrow = true;
@@ -1262,19 +1268,12 @@ namespace MonoDevelop.Ide.Gui.Components
 
 			try {
 				LockUpdates ();
-				TreeNodeNavigator node = (TreeNodeNavigator) GetSelectedNode ();
-				if (node != null) {
-					NodeBuilder[] chain = node.NodeBuilderChain;
-					NodePosition pos = node.CurrentPosition;
-					foreach (NodeBuilder b in chain) {
-						NodeCommandHandler handler = b.CommandHandler;
-						handler.SetCurrentNode (node);
-						if (handler.CanDropMultipleNodes (copyObjects, currentTransferOperation, DropPosition.Into)) {
-							node.MoveToPosition (pos);
-							handler.OnMultipleNodeDrop (copyObjects, currentTransferOperation, DropPosition.Into);
-						}
-						node.MoveToPosition (pos);
-					}
+				var node = (TreeNodeNavigator) GetSelectedNode ();
+
+				if (!TryHandlePaste(node, copyObjects, currentTransferOperation, false, false)) {
+					// if the current node can't handle the data, try to paste it into the parent node
+					if (node.MoveToParent ())
+						TryHandlePaste (node, copyObjects, currentTransferOperation, false, true);
 				}
 				if (currentTransferOperation == DragOperation.Move)
 					CancelTransfer ();
@@ -1290,24 +1289,33 @@ namespace MonoDevelop.Ide.Gui.Components
 				info.Bypass = true;
 				return;
 			}
+			var node = (TreeNodeNavigator)GetSelectedNode ();
+			info.Enabled = TryHandlePaste (node, copyObjects, currentTransferOperation, true, false);
+			// if the current node can't handle the data, see if the parent can
+			if (!info.Enabled && node.MoveToParent ()) 
+				info.Enabled = TryHandlePaste (node, copyObjects, currentTransferOperation, true, true);
+		}
 
-			if (copyObjects != null) {
-				TreeNodeNavigator node = (TreeNodeNavigator) GetSelectedNode ();
-				if (node != null) {
-					NodeBuilder[] chain = node.NodeBuilderChain;
-					NodePosition pos = node.CurrentPosition;
-					foreach (NodeBuilder b in chain) {
-						NodeCommandHandler handler = b.CommandHandler;
-						handler.SetCurrentNode (node);
-						if (handler.CanDropMultipleNodes (copyObjects, currentTransferOperation, DropPosition.Into)) {
-							info.Enabled = true;
-							return;
-						}
+		static bool TryHandlePaste (TreeNodeNavigator node, object[] copyObjects, DragOperation currentTransferOperation, bool simulatePaste, bool parentDrop)
+		{
+			if (node == null || copyObjects == null || copyObjects.Length == 0)
+				return false;
+			var pos = node.CurrentPosition;
+			foreach (var b in node.NodeBuilderChain) {
+				var handler = b.CommandHandler;
+				handler.SetCurrentNode (node);
+				if (parentDrop && !handler.CanHandleDropFromChild (copyObjects, currentTransferOperation, DropPosition.Into))
+					return false;
+				if (handler.CanDropMultipleNodes (copyObjects, currentTransferOperation, DropPosition.Into)) {
+					if (!simulatePaste) {
 						node.MoveToPosition (pos);
+						handler.OnMultipleNodeDrop (copyObjects, currentTransferOperation, DropPosition.Into);
 					}
+					return true;
 				}
+				node.MoveToPosition (pos);
 			}
-			info.Enabled = false;
+			return false;
 		}
 
 		void CancelTransfer ()
@@ -1967,6 +1975,7 @@ namespace MonoDevelop.Ide.Gui.Components
 				if (options.Length > 0) {
 					CommandEntrySet opset = new CommandEntrySet ();
 					opset.AddItem (ViewCommands.TreeDisplayOptionList);
+					opset.AddItem (ProjectCommands.ToggleFileNesting);
 					opset.AddItem (Command.Separator);
 					opset.AddItem (ViewCommands.ResetTreeDisplayOptions);
 					return opset;
@@ -1987,6 +1996,7 @@ namespace MonoDevelop.Ide.Gui.Components
 				if (!tnav.Clone ().MoveToParent ()) {
 					CommandEntrySet opset = eset.AddItemSet (GettextCatalog.GetString ("Display Options"));
 					opset.AddItem (ViewCommands.TreeDisplayOptionList);
+					opset.AddItem (ProjectCommands.ToggleFileNesting);
 					opset.AddItem (Command.Separator);
 					opset.AddItem (ViewCommands.ResetTreeDisplayOptions);
 				//	opset.AddItem (ViewCommands.CollapseAllTreeNodes);
@@ -2151,8 +2161,11 @@ namespace MonoDevelop.Ide.Gui.Components
 				SelectionChanged (this, EventArgs.Empty);
 		}
 
+		public bool IsDestroyed { get; set; }
+
 		void Destroy ()
 		{
+			IsDestroyed = true;
 			IdeApp.Preferences.CustomPadFont.Changed -= CustomFontPropertyChanged;
 			if (pix_render != null) {
 				pix_render.Destroy ();
@@ -2167,11 +2180,6 @@ namespace MonoDevelop.Ide.Gui.Components
 				text_render = null;
 			}
 
-			if (store != null) {
-				Clear ();
-				store = null;
-			}
-
 			if (builders != null) {
 				foreach (NodeBuilder nb in builders) {
 					try {
@@ -2182,6 +2190,12 @@ namespace MonoDevelop.Ide.Gui.Components
 				}
 				builders = null;
 			}
+
+			if (store != null) {
+				Clear ();
+				store = null;
+			}
+
 			builderChains.Clear ();
 		}
 
@@ -2221,6 +2235,8 @@ namespace MonoDevelop.Ide.Gui.Components
 
 			public ITreeBuilder GetTreeBuilder ()
 			{
+				if (pad.IsDestroyed)
+					throw new InvalidOperationException ("TreeView is destroyed.");
 				Gtk.TreeIter iter;
 				if (!pad.store.GetIterFirst (out iter))
 					return pad.CreateBuilder (Gtk.TreeIter.Zero);
@@ -2399,7 +2415,6 @@ namespace MonoDevelop.Ide.Gui.Components
 
 			ExtensibleTreeView parent;
 			Gdk.Rectangle buttonScreenRect;
-			Gdk.Rectangle buttonAllocation;
 			string markup;
 			string secondarymarkup;
 
@@ -2614,10 +2629,6 @@ namespace MonoDevelop.Ide.Gui.Components
 			}
 
 			public Gdk.Point PointerPosition { get; set; }
-
-			public Gdk.Rectangle PopupAllocation {
-				get { return buttonAllocation; }
-			}
 
 			protected override void OnDestroyed ()
 			{

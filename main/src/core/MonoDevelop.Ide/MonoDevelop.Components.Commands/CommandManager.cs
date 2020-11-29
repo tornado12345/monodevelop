@@ -1,4 +1,4 @@
-//
+﻿//
 // CommandManager.cs
 //
 // Author:
@@ -46,7 +46,8 @@ using System.Threading;
 
 namespace MonoDevelop.Components.Commands
 {
-	public class CommandManager: IDisposable
+	[DefaultServiceImplementation (typeof (IdeCommandManager))]
+	public class CommandManager: Service, IDisposable
 	{
 		// Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/Versions/A/Headers/Events.h
 		enum JIS_VKS {
@@ -65,14 +66,15 @@ namespace MonoDevelop.Components.Commands
 		KeyboardShortcut[] chords;
 		string chord;
 		internal const int SlowCommandWarningTime = 25;
-		
+		internal const int SlowUpdateCommandTime = 250;
+
 		Dictionary<object,Command> cmds = new Dictionary<object,Command> ();
 		Hashtable handlerInfo = new Hashtable ();
 		List<ICommandBar> toolbars = new List<ICommandBar> ();
 		CommandTargetChain globalHandlerChain;
 		List<object> commandUpdateErrors = new List<object> ();
 		List<ICommandTargetVisitor> visitors = new List<ICommandTargetVisitor> ();
-		LinkedList<Gtk.Window> topLevelWindows = new LinkedList<Gtk.Window> ();
+		LinkedList<Window> topLevelWindows = new LinkedList<Window> ();
 		Stack delegatorStack = new Stack ();
 
 		HashSet<object> visitedTargets = new HashSet<object> ();
@@ -85,13 +87,13 @@ namespace MonoDevelop.Components.Commands
 		
 		// Fields used to keep track of the application focus
 		bool appHasFocus;
-		Gtk.Window lastFocused;
+		Window lastFocused;
 		DateTime focusCheckDelayTimeout = DateTime.MinValue;
 		
 		internal static readonly object CommandRouteTerminator = new object ();
 		
 		internal bool handlerFoundInMulticast;
-		Gtk.Widget lastActiveWidget;
+		Control lastActiveWidget;
 
 #if MAC
 		Foundation.NSObject keyMonitor;
@@ -106,6 +108,9 @@ namespace MonoDevelop.Components.Commands
 				return conflicts;
 			}
 		}
+
+		WeakReference lastCommandTarget;
+		internal object LastCommandTarget => lastCommandTarget?.Target; 
 
 		public CommandManager (): this (null)
 		{
@@ -242,11 +247,7 @@ namespace MonoDevelop.Components.Commands
 		/// </param>
 		public CommandEntrySet CreateCommandEntrySet (string addinPath)
 		{
-			CommandEntrySet cset = new CommandEntrySet ();
-			object[] items = AddinManager.GetExtensionObjects (addinPath, false);
-			foreach (CommandEntry e in items)
-				cset.Add (e);
-			return cset;
+			return CreateCommandEntrySet (AddinManager.AddinEngine, addinPath);
 		}
 		
 		bool isEnabled = true;
@@ -309,6 +310,13 @@ namespace MonoDevelop.Components.Commands
 #if MAC
 		AppKit.NSEvent OnNSEventKeyPress (AppKit.NSEvent ev)
 		{
+			// Protect against non-keyevents being passed here. See VSTS #935180. It seems that certain
+			// keyboard remapper applications such as Ukuele can cause non-keyevents to be sent to key event handlers.
+			if (ev.Type != AppKit.NSEventType.KeyDown && ev.Type != AppKit.NSEventType.KeyUp) {
+				LoggingService.LogInternalError (new Exception ($"Event is type {ev.Type} and not a KeyEvent"));
+				return null;
+			}
+
 			// If we have a native window that can handle this command, let it process
 			// the keys itself and do not go through the command manager.
 			// Events in Gtk windows do not pass through here except when they're done
@@ -334,19 +342,24 @@ namespace MonoDevelop.Components.Commands
 				{
 					// If the window is a gtk window and is registered in the command manager
 					// process the events through the handler.
-					var gtkWindow = MonoDevelop.Components.Mac.GtkMacInterop.GetGtkWindow(window);
-					if (gtkWindow != null && !TopLevelWindowStack.Contains(gtkWindow))
+					var gtkWindow = Mac.GtkMacInterop.GetGtkWindow(window);
+					if (gtkWindow != null &&
+						!TopLevelWindowStack.Select (x => x.nativeWidget).Contains (gtkWindow)) {
+						// the above is slightly more contrived than using a simple .Any statement
+						// because of a Roslyn bug that could potentially affect our performance
+						// see here: https://github.com/dotnet/roslyn/issues/20777
 						return null;
+					}
 				}
 			}
 
 			// If a modal dialog is running then the menus are disabled, even if the commands are not
 			// See MDMenuItem::IsGloballyDisabled
-			if (DesktopService.IsModalDialogRunning ()) {
+			if (IdeServices.DesktopService.IsModalDialogRunning ()) {
 				return ev;
 			}
 
-			var gdkev = MonoDevelop.Components.Mac.GtkMacInterop.ConvertKeyEvent (ev);
+			var gdkev = Mac.GtkMacInterop.ConvertKeyEvent (ev);
 			if (gdkev != null) {
 				if (ProcessKeyEvent (gdkev))
 					return null;
@@ -424,6 +437,49 @@ namespace MonoDevelop.Components.Commands
 			}
 			return false;
 		}
+
+		void SimulateKeyDownInView (AppKit.NSView view, AppKit.NSEvent currentEvent, AppKit.NSWindow window)
+		{
+			if (currentEvent.KeyCode == (ushort)AppKit.NSKey.Tab) {
+				var expectedKeyView = FindValidKeyView (view);
+				AppKit.NSView next = null;
+				if (currentEvent.ModifierFlags.HasFlag (AppKit.NSEventModifierMask.ShiftKeyMask)) {
+					next = expectedKeyView.PreviousValidKeyView;
+				} else {
+					next = expectedKeyView.NextValidKeyView;
+				}
+
+				view.KeyDown (currentEvent);
+				if (next != null && window?.FirstResponder != next) {
+					window.MakeFirstResponder (next);
+				}
+			} else {
+				view.KeyDown (currentEvent);
+			}
+		}
+
+		private void SimulateViewKeyActionBehaviour (AppKit.NSView view, AppKit.NSEvent currentEvent)
+		{
+			if (view is AppKit.NSButton btn && (currentEvent.KeyCode == (ushort)AppKit.NSKey.Space || currentEvent.KeyCode == (ushort)AppKit.NSKey.Return)) {
+				btn.PerformClick (btn);
+			}
+		}
+
+		static AppKit.NSView FindValidKeyView (AppKit.NSView view)
+		{
+			if (view == null)
+				return null;
+
+			if (view.AcceptsFirstResponder ()) {
+				if (view.Superview?.Superview is AppKit.NSControl control && control.CurrentEditor == view) {
+					return FindValidKeyView (control);
+				}
+				return view;
+			}
+
+			return FindValidKeyView (view.Superview);
+		}
+
 #endif
 
 		[GLib.ConnectBefore]
@@ -435,17 +491,91 @@ namespace MonoDevelop.Components.Commands
 		[GLib.ConnectBefore]
 		void OnKeyReleased (object o, Gtk.KeyReleaseEventArgs e)
 		{
+#if MAC
+			var currentEvent = AppKit.NSApplication.SharedApplication?.CurrentEvent;
+			var window = currentEvent?.Window;
+			var firstResponder = window?.FirstResponder;
+
+			bool retVal = false;
+
+			// GTK eats FlagsChanged events and this is just to inform
+			// modifier keys changed state, hence always send it to
+			// focused view
+			if (currentEvent != null &&
+				currentEvent.Type == AppKit.NSEventType.FlagsChanged &&
+				firstResponder != null &&
+				firstResponder != window.ContentView) {
+				firstResponder.FlagsChanged (currentEvent);
+			}
+#endif
 			bool complete;
 			// KeyboardShortcut[] accels = 
 			KeyBindingManager.AccelsFromKey (e.Event, out complete);
+
+			if (currentEvent != null &&
+				currentEvent.Type == AppKit.NSEventType.KeyUp &&
+				firstResponder is AppKit.NSView view &&
+				view != window.ContentView) {
+
+				view.KeyUp (currentEvent);
+				SimulateViewKeyActionBehaviour (view, currentEvent);
+				retVal = true;
+			}
 
 			if (!complete) {
 				// incomplete accel
 				NotifyIncompleteKeyReleased (e.Event);
 			}
+
+			e.RetVal = retVal;
 		}
 
 		internal bool ProcessKeyEvent (Gdk.EventKey ev)
+		{
+#if MAC
+			var currentEvent = AppKit.NSApplication.SharedApplication?.CurrentEvent;
+			var window = currentEvent?.Window;
+			var firstResponder = window?.FirstResponder;
+
+			// GTK eats FlagsChanged events and this is just to inform
+			// modifier keys changed state, hence always send it to
+			// focused view
+			if (currentEvent != null &&
+				currentEvent.Type == AppKit.NSEventType.FlagsChanged &&
+				firstResponder != null &&
+				firstResponder != window.ContentView) {
+				firstResponder.FlagsChanged (currentEvent);
+			}
+#endif
+			// Handle the GDK key via MD commanding
+			try {
+				if (ProcessKeyEventCore (ev)) {
+					return true;
+				}
+			} catch (Exception ex) {
+				LoggingService.LogInternalError ("Exception while parsing command", ex);
+				return false;
+			}
+
+#if MAC
+			// Otherwise if we have a native first responder that is not the GdkQuartzView
+			// that contains the entire GTK shell, dispatch the key directly to the native
+			// NSResponder and tell GTK to get out of our way.
+
+			if (currentEvent != null &&
+				currentEvent.Type == AppKit.NSEventType.KeyDown &&
+				firstResponder is AppKit.NSView view &&
+				view != window.ContentView) {
+
+				SimulateKeyDownInView (view, currentEvent, window);
+				
+				return true;
+			}
+#endif
+			return false;
+		}
+
+		bool ProcessKeyEventCore (Gdk.EventKey ev)
 		{
 			if (!IsEnabled)
 				return true;
@@ -494,6 +624,10 @@ namespace MonoDevelop.Components.Commands
 				return false;
 			}
 
+			if (commands == null || commands.Count == 0) {
+				return false;
+			}
+
 			var toplevelFocus = IdeApp.Workbench.HasToplevelFocus;
 
 			var conflict = new List<Command> ();
@@ -502,9 +636,20 @@ namespace MonoDevelop.Components.Commands
 			var dispatched = false;
 
 			for (int i = 0; i < commands.Count; i++) {
-				CommandInfo cinfo = GetCommandInfo (commands[i].Id, new CommandTargetRoute ());
-				if (cinfo.IsUpdatingAsynchronously)
-					cinfo.UpdateTask.Wait (); // Not nice, but we need a synchronous result here
+				CommandInfo cinfo = GetCommandInfo (commands [i].Id, new CommandTargetRoute ());
+				if (cinfo.IsUpdatingAsynchronously) {
+					// Not nice, but we need a synchronous result here
+					if (!cinfo.UpdateTask.Wait (SlowUpdateCommandTime)) {
+						cinfo.CancelAsyncUpdate ();
+						LoggingService.LogError ("Slow command update task timed out: Command:{0}", commands [i].Id);
+						var metadata = new UpdateCommandInfoCounterMetadata {
+							CommandId = commands [i].Id.ToString ()
+						};
+						Counters.UpdateCommandTimeoutInfo.Inc (metadata);
+						KeyBindingFailed?.Invoke (this, new KeyBindingFailedEventArgs (GettextCatalog.GetString ("Initializing '{0}' ({1}) command failed.", commands [i].DisplayName, KeyBindingManager.BindingToDisplayLabel (binding.ToString (), false))));
+					}
+				}
+
 				if (cinfo.Bypass) {
 					bypass = true;
 					continue;
@@ -513,6 +658,11 @@ namespace MonoDevelop.Components.Commands
 				if (cinfo.Enabled && cinfo.Visible) {
 					if (!dispatched)
 						dispatched = DispatchCommand (commands [i].Id, null, null, CommandSource.Keybinding, ev.Time, cinfo);
+					// A nested pumping wait could possibly queue the next task to run
+					// on the UI scheduler, thus have CommandManager.Dispose run after
+					// UpdateTask.Wait() is called.
+					if (disposed || !bindings.BindingExists (binding))
+						break;
 					conflict.Add (commands [i]);
 				} else
 					bypass = true; // allow Gtk to handle the event if the command is disabled
@@ -673,11 +823,11 @@ namespace MonoDevelop.Components.Commands
 			RegisterTopWindow (rootWidget);
 		}
 
-		internal IEnumerable<Gtk.Window> TopLevelWindowStack {
+		internal IEnumerable<MonoDevelop.Components.Window> TopLevelWindowStack {
 			get { return topLevelWindows; }
 		}
-		
-		internal void RegisterTopWindow (Gtk.Window win)
+
+		internal void RegisterTopWindow (Window win)
 		{
 			if (topLevelWindows.First != null && topLevelWindows.First.Value == win)
 				return;
@@ -692,18 +842,20 @@ namespace MonoDevelop.Components.Commands
 			// before doing any change to the topLevelWindows list
 			EndWaitingForUserInteraction ();
 
-			var node = topLevelWindows.Find (win);
+			var node = topLevelWindows.FirstOrDefault (s => s.nativeWidget.Equals (win.nativeWidget));
 			if (node != null) {
-				if (win.HasToplevelFocus) {
+				if (win.HasFocus) {
 					topLevelWindows.Remove (node);
-					topLevelWindows.AddFirst (node);
+					topLevelWindows.AddFirst (win);
 				}
 			} else {
 				topLevelWindows.AddFirst (win);
-				win.KeyPressEvent += OnKeyPressed;
-				win.KeyReleaseEvent += OnKeyReleased;
-				win.ButtonPressEvent += HandleButtonPressEvent;
-				win.Destroyed += TopLevelDestroyed;
+				if (win.nativeWidget is Gtk.Window gtkWin) {
+					gtkWin.KeyPressEvent += OnKeyPressed;
+					gtkWin.KeyReleaseEvent += OnKeyReleased;
+					gtkWin.ButtonPressEvent += HandleButtonPressEvent;
+					gtkWin.Destroyed += TopLevelDestroyed;
+				}
 			}
 		}
 
@@ -732,24 +884,27 @@ namespace MonoDevelop.Components.Commands
 			}
 #endif
 
-			if (w == lastFocused)
+			if (w == lastFocused?.nativeWidget)
 				lastFocused = null;
 		}
 		
 		public void Dispose ()
 		{
 			disposed = true;
-			if (bindings != null) {
-				bindings.Dispose ();
-				bindings = null;
-			}
-
 #if MAC
+			// Remove the keyMonitor before the bindings, as it can cause
+			// a crash on quitting after opening the IDE without loading keybindings
 			if (keyMonitor != null) {
 				AppKit.NSEvent.RemoveMonitor (keyMonitor);
 				keyMonitor = null;
 			}
 #endif
+
+			if (bindings != null) {
+				bindings.Dispose ();
+				bindings = null;
+			}
+
 			lastFocused = null;
 		}
 		
@@ -1419,6 +1574,7 @@ namespace MonoDevelop.Components.Commands
 			return DispatchCommand (commandId, dataItem, initialTarget, source, null, sourceUpdateInfo);
 		}
 
+		readonly Stopwatch dispatchStopwatch = new Stopwatch ();
 		internal bool DispatchCommand (object commandId, object dataItem, object initialTarget, CommandSource source, uint? time, CommandInfo sourceUpdateInfo)
 		{
 			// (*) Before executing the command, DispatchCommand executes the command update handler to make sure the command is enabled in the given
@@ -1466,13 +1622,12 @@ namespace MonoDevelop.Components.Commands
 				object cmdTarget = GetFirstCommandTarget (targetRoute);
 				CommandInfo info = new CommandInfo (cmd);
 
-				while (cmdTarget != null)
-				{
-					HandlerTypeInfo typeInfo = GetTypeHandlerInfo (cmdTarget);
-					
+				while (cmdTarget != null) {
+					ICustomCommandTarget typeInfo = GetTypeHandlerInfo (cmdTarget);
+
 					bool bypass = false;
-					
-					CommandUpdaterInfo cui = typeInfo.GetCommandUpdater (commandId);
+
+					ICommandUpdater cui = typeInfo.GetCommandUpdater (commandId);
 					if (cui != null) {
 						if (sourceUpdateInfo != null && cmdTarget == sourceUpdateInfo.SourceTarget && sourceUpdateInfo.IsUpdatingAsynchronously) {
 							// If the source update info was provided and it was part of an asynchronous command update, reuse it to avoid
@@ -1501,28 +1656,30 @@ namespace MonoDevelop.Components.Commands
 					}
 					
 					if (!bypass) {
-						CommandHandlerInfo chi = typeInfo.GetCommandHandler (commandId);
+						ICommandHandler chi = typeInfo.GetCommandHandler (commandId);
 						if (chi != null) {
 							object localTarget = cmdTarget;
 							if (cmd.CommandArray) {
 								handlers.Add (delegate {
 									OnCommandActivating (commandId, info, dataItem, localTarget, source);
-									var t = DateTime.Now;
+									dispatchStopwatch.Restart ();
 									try {
 										chi.Run (localTarget, cmd, dataItem);
 									} finally {
-										OnCommandActivated (commandId, info, dataItem, localTarget, source, DateTime.Now - t);
+										dispatchStopwatch.Stop ();
+										OnCommandActivated (commandId, info, dataItem, localTarget, source, dispatchStopwatch.Elapsed);
 									}
 								});
 							}
 							else {
 								handlers.Add (delegate {
 									OnCommandActivating (commandId, info, dataItem, localTarget, source);
-									var t = DateTime.Now;
+									dispatchStopwatch.Restart ();
 									try {
 										chi.Run (localTarget, cmd);
 									} finally {
-										OnCommandActivated (commandId, info, dataItem, localTarget, source, DateTime.Now - t);
+										dispatchStopwatch.Stop ();
+										OnCommandActivated (commandId, info, dataItem, localTarget, source, dispatchStopwatch.Elapsed);
 									}
 								});
 							}
@@ -1579,11 +1736,12 @@ namespace MonoDevelop.Components.Commands
 			}
 			OnCommandActivating (cmd.Id, info, dataItem, target, source);
 
-			var t = DateTime.Now;
+			dispatchStopwatch.Restart ();
 			try {
 				cmd.DefaultHandler.InternalRun (dataItem);
 			} finally {
-				OnCommandActivated (cmd.Id, info, dataItem, target, source, DateTime.Now - t);
+				dispatchStopwatch.Stop ();
+				OnCommandActivated (cmd.Id, info, dataItem, target, source, dispatchStopwatch.Elapsed);
 			}
 			return true;
 		}
@@ -1594,7 +1752,7 @@ namespace MonoDevelop.Components.Commands
 				CommandActivating (this, new CommandActivationEventArgs (commandId, commandInfo, dataItem, target, source));
 		}
 		
-		void OnCommandActivated (object commandId, CommandInfo commandInfo, object dataItem, object target, CommandSource source, TimeSpan time)
+		internal void OnCommandActivated (object commandId, CommandInfo commandInfo, object dataItem, object target, CommandSource source, TimeSpan time)
 		{
 			if (CommandActivated != null)
 				CommandActivated (this, new CommandActivationEventArgs (commandId, commandInfo, dataItem, target, source, time));
@@ -1671,29 +1829,29 @@ namespace MonoDevelop.Components.Commands
 
 				object cmdTarget = GetFirstCommandTarget (targetRoute);
 
-				while (cmdTarget != null)
-				{
-					HandlerTypeInfo typeInfo = GetTypeHandlerInfo (cmdTarget);
-					CommandUpdaterInfo cui = typeInfo.GetCommandUpdater (commandId);
-					
+				while (cmdTarget != null) {
+					ICustomCommandTarget typeInfo = GetTypeHandlerInfo (cmdTarget);
+					ICommandUpdater cui = typeInfo.GetCommandUpdater (commandId);
 					bool bypass = false;
 					bool handlerFound = false;
 					
 					if (cui != null) {
 						if (cmd.CommandArray) {
 							info.ArrayInfo = new CommandArrayInfo (info);
-							cui.Run (cmdTarget, info.ArrayInfo);
+							if (IsEnabled)
+								cui.Run (cmdTarget, info.ArrayInfo);
 							if (!info.ArrayInfo.Bypass) {
-								if (guiLock > 0)
+								if (info.DisableOnShellLock && guiLock > 0)
 									info.Enabled = false;
 								handlerFound = true;
 							}
 						}
 						else {
 							info.Bypass = false;
-							cui.Run (cmdTarget, info);
+							if (IsEnabled)
+								cui.Run (cmdTarget, info);
 							if (!info.Bypass) {
-								if (guiLock > 0)
+								if (info.DisableOnShellLock && guiLock > 0)
 									info.Enabled = false;
 								handlerFound = true;
 							}
@@ -1721,7 +1879,7 @@ namespace MonoDevelop.Components.Commands
 						continue;
 					}
 					else if (!bypass && typeInfo.GetCommandHandler (commandId) != null) {
-						info.Enabled = guiLock == 0;
+						info.Enabled = !info.DisableOnShellLock || guiLock == 0;
 						info.Visible = true;
 						
 						return info;
@@ -1745,7 +1903,7 @@ namespace MonoDevelop.Components.Commands
 				CurrentCommand = null;
 			}
 
-			if (guiLock > 0)
+			if (info.DisableOnShellLock && guiLock > 0)
 				info.Enabled = false;
 			return info;
 		}
@@ -1763,10 +1921,12 @@ namespace MonoDevelop.Components.Commands
 			}
 			if (cmd.CommandArray) {
 				info.ArrayInfo = new CommandArrayInfo (info);
-				cmd.DefaultHandler.InternalUpdate (info.ArrayInfo);
+				if (IsEnabled)
+					cmd.DefaultHandler.InternalUpdate (info.ArrayInfo);
 			}
-			else
+			else if (IsEnabled)
 				cmd.DefaultHandler.InternalUpdate (info);
+			info.Enabled &= IsEnabled;
 		}
 		
 		/// <summary>
@@ -1803,7 +1963,36 @@ namespace MonoDevelop.Components.Commands
 			}
 			return null;
 		}
-		
+
+		/// <summary>
+		/// Visits the active command route
+		/// </summary>
+		/// <returns>
+		/// Visitor result
+		/// </returns>
+		/// <param name='visitor'>
+		/// Visitor.
+		/// </param>
+		/// <param name='initialTarget'>
+		/// Initial target (provide null to use the default initial target)
+		/// </param>
+		public object VisitCommandTargets (Func<object,bool> visitor, object initialTarget)
+		{
+			CommandTargetRoute targetRoute = new CommandTargetRoute (initialTarget);
+			object cmdTarget = GetFirstCommandTarget (targetRoute);
+
+			try {
+				while (cmdTarget != null) {
+					if (visitor (cmdTarget))
+						return cmdTarget;
+
+					cmdTarget = GetNextCommandTarget (targetRoute, cmdTarget);
+				}
+			} catch (Exception ex) {
+				LoggingService.LogError ("Error while visiting command targets", ex);
+			}
+			return null;
+		}
 		internal bool DispatchCommandFromAccel (object commandId, object dataItem, object initialTarget)
 		{
 			// Dispatches a command that has been fired by an accelerator.
@@ -1882,11 +2071,14 @@ namespace MonoDevelop.Components.Commands
 				CommandDeselected (this, EventArgs.Empty);
 		}
 		
-		HandlerTypeInfo GetTypeHandlerInfo (object cmdTarget)
+		ICustomCommandTarget GetTypeHandlerInfo (object cmdTarget)
 		{
-			HandlerTypeInfo typeInfo = (HandlerTypeInfo) handlerInfo [cmdTarget.GetType ()];
+			if (cmdTarget is ICustomCommandTarget customtarget) {
+				return customtarget;
+			}
+
+			HandlerTypeInfo typeInfo = (HandlerTypeInfo)handlerInfo[cmdTarget.GetType ()];
 			if (typeInfo != null) return typeInfo;
-			
 			Type type = cmdTarget.GetType ();
 			typeInfo = new HandlerTypeInfo ();
 			
@@ -2009,10 +2201,10 @@ namespace MonoDevelop.Components.Commands
 			return h;
 		}
 
-		Gtk.Window GetCurrentFocusedTopLevelWindow ()
+		Window GetCurrentFocusedTopLevelWindow ()
 		{
 			foreach (var window in topLevelWindows) {
-				if (window.HasToplevelFocus)
+				if (window.HasFocus)
 					return window;
 			}
 			return rootWidget;
@@ -2049,7 +2241,11 @@ namespace MonoDevelop.Components.Commands
 				if (cmdTarget != null)
 					delegatorStack.Push (oldCmdTarget);
 				else
-					cmdTarget = GetNextCommandTarget (targetRoute, oldCmdTarget, true);
+					// The delegate is null. Return the next command target ignoring the delegate.
+					// In a previous version cmdTarget was assigned the result of GetNextCommandTarget, and the execution continued
+					// below. This is not correct since the GetNextCommandTarget call already does all processing (including
+					// the visitedTargets check), so it doesn't have to be done again.
+					return GetNextCommandTarget (targetRoute, oldCmdTarget, true);
 			}
 			else if (cmdTarget is ICommandDelegatorRouter) {
 				object oldCmdTarget = cmdTarget;
@@ -2106,12 +2302,20 @@ namespace MonoDevelop.Components.Commands
 			return null;
 		}
 		
-		Gtk.Window GetActiveWindow (Gtk.Window win)
+		Window GetActiveWindow (Window win)
 		{
-			Gtk.Window[] wins = Gtk.Window.ListToplevels ();
-			
-			bool hasFocus = false;
 			bool lastFocusedExists = lastFocused == null;
+			bool hasFocus = false;
+#if MAC
+			var nsWindow = AppKit.NSApplication.SharedApplication.KeyWindow;
+			hasFocus = nsWindow != null;
+			if (hasFocus) {
+				lastFocusedExists |= lastFocused?.nativeWidget == nsWindow;
+				lastFocused = win = nsWindow;
+			} else {
+#endif
+
+			Gtk.Window [] wins = Gtk.Window.ListToplevels ();
 			Gtk.Window newFocused = null;
 			foreach (Gtk.Window w in wins) {
 				if (w.Visible) {
@@ -2123,22 +2327,14 @@ namespace MonoDevelop.Components.Commands
 						if (win == null)
 							win = w;
 					}
-					if (lastFocused == w) {
-						lastFocusedExists = true;
-					}
+
+					lastFocusedExists |= lastFocused?.nativeWidget == w;
 				}
 			}
 
-#if MAC
-			if (!hasFocus) {
-				var nsWindow = AppKit.NSApplication.SharedApplication.KeyWindow;
-				hasFocus = nsWindow != null;
-				lastFocused = win = Mac.GtkMacInterop.GetGtkWindow (nsWindow);
-			} else {
-				lastFocused = newFocused;
-			}
-#else
 			lastFocused = newFocused;
+#if MAC
+			}
 #endif
 
 			UpdateAppFocusStatus (hasFocus, lastFocusedExists);
@@ -2146,57 +2342,106 @@ namespace MonoDevelop.Components.Commands
 			if (win != null && win.IsRealized) {
 				RegisterTopWindow (win);
 				return win;
-			}
-			else
+			} else
 				return null;
 		}
 		
-		object GetActiveWidget (Gtk.Window win)
+		object GetActiveWidget (Window win)
 		{
 			win = GetActiveWindow (win);
 
-			Gtk.Widget widget = win;
+			Control widget = win;
 			if (win != null) {
 
 				#if MAC
-				var nw = MonoDevelop.Components.Mac.GtkMacInterop.GetNSWindow (win);
+				var nw = win.nativeWidget as AppKit.NSWindow;
 				if (nw != null) {
 					var v = nw.FirstResponder as AppKit.NSView;
 					if (v != null && !IsRootGdkQuartzView (v)) {
+
+						ChangeActiveWidget (this, v);
+
 						if (IsEmbeddedNSView (v))
 							// FIXME: since there is no way to get the parent GTK widget of an embedded NSView,
 							// here we return a ICommandDelegatorRouter object that will cause the command route
 							// to continue with the active gtk widget once the NSView hierarchy has been inspected.
 							return new NSViewCommandRouter { ActiveView = v, ParentWidget = GetFocusedChild (widget) };
+
 						return v;
 					}
 				}
 				#endif
 
+				#if WINDOWS
+				var wpfWidget = GetFocusedWpfWidget();
+				if (wpfWidget != null) {
+					return wpfWidget;
+				}
+				#endif
+
 				widget = GetFocusedChild (widget);
 			}
-			if (widget != lastActiveWidget) {
-				if (ActiveWidgetChanged != null)
-					ActiveWidgetChanged (this, new ActiveWidgetEventArgs () { OldActiveWidget = lastActiveWidget, NewActiveWidget = widget });
-				lastActiveWidget = widget;
-			}
+
+			ChangeActiveWidget (this, widget);
 			return widget;
+
+			static void ChangeActiveWidget (CommandManager cmdManager, Control newWidget)
+			{
+				if (newWidget == cmdManager.lastActiveWidget) return;
+
+				cmdManager.ActiveWidgetChanged?.Invoke (cmdManager, new ActiveWidgetEventArgs () { OldActiveWidget = cmdManager.lastActiveWidget, NewActiveWidget = newWidget });
+				cmdManager.lastCommandTarget = new WeakReference (cmdManager.lastActiveWidget);
+				cmdManager.lastActiveWidget = newWidget;
+			}
 		}
 
-		Gtk.Widget GetFocusedChild (Gtk.Widget widget)
+#if WINDOWS
+
+		// Can't simply use Keyboard.FocusedElement because the focused element is the MenuItem
+		// when filling out the File menu.
+		// Also can't use FocusManager.GetFocusedElement() because it's not clear what to pass as
+		// the focus scope, as there isn't a single WPF "window", but rather isolated WPF "islands"
+		// and which one is the focused one?
+		// We remember the last focused element before the menu acquired focus and use that.
+		public static System.Windows.FrameworkElement LastFocusedWpfElement { get; set; }
+
+		Windows.GtkWPFWidget GetFocusedWpfWidget ()
 		{
-			while (widget is Gtk.Container) {
-				Gtk.Widget child = ((Gtk.Container)widget).FocusChild;
-				if (child != null)
-					widget = child;
-				else
-					break;
+			var focusedElement = System.Windows.Input.Keyboard.FocusedElement as System.Windows.FrameworkElement;
+			if (focusedElement == null) {
+				return null;
 			}
+
+			if (focusedElement is System.Windows.Controls.MenuItem && LastFocusedWpfElement != null) {
+				return LastFocusedWpfElement.Tag as Windows.GtkWPFWidget;
+			}
+
+			var widget = focusedElement.Tag as Windows.GtkWPFWidget;
 			return widget;
 		}
+#endif
 
-		#if MAC
-		class NSViewCommandRouter: ICommandDelegatorRouter
+		Gtk.Widget GetFocusedChild (Control widget)
+		{
+			Gtk.Container container;
+			if (widget?.nativeWidget is AppKit.NSWindow window)
+				widget = Mac.GtkMacInterop.GetGtkWindow (window)?.Child;
+			do {
+				container = widget?.nativeWidget is Gtk.Container ? widget.GetNativeWidget<Gtk.Container> () : null;
+				if (container != null) {
+					Gtk.Widget child = container.FocusChild;
+					if (child != null)
+						widget = child;
+					else
+						break;
+				}
+			} while (container != null);
+
+			return widget?.nativeWidget is Gtk.Widget ? widget : null;
+		}
+
+#if MAC
+		class NSViewCommandRouter : ICommandDelegatorRouter
 		{
 			public AppKit.NSView ActiveView;
 			public Gtk.Widget ParentWidget;
@@ -2308,8 +2553,10 @@ namespace MonoDevelop.Components.Commands
 			waitingForUserInteraction = true;
 			toolbarUpdaterRunning = false;
 			foreach (var win in topLevelWindows) {
-				win.MotionNotifyEvent += HandleWinMotionNotifyEvent;
-				win.FocusInEvent += HandleFocusInEventHandler;
+				if (!(win.nativeWidget is Gtk.Window gtkWindow))
+					continue;
+				gtkWindow.MotionNotifyEvent += HandleWinMotionNotifyEvent;
+				gtkWindow.FocusInEvent += HandleFocusInEventHandler;
 			}
 		}
 		
@@ -2319,8 +2566,10 @@ namespace MonoDevelop.Components.Commands
 				return;
 			waitingForUserInteraction = false;
 			foreach (var win in topLevelWindows) {
-				win.MotionNotifyEvent -= HandleWinMotionNotifyEvent;
-				win.FocusInEvent -= HandleFocusInEventHandler;
+				if (!(win.nativeWidget is Gtk.Window gtkWindow))
+					continue;
+				gtkWindow.MotionNotifyEvent -= HandleWinMotionNotifyEvent;
+				gtkWindow.FocusInEvent -= HandleFocusInEventHandler;
 			}
 
 			StartStatusUpdater ();
@@ -2511,12 +2760,12 @@ namespace MonoDevelop.Components.Commands
 		public Control NewActiveWidget { get; internal set; }
 	}
 
-	internal class HandlerTypeInfo
+	internal class HandlerTypeInfo : ICustomCommandTarget
 	{
 		public CommandHandlerInfo[] CommandHandlers;
 		public CommandUpdaterInfo[] CommandUpdaters;
 		
-		public CommandHandlerInfo GetCommandHandler (object commandId)
+		public ICommandHandler GetCommandHandler (object commandId)
 		{
 			if (CommandHandlers == null) return null;
 			foreach (CommandHandlerInfo cui in CommandHandlers)
@@ -2525,7 +2774,7 @@ namespace MonoDevelop.Components.Commands
 			return null;
 		}
 		
-		public CommandUpdaterInfo GetCommandUpdater (object commandId)
+		public ICommandUpdater GetCommandUpdater (object commandId)
 		{
 			if (CommandUpdaters == null) return null;
 			foreach (CommandUpdaterInfo cui in CommandUpdaters)
@@ -2561,7 +2810,7 @@ namespace MonoDevelop.Components.Commands
 		}
 	}
 	
-	internal class CommandHandlerInfo: CommandMethodInfo
+	internal class CommandHandlerInfo: CommandMethodInfo, ICommandHandler
 	{
 		ICommandTargetHandler  customHandlerChain;
 		ICommandArrayTargetHandler  customArrayHandlerChain;
@@ -2600,7 +2849,7 @@ namespace MonoDevelop.Components.Commands
 		}
 	}
 		
-	internal class CommandUpdaterInfo: CommandMethodInfo
+	internal class CommandUpdaterInfo: CommandMethodInfo, ICommandUpdater
 	{
 		ICommandUpdateHandler customHandlerChain;
 		ICommandArrayUpdateHandler customArrayHandlerChain;
@@ -2964,7 +3213,8 @@ namespace MonoDevelop.Components.Commands
 		Keybinding,
 		Unknown,
 		MacroPlayback,
-		WelcomePage
+		WelcomePage,
+		Startup,
 	}
 	
 	public class CommandTargetRoute

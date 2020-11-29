@@ -1,7 +1,7 @@
 ﻿namespace MonoDevelop.FSharp.Shared
 
 open System.Diagnostics
-open Microsoft.FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler.SourceCodeServices
 
 type SymbolKind =
     | Ident
@@ -48,7 +48,7 @@ module Lexer =
 
             let sourceTokenizer = FSharpSourceTokenizer(defines, None)
             let lines = String.getLines source
-            let mutable lexState = 0L
+            let mutable lexState = FSharpTokenizerLexState.Initial
             for line in lines do
                 yield lexState
                 let lineTokenizer = sourceTokenizer.CreateLineTokenizer line
@@ -75,7 +75,7 @@ module Lexer =
             Debug.Assert(line >= 0 && line < Array.length lexStates, "Should have lex states for every line.")
             lexStates.[line]
 
-    let singleLineQueryLexState _ _ _ = 0L
+    let singleLineQueryLexState _ _ _ = FSharpTokenizerLexState.Initial
 
     /// Return all tokens of current line
     let tokenizeLine source (args: string[]) line lineStr queryLexState =
@@ -150,22 +150,24 @@ module Lexer =
                     draftToken :: acc, Some draftToken
             ) ([], None)
         |> fst
-    
-    
-    let getTokensWithInitialState state lines filename defines =
-        [ let mutable state = state
-          let sourceTok = FSharpSourceTokenizer(defines, filename)
-          for lineText in lines do
-              let tokenizer = sourceTok.CreateLineTokenizer(lineText)
-              let rec parseLine() =
-                  [ match tokenizer.ScanToken(state) with
-                    | Some(tok), nstate ->
-                        state <- nstate
-                        yield tok
-                        yield! parseLine()
-                    | None, nstate -> state <- nstate ]
-              yield parseLine(), lineText ]
-    
+
+    let rec parseLine (tokenizer:FSharpLineTokenizer) tokens state =
+      match tokenizer.ScanToken(state) with
+      | Some tok, state ->
+          parseLine tokenizer (tok::tokens) state
+      | None, state -> tokens |> List.rev, state
+
+    let getTokensWithInitialState initialState lines filename defines =
+        let sourceTok = FSharpSourceTokenizer(defines, filename)
+        let res, _newState =
+            lines
+            |> List.mapFold(fun state line ->
+                                let tokenizer = sourceTok.CreateLineTokenizer(line)
+                                let tokens, newState = parseLine tokenizer [] state
+                                (tokens, line), newState
+                                ) initialState
+        res
+
     let findTokenAt col (tokens:FSharpTokenInfo list) =
         let isTokenAtOffset col (t:FSharpTokenInfo) = col-1 >= t.LeftColumn && col-1 <= t.RightColumn
         tokens |> List.tryFindBack (isTokenAtOffset col)

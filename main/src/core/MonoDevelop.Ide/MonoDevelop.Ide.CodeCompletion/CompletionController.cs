@@ -41,7 +41,8 @@ namespace MonoDevelop.Ide.CodeCompletion
 	/// The controller takes code completion data and keystrokes as input, and shows the
 	/// results in the code completion view.
 	/// </summary>
-	class CompletionController: IDisposable, IListDataProvider, ICompletionViewEventSink
+	[Obsolete]
+	class CompletionController : IDisposable, IListDataProvider, ICompletionViewEventSink
 	{
 		ICompletionView view;
 		ICompletionDataList dataList;
@@ -67,11 +68,6 @@ namespace MonoDevelop.Ide.CodeCompletion
 		/// Front end for the completion window
 		/// </summary>
 		CompletionListWindow listWindow;
-
-		/// <summary>
-		/// Completion context provided by the completion widget. Has information about the location of the caret.
-		/// </summary>
-		CodeCompletionContext context;
 
 		/// <summary>
 		/// The widget for which the completion window is shown
@@ -449,7 +445,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 		{
 			if (!object.ReferenceEquals (sender, mutableList))
 				return;
-			
+
 			view.ShowLoadingMessage ();
 		}
 
@@ -659,7 +655,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 		{
 			if (viewIndex < 0 || viewIndex >= filteredItems.Count)
 				return -1;
-			
+
 			if (InCategoryMode) {
 				foreach (var c in filteredCategories) {
 					if (viewIndex < c.Items.Count)
@@ -746,18 +742,20 @@ namespace MonoDevelop.Ide.CodeCompletion
 		{
 			if (dataList == null)
 				return;
-			Counters.ProcessCodeCompletion.Trace ("Begin filtering and sorting completion data");
+			CodeCompletionContext.Trace ("Begin filtering and sorting completion data");
 
-			var filterResult = dataList.FilterCompletionList (new CompletionListFilterInput (dataList, filteredItems, oldCompletionString, completionString));
+			var filterResult = dataList.FilterCompletionList (new CompletionListFilterInput (dataList, filteredItems, oldCompletionString, completionString) {
+				Tracer = text => CodeCompletionContext.Trace (text),
+			});
 
 			// If the data list doesn't have a custom filter method, use the default one
 			if (filterResult == null)
-				filterResult = MonoDevelop.Ide.CodeCompletion.CompletionDataList.DefaultFilterItems (dataList, filteredItems, oldCompletionString, completionString);
+				filterResult = MonoDevelop.Ide.CodeCompletion.CompletionDataList.DefaultFilterItems (dataList, filteredItems, oldCompletionString, completionString, text => CodeCompletionContext.Trace (text));
 
 			filteredItems = filterResult.FilteredItems;
 			filteredCategories = filterResult.CategorizedItems;
 
-			Counters.ProcessCodeCompletion.Trace ("End filtering and sorting completion data");
+			CodeCompletionContext.Trace ("End filtering and sorting completion data");
 
 			// Show the filtered items in the view
 			view.ShowFilteredItems (filterResult);
@@ -796,7 +794,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 			// If a handler did not pre-process the key, do it now
 			if (!keyHandled)
 				ka = PreProcessKey (descriptor);
-			
+
 			if ((ka & KeyActions.Complete) != 0)
 				CompleteWord (ref ka, descriptor);
 
@@ -806,7 +804,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 
 			if ((ka & KeyActions.Ignore) != 0)
 				return true;
-			
+
 			if ((ka & KeyActions.Process) != 0) {
 				if (descriptor.SpecialKey == SpecialKey.Left || descriptor.SpecialKey == SpecialKey.Right) {
 					// Close if there's a modifier active EXCEPT lock keys and Modifiers
@@ -1139,7 +1137,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 					item.InsertCompletionText (listWindow, ref ka, descriptor);
 				}
 				cache.CommitCompletionData (item);
-				OnWordCompleted (new CodeCompletionContextEventArgs (completionWidget, context, item.DisplayText));
+				OnWordCompleted (new CodeCompletionContextEventArgs (completionWidget, item.DisplayText));
 			} finally {
 				IsInCompletion = false;
 				HideWindow ();
@@ -1201,7 +1199,7 @@ namespace MonoDevelop.Ide.CodeCompletion
 
 		public void ToggleCategoryMode ()
 		{
-			IdeApp.Preferences.EnableCompletionCategoryMode.Set (!IdeApp.Preferences.EnableCompletionCategoryMode.Value); 
+			IdeApp.Preferences.EnableCompletionCategoryMode.Set (!IdeApp.Preferences.EnableCompletionCategoryMode.Value);
 			ResetSizes ();
 		}
 

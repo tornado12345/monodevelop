@@ -93,7 +93,9 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 		void IOptionsPanel.ApplyChanges ()
 		{
 			DefaultSourceEditorOptions.Instance.EnableAutoCodeCompletion = autoCodeCompletionCheckbutton.Active;
+			IdeApp.Preferences.Roslyn.CSharp.TriggerOnTypingLetters.Value = autoCodeCompletionCheckbutton.Active;
 			IdeApp.Preferences.AddImportedItemsToCompletionList.Value = showImportsCheckbutton.Active;
+			IdeApp.Preferences.Roslyn.CSharp.ShowItemsFromUnimportedNamespaces.Value = showImportsCheckbutton.Active;
 			IdeApp.Preferences.IncludeKeywordsInCompletionList.Value = includeKeywordsCheckbutton.Active;
 			IdeApp.Preferences.IncludeCodeSnippetsInCompletionList.Value = includeCodeSnippetsCheckbutton.Active;
 			IdeApp.Preferences.ForceSuggestionMode.Value = !automaticCompletionModeCheckbutton.Active;

@@ -37,7 +37,7 @@ using MonoDevelop.Ide.Gui;
 
 namespace MonoDevelop.AspNetCore
 {
-	static class DotNetCoreDevCertsTool
+	public static class DotNetCoreDevCertsTool
 	{
 		static OutputProgressMonitor CreateProgressMonitor ()
 		{
@@ -49,7 +49,7 @@ namespace MonoDevelop.AspNetCore
 				true);
 		}
 
-		public static async Task<CertificateCheckResult> CheckCertificate (CancellationToken cancellationToken)
+		internal static async Task<CertificateCheckResult> CheckCertificate (CancellationToken cancellationToken)
 		{
 			int exitCode = await RunDotNetCommand (
 				"dev-certs https --trust --check",
@@ -114,7 +114,7 @@ namespace MonoDevelop.AspNetCore
 					// Needs to be run with mono64.
 					var monoRuntime = Runtime.SystemAssemblyService.DefaultRuntime as MonoTargetRuntime;
 					string monoPath = Path.Combine (monoRuntime.MonoRuntimeInfo.Prefix, "bin", "mono64");
-					string message = GettextCatalog.GetString ("dotnet-dev-certs wants to make changes.");
+					string message = GettextCatalog.GetString ("dotnet dev-certs wants to make changes.");
 
 					var process = Runtime.ProcessService.StartConsoleProcess (
 						monoPath,

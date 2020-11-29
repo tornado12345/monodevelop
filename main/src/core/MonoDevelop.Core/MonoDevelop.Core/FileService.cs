@@ -42,6 +42,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Net;
 using System.Net.Http;
+using Microsoft.Extensions.ObjectPool;
+using System.Runtime.CompilerServices;
+using System.Collections;
 
 namespace MonoDevelop.Core
 {
@@ -67,7 +70,9 @@ namespace MonoDevelop.Core
 
 		static FileServiceErrorHandler errorHandler;
 
-		static readonly EventQueue eventQueue = new EventQueue ();
+		static readonly EventQueue eventQueue = new FileServiceEventQueue ();
+
+		static HashSet<FilePath> lockedDirectories;
 
 		static readonly string applicationRootPath = Path.Combine (PropertyService.EntryAssemblyPath, "..");
 		public static string ApplicationRootPath {
@@ -110,6 +115,18 @@ namespace MonoDevelop.Core
 				} else {
 					fileSystemChain = defaultExtension;
 				}
+			}
+		}
+
+		
+		static FileService ()
+		{
+			lockedDirectories = new HashSet<FilePath> ();
+			foreach (var value in Enum.GetValues (typeof (Environment.SpecialFolder))) {
+				var path = (FilePath)Environment.GetFolderPath ((Environment.SpecialFolder)value);
+				if (string.IsNullOrEmpty (path))
+					continue;
+				lockedDirectories.Add (path.CanonicalPath);
 			}
 		}
 
@@ -159,6 +176,7 @@ namespace MonoDevelop.Core
 		{
 			Debug.Assert (!String.IsNullOrEmpty (path));
 			try {
+				AssertCanDeleteDirectory (path);
 				GetFileSystemForPath (path, true).DeleteDirectory (path);
 			} catch (Exception e) {
 				if (!HandleError (GettextCatalog.GetString ("Can't remove directory {0}", path), e))
@@ -166,6 +184,34 @@ namespace MonoDevelop.Core
 				return;
 			}
 			OnFileRemoved (new FileEventArgs (path, true));
+		}
+
+		/// <summary>
+		/// Checks if a directory can be safely deleted. It checks if the directory is not a system relevant directory.
+		/// </summary>
+		/// <param name="path">The path to be checked.</param>
+		/// <param name="requiredParentDirectory">optional parameter that specifies a required parent of the path.</param>
+		/// <param name="includingParent">if true, requiredParentDirectory can be deleted.</param>
+		/// <exception cref="InvalidOperationException">Is thrown when the directory can't be safely deleted.</exception>
+		public static void AssertCanDeleteDirectory (FilePath path, string requiredParentDirectory = null, bool includingParent = true)
+		{
+			path = path.FullPath.CanonicalPath;
+			if (lockedDirectories.Contains (path)) {
+				throw new InvalidOperationException ("Can't delete directory " + path + ".");
+			}
+
+			foreach (var drive in Directory.GetLogicalDrives ()) {
+				if (path.Equals (((FilePath)drive).FullPath.CanonicalPath))
+					throw new InvalidOperationException ("Can't delete logical drive " + path + ".");
+			}
+
+			if (requiredParentDirectory != null) {
+				var parent = ((FilePath)requiredParentDirectory).FullPath.CanonicalPath;
+				if (!includingParent && parent == path)
+					throw new InvalidOperationException ("Can't delete parent path" + path);
+				if (!path.IsChildPathOf (parent) && parent != path)
+					throw new InvalidOperationException (path + " needs to be child of " + requiredParentDirectory);
+			}
 		}
 
 		public static void RenameFile (string oldName, string newName)
@@ -757,13 +803,11 @@ namespace MonoDevelop.Core
 		public static event EventHandler<FileEventArgs> FileCreated;
 		static void OnFileCreated (FileEventArgs args)
 		{
-			AsyncEvents.OnFileCreated (args);
-
 			foreach (FileEventInfo fi in args) {
 				if (fi.IsDirectory)
-					Counters.DirectoriesCreated++;
+					Counters.DirectoriesCreated.Inc (1);
 				else
-					Counters.FilesCreated++;
+					Counters.FilesCreated.Inc (1);
 			}
 
 			eventQueue.RaiseEvent (EventDataKind.Created, args);
@@ -784,13 +828,11 @@ namespace MonoDevelop.Core
 		public static event EventHandler<FileCopyEventArgs> FileRenamed;
 		static void OnFileRenamed (FileCopyEventArgs args)
 		{
-			AsyncEvents.OnFileRenamed (args);
-
 			foreach (FileEventInfo fi in args) {
 				if (fi.IsDirectory)
-					Counters.DirectoriesRenamed++;
+					Counters.DirectoriesRenamed.Inc (1);
 				else
-					Counters.FilesRenamed++;
+					Counters.FilesRenamed.Inc (1);
 			}
 
 			eventQueue.RaiseEvent (EventDataKind.Renamed, args);
@@ -799,13 +841,11 @@ namespace MonoDevelop.Core
 		public static event EventHandler<FileEventArgs> FileRemoved;
 		static void OnFileRemoved (FileEventArgs args)
 		{
-			AsyncEvents.OnFileRemoved (args);
-
 			foreach (FileEventInfo fi in args) {
 				if (fi.IsDirectory)
-					Counters.DirectoriesRemoved++;
+					Counters.DirectoriesRemoved.Inc (1);
 				else
-					Counters.FilesRemoved++;
+					Counters.FilesRemoved.Inc (1);
 			}
 
 			eventQueue.RaiseEvent (EventDataKind.Removed, args);
@@ -814,7 +854,7 @@ namespace MonoDevelop.Core
 		public static event EventHandler<FileEventArgs> FileChanged;
 		static void OnFileChanged (FileEventArgs args)
 		{
-			Counters.FileChangeNotifications++;
+			Counters.FileChangeNotifications.Inc (1);
 			eventQueue.RaiseEvent (EventDataKind.Changed, args);
 		}
 
@@ -880,63 +920,56 @@ namespace MonoDevelop.Core
 			}
 		}
 
-		internal static object GetHandler (EventDataKind kind)
+		internal sealed class FileServiceEventQueue : EventQueue
 		{
-			switch (kind)
+			protected override void OnRaiseSync (EventDataKind kind, FileEventArgs args)
 			{
-			case EventDataKind.Changed:
-				return FileChanged;
-			case EventDataKind.Copied:
-				return FileCopied;
-			case EventDataKind.Created:
-				return FileCreated;
-			case EventDataKind.Moved:
-				return FileMoved;
-			case EventDataKind.Removed:
-				return FileRemoved;
-			case EventDataKind.Renamed:
-				return FileRenamed;
-			default:
-				throw new InvalidOperationException ();
+				// Ugly, but it saves us the problem of having to deal with generic event handlers without covariance.
+				switch (kind) {
+				case EventDataKind.Changed: FileChanged?.Invoke (kind, args); break;
+				case EventDataKind.Copied: FileCopied?.Invoke (kind, (FileCopyEventArgs)args); break;
+				case EventDataKind.Created: FileCreated?.Invoke (kind, args); break;
+				case EventDataKind.Moved: FileMoved?.Invoke (kind, (FileCopyEventArgs)args); break;
+				case EventDataKind.Removed: FileRemoved?.Invoke (kind, args); break;
+				case EventDataKind.Renamed: FileRenamed?.Invoke (kind, (FileCopyEventArgs)args); break;
+				default: throw new InvalidOperationException ($"GetHandler does not implement EventDataKind: {kind}");
+				}
 			}
 		}
-
-		/// <summary>
-		/// File watcher events - these are not fired on the UI thread.
-		/// </summary>
-		public static AsyncEvents AsyncEvents { get; } = new AsyncEvents ();
 	}
 
-	class EventQueue
+	abstract class EventQueue
 	{
-		static void RaiseSync (FileService.EventDataKind kind, FileEventArgs args)
+		readonly Stopwatch stopwatch = Stopwatch.StartNew ();
+		// Array is used for performance reasons, we're on the UI thread, so we can't block it.
+		readonly TimeSpan [] timings = new TimeSpan [Enum.GetNames (typeof (FileService.EventDataKind)).Length];
+
+		readonly object lockObject = new object ();
+		Processor processor = new Processor ();
+
+		int frozen;
+
+		protected abstract void OnRaiseSync (FileService.EventDataKind kind, FileEventArgs args);
+
+		void RaiseSync (FileService.EventDataKind kind, FileEventArgs args)
 		{
-			var handler = FileService.GetHandler (kind);
-			if (handler == null)
-				return;
+			stopwatch.Restart ();
+			OnRaiseSync (kind, args);
+			stopwatch.Stop ();
 
-			// Ugly, but it saves us the problem of having to deal with generic event handlers without covariance.
-			if (args is FileCopyEventArgs copyArgs) {
-				if (handler is EventHandler<FileCopyEventArgs> copyHandler) {
-					copyHandler.Invoke (null, copyArgs);
-					return;
-				}
-				throw new InvalidOperationException ();
-			}
-
-			if (handler is EventHandler<FileEventArgs> fileHandler)
-				fileHandler.Invoke (null, args);
-			else
-				throw new InvalidOperationException ();
+			timings [(int)kind] += stopwatch.Elapsed;
 		}
 
+		public TimeSpan GetTimings (FileService.EventDataKind kind)
+			=> timings [(int)kind];
+
 		[DebuggerDisplay("{DebuggerDisplay,nq}")]
-		internal class FileEventData : EventData
+		internal sealed class FileEventData : EventData
 		{
 			public FileService.EventDataKind Kind;
 			public FileEventArgs Args;
 
-			public override void Invoke () => RaiseSync (Kind, Args);
+			public override void Invoke (EventQueue queue) => queue.RaiseSync (Kind, Args);
 
 			public override bool MergeArgs (EventData other)
 			{
@@ -973,20 +1006,15 @@ namespace MonoDevelop.Core
 		{
 			public static EmptyEventData Instance = new EmptyEventData ();
 
-			public override void Invoke () { }
+			public override void Invoke (EventQueue queue) { }
 			public override bool MergeArgs (EventData other) => false;
 		}
 
 		internal abstract class EventData
 		{
-			public abstract void Invoke ();
+			public abstract void Invoke (EventQueue queue);
 			public abstract bool MergeArgs (EventData other);
 		}
-
-		readonly object lockObject = new object ();
-		Processor processor = new Processor ();
-
-		int frozen;
 
 		public void Freeze ()
 		{
@@ -1011,7 +1039,7 @@ namespace MonoDevelop.Core
 			// Trigger notifications
 			Runtime.RunInMainThread (() => {
 				foreach (var ev in pendingProcess.Events)
-					ev.Invoke ();
+					ev.Invoke (this);
 			}).Ignore ();
 
 			Task.Run (() => {
@@ -1019,7 +1047,7 @@ namespace MonoDevelop.Core
 					if (!(ev is FileEventData fev) || fev.Kind != FileService.EventDataKind.Changed)
 						continue;
 
-					foreach (var fsFiles in fev.Args.GroupBy (f => FileService.GetFileSystemForPath (f.FileName, false)))
+					foreach (var fsFiles in fev.Args.Where (x => !x.IsDirectory).GroupBy (f => FileService.GetFileSystemForPath (f.FileName, false)))
 						fsFiles.Key.NotifyFilesChanged (fsFiles.Select (x => x.FileName));
 				}
 			}).Ignore ();
@@ -1046,10 +1074,13 @@ namespace MonoDevelop.Core
 			if (Runtime.IsMainThread) {
 				RaiseSync (kind, args);
 			} else {
-				Runtime.MainSynchronizationContext.Post (state => {
-					var (k, a) = (ValueTuple<FileService.EventDataKind, FileEventArgs>)state;
-					RaiseSync (k, a);
-				}, (kind, args));
+				Runtime.MainSynchronizationContext.Post (state => RaiseSyncOnMainThread (state), (this, kind, args));
+			}
+
+			static void RaiseSyncOnMainThread (object state)
+			{
+				var (queue, kind, args) = ((EventQueue, FileService.EventDataKind, FileEventArgs))state;
+				queue.RaiseSync (kind, args);
 			}
 		}
 
@@ -1281,6 +1312,12 @@ namespace MonoDevelop.Core
 				}
 
 				return false;
+
+				static void Discard (FileEventArgs args, ref int i)
+				{
+					args.RemoveAt (i);
+					i--;
+				}
 			}
 
 			bool GetLastRenameEventIgnoringChanged (FileEventState state, FilePath path, int index, out FilePath result)
@@ -1312,12 +1349,6 @@ namespace MonoDevelop.Core
 				return false;
 			}
 
-			static void Discard (FileEventArgs args, ref int i)
-			{
-				args.RemoveAt (i);
-				i--;
-			}
-
 			public void Merge ()
 			{
 				// Remove all the events which had no items.
@@ -1334,35 +1365,6 @@ namespace MonoDevelop.Core
 						Events [n - 1] = EmptyEventData.Instance;
 				}
 			}
-		}
-	}
-
-	public class AsyncEvents
-	{
-		public event EventHandler<FileEventArgs> FileCreated;
-		public event EventHandler<FileEventArgs> FileRemoved;
-		public event EventHandler<FileCopyEventArgs> FileRenamed;
-
-		internal void OnFileCreated (FileEventArgs args)
-		{
-			FileCreated?.Invoke (this, Clone (args));
-		}
-
-		internal void OnFileRemoved (FileEventArgs args)
-		{
-			FileRemoved?.Invoke (this, Clone (args));
-		}
-
-		internal void OnFileRenamed (FileCopyEventArgs args)
-		{
-			FileRenamed?.Invoke (this, Clone (args));
-		}
-
-		static T Clone<T> (T args) where T : FileEventArgs, new()
-		{
-			var result = new T ();
-			result.AddRange (args);
-			return result;
 		}
 	}
 

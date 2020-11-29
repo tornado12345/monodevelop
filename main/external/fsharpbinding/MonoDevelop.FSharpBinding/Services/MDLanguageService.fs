@@ -20,8 +20,8 @@ open MonoDevelop.Ide
 open MonoDevelop.Ide.Editor
 open MonoDevelop.Core
 open MonoDevelop.Projects
-open Microsoft.FSharp.Compiler.SourceCodeServices
-open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
+open FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler.AbstractIL.Internal.Library
 open MonoDevelop.Ide.TypeSystem
 
 module MonoDevelop =
@@ -75,11 +75,11 @@ module MonoDevelop =
 
     let isDocumentVisible filename =
         visibleDocuments()
-        |> Seq.exists (fun d -> d.FileName.ToString() = filename)
+        |> Seq.exists (fun d -> d.FileName = filename)
 
     let tryGetVisibleDocument filename =
         visibleDocuments()
-        |> Seq.tryFind (fun d -> d.FileName.ToString() = filename)
+        |> Seq.tryFind (fun d -> d.FileName = filename)
 
 
 /// Provides functionality for working with the F# interactive checker running in background

@@ -1,4 +1,4 @@
-// 
+﻿// 
 // PathBar.cs
 //  
 // Author:
@@ -154,10 +154,6 @@ namespace MonoDevelop.Components
 		PathEntry[] rightPath = new PathEntry[0];
 		Pango.Layout layout;
 		Pango.AttrList boldAtts = new Pango.AttrList ();
-		
-		//HACK: a surrogate widget object to pass to style calls instead of "this" when using "button" hint.
-		// This avoids GTK-Criticals in themes which try to cast the widget object to a button.
-		Gtk.Button styleButton = new Gtk.Button ();
 
 		// The widths array contains the widths of the items at the left and the right
 		int[] widths;
@@ -387,7 +383,7 @@ namespace MonoDevelop.Components
 					}
 					
 					layout.Attributes = (i == activeIndex) ? boldAtts : null;
-					layout.FontDescription = FontService.SansFont.CopyModified (Styles.FontScale11);
+					layout.FontDescription = IdeServices.FontService.SansFont.CopyModified (Styles.FontScale11);
 					layout.SetMarkup (GetFirstLineFromMarkup (leftPath [i].Markup));
 
 					ctx.Save ();
@@ -452,7 +448,7 @@ namespace MonoDevelop.Components
 					}
 					
 					layout.Attributes = (i == activeIndex) ? boldAtts : null;
-					layout.FontDescription = FontService.SansFont.CopyModified (Styles.FontScale11);
+					layout.FontDescription = IdeServices.FontService.SansFont.CopyModified (Styles.FontScale11);
 					layout.SetMarkup (GetFirstLineFromMarkup (rightPath [i].Markup));
 
 					ctx.Save ();
@@ -684,7 +680,7 @@ namespace MonoDevelop.Components
 			
 			var req = widget.SizeRequest ();
 
-			Xwt.Rectangle geometry = DesktopService.GetUsableMonitorGeometry (Screen.Number, Screen.GetMonitorAtPoint (dx, dy));
+			Xwt.Rectangle geometry = IdeServices.DesktopService.GetUsableMonitorGeometry (Screen.Number, Screen.GetMonitorAtPoint (dx, dy));
 			int geomWidth = (int)geometry.Width;
 			int geomLeft = (int)geometry.Left;
 			int geomRight = (int)geometry.Right;
@@ -846,10 +842,11 @@ namespace MonoDevelop.Components
 
 		protected override void OnDestroyed ()
 		{
+			createMenuForItem = null;
+
 			base.OnDestroyed ();
 
 			DisposeProxies ();
-			styleButton.Destroy ();
 			KillLayout ();
 			this.boldAtts.Dispose ();
 		}

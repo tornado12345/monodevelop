@@ -1,4 +1,4 @@
-// 
+﻿// 
 // MacSelectFileDialogHandler.cs
 //  
 // Author:
@@ -47,26 +47,26 @@ namespace MonoDevelop.MacIntegration
 		protected override NSSavePanel OnCreatePanel (SelectFileDialogData data)
 		{
 			if (data.Action == FileChooserAction.Save)
-				return new NSSavePanel ();
+				return NSSavePanel.SavePanel;
 
-			return new NSOpenPanel {
-				CanChooseDirectories = (data.Action & FileChooserAction.FolderFlags) != 0,
-				CanChooseFiles = (data.Action & FileChooserAction.FileFlags) != 0,
-				CanCreateDirectories = (data.Action & FileChooserAction.CreateFolder) != 0,
-				ResolvesAliases = false,
-			};
+			var openPanel = NSOpenPanel.OpenPanel;
+			openPanel.CanChooseDirectories = (data.Action & FileChooserAction.FolderFlags) != 0;
+			openPanel.CanChooseFiles = (data.Action & FileChooserAction.FileFlags) != 0;
+			openPanel.CanCreateDirectories = (data.Action & FileChooserAction.CreateFolder) != 0;
+			openPanel.ResolvesAliases = false;
+			return openPanel;
 		}
 
 		public bool Run (SelectFileDialogData data)
 		{
 			using (var panel = CreatePanel (data, out var saveState)) {
 				if (panel.RunModal () == 0) {
-					DesktopService.FocusWindow (data.TransientFor ?? MessageService.RootWindow);
+					IdeServices.DesktopService.FocusWindow (data.TransientFor ?? MessageService.RootWindow);
 					return false;
 				}
 
 				data.SelectedFiles = GetSelectedFiles (panel);
-				DesktopService.FocusWindow (data.TransientFor ?? MessageService.RootWindow);
+				IdeServices.DesktopService.FocusWindow (data.TransientFor ?? MessageService.RootWindow);
 				return true;
 			}
 		}
@@ -96,7 +96,14 @@ namespace MonoDevelop.MacIntegration
 					return false;
 				
 				string path = url.Path;
-				
+
+				// According to the NSUrl documentation
+				// If the receiver contains a file reference URL,
+				// this property’s value provides the current path for the referenced resource, which may be nil if the resource no longer exists.
+				if (string.IsNullOrEmpty (path)) {
+					return false;
+				}
+
 				//always make directories selectable, unless they're app bundles
 				if (System.IO.Directory.Exists (path))
 					return !path.EndsWith (".app", StringComparison.OrdinalIgnoreCase);
@@ -105,9 +112,9 @@ namespace MonoDevelop.MacIntegration
 					return true;
 				
 				if (mimetypes != null) {
-					var mimetype = DesktopService.GetMimeTypeForUri (path);
+					var mimetype = IdeServices.DesktopService.GetMimeTypeForUri (path);
 					if (mimetype != null) {
-						var chain = DesktopService.GetMimeTypeInheritanceChain (mimetype);
+						var chain = IdeServices.DesktopService.GetMimeTypeInheritanceChain (mimetype);
 						if (mimetypes.Any (m => chain.Any (c => c == m)))
 							return true;
 					}

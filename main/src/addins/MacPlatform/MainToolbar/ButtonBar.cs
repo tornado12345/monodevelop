@@ -213,8 +213,13 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 			LoadIcon (button);
 			if (button.Enabled != IsEnabled (idx))
 				SetEnabled (button.Enabled, idx);
-			if (button.Tooltip != Cell.GetToolTip (idx))
-				Cell.SetToolTip (button.Tooltip, idx);
+
+			if (button.Tooltip != Cell.GetToolTip (idx)) {
+				// SetToolTip is missing NullAllowed
+				// https://github.com/xamarin/xamarin-macios/issues/6044
+				Cell.SetToolTip (button.Tooltip ?? string.Empty, idx);
+			}
+
 			if (button.Title != GetLabel (idx))
 				SetLabel (button.Title, idx);
 			SetNeedsDisplay ();
@@ -235,6 +240,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				RebuildSegments ();
 			}
 		}
+
 		uint focusedSegment = 0; 
 		public bool IncreaseFocusIndex()
 		{
@@ -249,6 +255,16 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 			};
 			return result;
 		}
+
+		public bool DecreaseFocusIndex ()
+		{
+			if (focusedSegment == 0)
+				return false;
+			focusedSegment--;
+			RebuildSegments ();
+			return true;
+		}
+
 		public event EventHandler ResizeRequested;
 	}
 }

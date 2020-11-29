@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Core;
 
 namespace MonoDevelop.VersionControl
@@ -31,23 +32,60 @@ namespace MonoDevelop.VersionControl
 
 			updating = true;
 			repositoryUrlEntry.Text = repo.Url;
+			repositoryPortSpin.Adjustment.Lower = -1.0;
 			Fill ();
 			UpdateControls ();
 			updating = false;
+			SetupAccessibility ();
 		}
-		
+
 		Control IRepositoryEditor.Widget {
 			get { return this; }
 		}
-		
+
+		void SetupAccessibility ()
+		{
+			repositoryUrlEntry.SetCommonAccessibilityAttributes ("UrlBasedRepositoryEditor.repositoryUrlEntry", "",
+											GettextCatalog.GetString ("Enter the repository url"));
+			repositoryUrlEntry.SetAccessibilityLabelRelationship (label4);
+
+			repositoryUrlEntry.SetCommonAccessibilityAttributes ("UrlBasedRepositoryEditor.comboProtocol", "",
+											GettextCatalog.GetString ("Enter the protocol to use"));
+			comboProtocol.SetAccessibilityLabelRelationship (label5);
+
+			repositoryServerEntry.SetCommonAccessibilityAttributes ("UrlBasedRepositoryEditor.repositoryServerEntry", "",
+								GettextCatalog.GetString ("Enter the server"));
+			repositoryServerEntry.SetAccessibilityLabelRelationship (label11);
+
+			repositoryPortSpin.SetCommonAccessibilityAttributes ("UrlBasedRepositoryEditor.repositoryPortSpin", "",
+					GettextCatalog.GetString ("Enter the port"));
+			repositoryPortSpin.SetAccessibilityLabelRelationship (label6);
+
+			repositoryPathEntry.SetCommonAccessibilityAttributes ("UrlBasedRepositoryEditor.repositoryPathEntry", "",
+					GettextCatalog.GetString ("Enter the path"));
+			repositoryPathEntry.SetAccessibilityLabelRelationship (label7);
+
+			repositoryUserEntry.SetCommonAccessibilityAttributes ("UrlBasedRepositoryEditor.repositoryUserEntry", "",
+					GettextCatalog.GetString ("Enter the user"));
+			repositoryUserEntry.SetAccessibilityLabelRelationship (label8);
+		}
+
+
 		public bool Validate ()
 		{
-			if (!repo.IsUrlValid (repositoryUrlEntry.Text)) {
+			if (!repo.IsUrlValid (repositoryUrlEntry.Text) || !CanCreateUri ()) {
 				labelError.Show ();
 				return false;
-			} else {
-				return true;
 			}
+			return true;
+		}
+
+		public bool CanCreateUri()
+		{
+			if (string.IsNullOrEmpty (repositoryUrlEntry.Text))
+				return false;
+
+			return Uri.TryCreate (repositoryUrlEntry.Text, UriKind.RelativeOrAbsolute, out Uri serverUri);
 		}
 
 		public string RelativePath {
@@ -146,7 +184,7 @@ namespace MonoDevelop.VersionControl
 		{
 			if (repo.Uri != null || repo.SupportedProtocols.Any (p => repositoryUrlEntry.Text.StartsWith (p + "://", StringComparison.Ordinal))) {
 				repositoryPathEntry.Sensitive = true;
-				bool isUrl = Protocol != "file";
+				bool isUrl = IsUrl;
 				repositoryServerEntry.Sensitive = isUrl;
 				repositoryUserEntry.Sensitive = isUrl;
 				repositoryPortSpin.Sensitive = isUrl;
@@ -157,20 +195,33 @@ namespace MonoDevelop.VersionControl
 				repositoryPortSpin.Sensitive = false;
 			}
 		}
-		
+
+		const string FileProtocol = "file";
+		bool IsUrl => Protocol != FileProtocol;
+
 		void SetRepoUrl ()
 		{
 			if (!repo.SupportedProtocols.Contains (Protocol)) {
 				repo.Url = string.Empty;
 				return;
 			}
-			UriBuilder ub = new UriBuilder ();
-			ub.Host = repositoryServerEntry.Text;
-			ub.Scheme = Protocol;
-			ub.UserName = repositoryUserEntry.Text;
-			ub.Port = (int)repositoryPortSpin.Value;
-			ub.Path = repositoryPathEntry.Text;
-			repo.Url = ub.ToString ();
+
+			if (IsUrl) {
+				var ub = new UriBuilder ();
+				ub.Scheme = Protocol;
+				ub.Host = repositoryServerEntry.Text;
+				ub.UserName = repositoryUserEntry.Text;
+				ub.Port = (int)repositoryPortSpin.Value;
+				ub.Path = repositoryPathEntry.Text;
+
+				if (string.IsNullOrEmpty (ub.Host)) {
+					repo.Url = string.Format ("{0}://", Protocol);
+				} else {
+					repo.Url = ub.ToString ();
+				}
+			} else {
+				repo.Url = string.Format ("{0}://{1}", Protocol, repositoryPathEntry.Text);
+			}
 		}
 
 		protected virtual void OnRepositoryServerEntryChanged(object sender, System.EventArgs e)
@@ -217,13 +268,11 @@ namespace MonoDevelop.VersionControl
 
 		protected void OnRepositoryUrlEntryClipboardPasted (object sender, EventArgs e)
 		{
-			Gtk.Clipboard clip = GetClipboard (Gdk.Atom.Intern ("CLIPBOARD", false));
+			var clip = GetClipboard (Gdk.Atom.Intern ("CLIPBOARD", false));
 			clip.RequestText (delegate (Gtk.Clipboard clp, string text) {
-				if (String.IsNullOrEmpty (text))
+				if (string.IsNullOrEmpty (text))
 					return;
-
-				Uri url;
-				if (Uri.TryCreate (text, UriKind.Absolute, out url))
+				if (repo.IsUrlValid (text))
 					repositoryUrlEntry.Text = text;
 			});
 		}

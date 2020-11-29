@@ -32,8 +32,37 @@ using Foundation;
 
 namespace MonoDevelop.Components.Mac
 {
+	internal class UnfocusableScrollview : NSScrollView
+	{
+		public override bool AcceptsFirstResponder () => false;
+	}
+
+	internal class UnfocusableStackView : NSStackView
+	{
+		public override bool AcceptsFirstResponder ()
+		{
+			return false;
+		}
+	}
+
 	static class NativeViewHelper
 	{
+		public static NSStackView CreateVerticalStackView (int spacing = 10, bool translatesAutoresizingMaskIntoConstraints = false) => new UnfocusableStackView () {
+			Orientation = NSUserInterfaceLayoutOrientation.Vertical,
+			Alignment = NSLayoutAttribute.Leading,
+			Spacing = spacing,
+			Distribution = NSStackViewDistribution.Fill,
+			TranslatesAutoresizingMaskIntoConstraints = translatesAutoresizingMaskIntoConstraints
+		};
+
+		public static NSStackView CreateHorizontalStackView (int spacing = 10) => new UnfocusableStackView () {
+			Orientation = NSUserInterfaceLayoutOrientation.Horizontal,
+			Alignment = NSLayoutAttribute.CenterY,
+			Spacing = spacing,
+			Distribution = NSStackViewDistribution.Fill,
+			TranslatesAutoresizingMaskIntoConstraints = false
+		};
+
 		public static NSAttributedString GetAttributedStringFromFormattedText (string formattedText)
 		{
 			formattedText = formattedText.Replace ("&amp;", "&");

@@ -1,4 +1,4 @@
-﻿//
+//
 // ProjectWithWildcardsTests.cs
 //
 // Author:
@@ -58,6 +58,31 @@ namespace MonoDevelop.Projects
 				"text3-1.txt",
 				"text3-2.txt",
 			}, files);
+
+			p.Dispose ();
+		}
+
+		[Test]
+		public async Task LoadProjectWithQuestionWildcards ()
+		{
+			string projFile = Util.GetSampleProject ("console-project-with-wildcards", "ConsoleProject-with-question-wildcard.csproj");
+
+			var p = await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile);
+			Assert.IsInstanceOf<Project> (p);
+			var mp = (Project)p;
+			var files = mp.Files.Select (f => f.FilePath.FileName).OrderBy (f => f).ToArray ();
+			Assert.That (files, Is.EquivalentTo (new string [] {
+				"Data1.cs",
+				"Data2.cs",
+				"Data3.cs",
+				"maybe.js",
+				"maybe1.js",
+				"Program.cs",
+				"text1-1.txt",
+				"text1-2.txt",
+				"text2-1.txt",
+				"text2-2.txt",
+			}));
 
 			p.Dispose ();
 		}
@@ -184,8 +209,30 @@ namespace MonoDevelop.Projects
 			f.CopyToOutputDirectory = FileCopyMode.PreserveNewest;
 
 			await p.SaveAsync (Util.GetMonitor ());
+			p.Dispose ();
 
-			Assert.AreEqual (Util.ToSystemEndings (File.ReadAllText (p.FileName + ".saved2")), File.ReadAllText (p.FileName));
+			p = await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile);
+			Assert.IsInstanceOf<Project> (p);
+			mp = (Project)p;
+
+			bool processedItemGroup = false;
+			foreach (var ig in mp.MSBuildProject.ItemGroups) {
+				if (ig.Items.Any (i => i.Include == "Program.cs")) {
+					Assert.Null (ig.Items.FirstOrDefault (pf => pf.Include == "Data1.cs"));
+					Assert.NotNull (ig.Items.FirstOrDefault (pf => pf.Include == "*.txt"));
+					Assert.NotNull (ig.Items.FirstOrDefault (pf => pf.Include == "Content\\Data\\*.txt"));
+					Assert.NotNull (ig.Items.FirstOrDefault (pf => pf.Include == "Content\\Data3.cs"));
+					Assert.NotNull (ig.Items.FirstOrDefault (pf => pf.Include == "Content\\Data\\Data2.cs"));
+					Assert.NotNull (ig.Items.FirstOrDefault (pf => pf.Include == "Content\\text1-1.txt"));
+					Assert.NotNull (mp.Files.FirstOrDefault (pf => pf.FilePath.FileName == "text1-1.txt" && pf.CopyToOutputDirectory == FileCopyMode.PreserveNewest));
+					Assert.NotNull (ig.Items.FirstOrDefault (pf => pf.Include == "Content\\text1-2.txt"));
+
+					processedItemGroup = true;
+					break;
+				}
+			}
+
+			Assert.True (processedItemGroup);
 
 			p.Dispose ();
 		}
@@ -316,7 +363,7 @@ namespace MonoDevelop.Projects
 		}
 
 		/// <summary>
-		/// If an MSBuild item has a property on loading then if all the properties are removed the 
+		/// If an MSBuild item has a property on loading then if all the properties are removed the
 		/// project file when saved will still have an end element. So this test uses a different
 		/// .saved5 file compared with the previous test and includes the extra end tag for the
 		/// EmbeddedResource.

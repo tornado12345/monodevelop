@@ -27,15 +27,21 @@
 //
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 using Gtk;
 
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Ide.Navigation;
-using MonoDevelop.Core;
-using System.Linq;
 using MonoDevelop.Ide.Gui.Dialogs;
+using MonoDevelop.Ide.Gui.Documents;
+using MonoDevelop.Ide.Gui.Shell;
+
+using MonoDevelop.Components.DockNotebook;
+using System.Collections.Immutable;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Ide.Commands
 {
@@ -46,14 +52,29 @@ namespace MonoDevelop.Ide.Commands
 		CopyPathName,
 		ToggleMaximize,
 		ReopenClosedTab,
+		CloseAllToTheRight,
+		CloseAllExceptPinned,
+		PinTab,
 	}
-	
-	class CloseAllHandler : CommandHandler
+
+	class CloseAllHandler : TabCommandHandler
 	{
-		protected virtual ViewContent GetDocumentException ()
+		protected virtual ImmutableArray<Document> GetDocumentExceptions ()
 		{
-			return null;
+			return ImmutableArray<Document>.Empty;
 		}
+
+		bool HasDistinctViewContent (ImmutableArray<Document> viewContents, Document document)
+		{
+			for (int i = 0; i < viewContents.Length; i++) {
+				if (document.Window.Document == viewContents[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		protected virtual bool StartAfterException => false;
 
 		protected override void Run ()
 		{
@@ -62,37 +83,137 @@ namespace MonoDevelop.Ide.Commands
 				return;
 
 			var activeNotebook = ((SdiWorkspaceWindow)active.Window).TabControl;
-			var except = GetDocumentException ();
+			var except = GetDocumentExceptions ();
 
-			var docs = IdeApp.Workbench.Documents
-				.Where (doc => ((SdiWorkspaceWindow)doc.Window).TabControl == activeNotebook && (except == null || doc.Window.ViewContent != except))
-				.ToArray ();
+			var docs = new List<Document> ();
+			var dirtyDialogShown = false;
+			var startRemoving = !except.Any () || !StartAfterException;
 
-			var dirtyDialogShown = docs.Count (doc => doc.IsDirty) > 1;
+			foreach (var doc in IdeApp.Workbench.Documents) {
+				if (((SdiWorkspaceWindow)doc.Window).TabControl == activeNotebook) {
+					if (except.Any () && !HasDistinctViewContent (except, doc)) {
+						startRemoving = true;
+						continue;
+					}
+
+					if (startRemoving) {
+						docs.Add (doc);
+						dirtyDialogShown |= doc.IsDirty;
+					}
+				}
+			}
+
 			if (dirtyDialogShown)
 				using (var dlg = new DirtyFilesDialog (docs, closeWorkspace: false, groupByProject: false)) {
 					dlg.Modal = true;
 					if (MessageService.ShowCustomDialog (dlg) != (int)Gtk.ResponseType.Ok)
 						return;
 				}
-			
+
 			foreach (Document doc in docs)
 				if (dirtyDialogShown)
-					doc.Window.CloseWindow (true);
+					doc.Close (true).Ignore ();
 				else
 					doc.Close ().Ignore();
 		}
 	}
-	
-	class CloseAllButThisHandler : CloseAllHandler
+
+ 	abstract class TabCommandHandler : CommandHandler
 	{
-		protected override ViewContent GetDocumentException ()
-		{
-			var active = IdeApp.Workbench.ActiveDocument;
-			return active == null ? null : active.Window.ViewContent;
+		protected DockNotebookTab GetTabFromActiveDocument () {
+			var document = IdeApp.Workbench.ActiveDocument;
+			if (document == null)
+				return null;
+			return ((SdiWorkspaceWindow)document.Window).DockNotebookTab;
 		}
 	}
-	
+
+	class CloseAllExceptPinnedHandler : CloseAllHandler
+	{
+		protected override void Update (CommandInfo info)
+		{
+			info.Visible = info.Enabled = IdeApp.Workbench.Documents.Count != 0;
+		}
+
+		protected override ImmutableArray<Document> GetDocumentExceptions ()
+		{
+			var active = IdeApp.Workbench.ActiveDocument;
+			if (active == null)
+				return ImmutableArray<Document>.Empty;
+
+			var activeNotebook = ((SdiWorkspaceWindow)active.Window).TabControl;
+
+			var contents = Microsoft.CodeAnalysis
+				.ImmutableArrayExtensions
+				.WhereAsArray (
+					IdeApp.Workbench.Documents.ToImmutableArray (),
+					doc => ((SdiWorkspaceWindow)doc.Window).TabControl == activeNotebook && (((SdiWorkspaceWindow)doc.Window).DockNotebookTab?.IsPinned ?? false)
+				);
+			return contents;
+		}
+	}
+
+	class PinTabHandler : TabCommandHandler
+	{
+		protected override void Update (CommandInfo info)
+		{
+			info.Visible = info.Enabled = IdeApp.Workbench.ActiveDocument != null;
+			if (!info.Visible)
+				return;
+			
+			var selectedTab = GetTabFromActiveDocument ();
+			if (selectedTab != null) {
+				info.Text = (selectedTab.IsPinned) ? GettextCatalog.GetString ("Un_pin Tab") : GettextCatalog.GetString ("_Pin Tab");
+			}
+		}
+
+		protected override void Run ()
+		{
+			var selectedTab = GetTabFromActiveDocument (); 
+			if (selectedTab != null)
+				selectedTab.IsPinned = !selectedTab.IsPinned;
+		}
+	}
+
+	class CloseAllButThisHandler : CloseAllHandler
+	{
+		protected override ImmutableArray<Document> GetDocumentExceptions ()
+		{
+			var active = IdeApp.Workbench.ActiveDocument;
+			if (active == null) {
+				return ImmutableArray<Document>.Empty;
+			}
+			return ImmutableArray.Create (active.Window.Document);
+		}
+	}
+
+	class CloseAllToTheRightHandler : CloseAllButThisHandler
+	{
+		protected override bool StartAfterException => true;
+
+		protected override void Update (CommandInfo info)
+		{
+			var documents = IdeApp.Workbench.Documents;
+			var activeDoc = IdeApp.Workbench.ActiveDocument;
+
+			if (activeDoc == null) {
+				info.Enabled = false;
+				return;
+			}
+
+			var activeNotebook = ((SdiWorkspaceWindow)activeDoc.Window).TabControl;
+
+			// Disable if right-most document in tab strip
+			for (int i = documents.Count - 1; i >= 0; i--) {
+				var doc = documents [i];
+				if (((SdiWorkspaceWindow)doc.Window).TabControl == activeNotebook) {
+					info.Enabled = doc != activeDoc;
+					return;
+				}
+			}
+		}
+	}
+
 	class ToggleMaximizeHandler : CommandHandler
 	{
 		protected override void Run ()
@@ -100,7 +221,7 @@ namespace MonoDevelop.Ide.Commands
 			IdeApp.Workbench.ToggleMaximize ();
 		}
 	}
-	
+
 	class CopyPathNameHandler : CommandHandler
 	{
 		protected override void Run ()
@@ -122,12 +243,12 @@ namespace MonoDevelop.Ide.Commands
 	{
 		protected override void Run ()
 		{
-			NavigationHistoryService.OpenLastClosedDocument ();
+			IdeServices.NavigationHistoryService.OpenLastClosedDocument ();
 		}
 
 		protected override void Update (CommandInfo info)
 		{
-			info.Enabled = NavigationHistoryService.HasClosedDocuments;
+			info.Enabled = IdeServices.NavigationHistoryService.HasClosedDocuments;
 		}
 	}
 }

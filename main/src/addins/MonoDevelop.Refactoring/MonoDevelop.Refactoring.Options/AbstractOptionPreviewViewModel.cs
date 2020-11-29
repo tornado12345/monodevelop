@@ -1,4 +1,4 @@
-﻿//
+//
 // AbstractOptionPreviewViewModel.cs
 //
 // Author:
@@ -30,36 +30,26 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeStyle;
-using Microsoft.CodeAnalysis.Editor;
-using Microsoft.CodeAnalysis.Editor.Shared.Extensions;
 using Microsoft.CodeAnalysis.Editor.Shared.Preview;
 using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Host;
-using Microsoft.CodeAnalysis.Host.Mef;
 using Microsoft.CodeAnalysis.Options;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.VisualStudio.LanguageServices.Implementation.Utilities;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Projection;
-using Microsoft.VisualStudio.Utilities;
-using Roslyn.Utilities;
-using MonoDevelop.Ide.Editor;
-using MonoDevelop.Ide.Composition;
 using MonoDevelop.Core.Text;
+using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.TypeSystem;
-using MonoDevelop.Projects;
-using System.Threading.Tasks;
-using MonoDevelop.Core;
+using Roslyn.Utilities;
 
 namespace MonoDevelop.Refactoring.Options
 {
 	internal abstract class AbstractOptionPreviewViewModel : AbstractNotifyPropertyChanged, IDisposable
 	{
-		private TextEditor _textViewHost;
+		private Ide.Editor.TextEditor _textViewHost;
 		private PreviewWorkspace curWorkspace;
 		private Microsoft.CodeAnalysis.Project project;
 
@@ -83,7 +73,10 @@ namespace MonoDevelop.Refactoring.Options
 		internal OptionSet ApplyChangedOptions (OptionSet optionSet)
 		{
 			foreach (var optionKey in this.Options.GetChangedOptions (_originalOptions)) {
-				optionSet = optionSet.WithChangedOption (optionKey, this.Options.GetOption (optionKey));
+				var value = this.Options.GetOption (optionKey);
+				if (value == null)
+					continue;
+				optionSet = optionSet.WithChangedOption (optionKey, value);
 			}
 
 			return optionSet;
@@ -92,11 +85,11 @@ namespace MonoDevelop.Refactoring.Options
 		public void SetOptionAndUpdatePreview<T> (T value, IOption option, string preview)
 		{
 			if (option is Option<CodeStyleOption<T>>) {
-				var opt = Options.GetOption ((Option<CodeStyleOption<T>>)option);
+				var opt = (CodeStyleOption<T>)BooleanCodeStyleOptionViewModel.GetOptionOrDefault (Options, option, Language);
 				opt.Value = value;
 				Options = Options.WithChangedOption ((Option<CodeStyleOption<T>>)option, opt);
 			} else if (option is PerLanguageOption<CodeStyleOption<T>>) {
-				var opt = Options.GetOption ((PerLanguageOption<CodeStyleOption<T>>)option, Language);
+				var opt = (CodeStyleOption<T>)BooleanCodeStyleOptionViewModel.GetOptionOrDefault (Options, option, Language); // PerLanguageOption in unwrapped.
 				opt.Value = value;
 				Options = Options.WithChangedOption ((PerLanguageOption<CodeStyleOption<T>>)option, Language, opt);
 			} else if (option is Option<T>) {
@@ -110,7 +103,7 @@ namespace MonoDevelop.Refactoring.Options
 			UpdateDocument (preview);
 		}
 
-		public TextEditor TextViewHost {
+		public Ide.Editor.TextEditor TextViewHost {
 			get {
 				return _textViewHost;
 			}
@@ -129,7 +122,7 @@ namespace MonoDevelop.Refactoring.Options
 
 		public async void UpdatePreview (string text)
 		{
-			var workspace = new PreviewWorkspace (MonoDevelop.Ide.Composition.CompositionManager.Instance.HostServices);
+			var workspace = new PreviewWorkspace (Ide.Composition.CompositionManager.Instance.HostServices);
 			var fileName = string.Format ("project.{0}", Language == "C#" ? "csproj" : "vbproj");
 			project = workspace.CurrentSolution.AddProject (fileName, "assembly.dll", Language);
 
@@ -189,8 +182,10 @@ namespace MonoDevelop.Refactoring.Options
 
 			public override MonoDevelop.Projects.Project Project => null;
 
+			[Obsolete]
 			public override Document AnalysisDocument => document;
 
+			[Obsolete]
 			public override ParsedDocument ParsedDocument => null;
 
 			public override void AttachToProject (MonoDevelop.Projects.Project project)
@@ -202,10 +197,12 @@ namespace MonoDevelop.Refactoring.Options
 				return null;
 			}
 
+			[Obsolete]
 			public override void ReparseDocument ()
 			{
 			}
 
+			[Obsolete]
 			public override Task<ParsedDocument> UpdateParseDocument ()
 			{
 				return new Task<ParsedDocument> (null);

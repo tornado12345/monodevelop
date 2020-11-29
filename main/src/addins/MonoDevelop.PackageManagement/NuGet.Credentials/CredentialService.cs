@@ -51,7 +51,7 @@ namespace NuGet.Credentials
 
 			_nonInteractive = nonInteractive;
 			Providers = new List<ICredentialProvider> (providers);
-			HandlesDefaultCredentials = Providers.Any (provider => provider is DefaultCredentialsCredentialProvider);
+			HandlesDefaultCredentials = Providers.Any (provider => provider is DefaultNetworkCredentialsCredentialProvider);
 		}
 
 		/// <summary>
@@ -103,13 +103,18 @@ namespace NuGet.Credentials
 
 					CredentialResponse response;
 					if (!TryFromCredentialCache (uri, type, isRetry, provider, out response)) {
+						/* Temporarily disable interactive-ness with secure plugin provider
+						 * to avoid them blocking on requesting user-input for device flow auth
+						 */
+						var nonInteractive = _nonInteractive || provider is SecurePluginCredentialProvider;
+
 						response = await provider.GetAsync (
 							uri,
 							proxy,
 							type,
 							message,
 							isRetry,
-							_nonInteractive,
+							nonInteractive,
 							cancellationToken);
 
 						// Check that the provider gave us a valid response.
@@ -139,7 +144,7 @@ namespace NuGet.Credentials
 
 		public CredentialService CreateNonInteractive ()
 		{
-			bool handlesDefaultCredentials = Providers.Any (provider => provider is DefaultCredentialsCredentialProvider);
+			bool handlesDefaultCredentials = Providers.Any (provider => provider is DefaultNetworkCredentialsCredentialProvider);
 			var lazyProviders = AsyncLazy.New (() => Providers)
 ;			return new CredentialService (lazyProviders, nonInteractive: true, handlesDefaultCredentials: handlesDefaultCredentials);
 		}

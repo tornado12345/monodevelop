@@ -30,33 +30,6 @@ namespace MonoDevelop.DotNetCore
 {
 	static class TargetFrameworkMonikerExtensions
 	{
-		public static string GetShortFrameworkName (this TargetFrameworkMoniker framework)
-		{
-			if (framework.IsNetFramework ())
-				return GetShortNetFrameworkName (framework);
-
-			string identifier = GetShortFrameworkIdentifier (framework);
-			return identifier + framework.Version;
-		}
-
-		public static string GetShortFrameworkIdentifier (this TargetFrameworkMoniker framework)
-		{
-			if (string.IsNullOrEmpty (framework.Identifier))
-				return string.Empty;
-
-			string shortFrameworkIdentifier = framework.Identifier;
-
-			if (shortFrameworkIdentifier[0] == '.')
-				shortFrameworkIdentifier = shortFrameworkIdentifier.Substring (1);
-
-			return shortFrameworkIdentifier.ToLower ();
-		}
-
-		static string GetShortNetFrameworkName (TargetFrameworkMoniker framework)
-		{
-			return "net" + framework.Version.Replace (".", string.Empty);
-		}
-
 		public static bool IsNetFramework (this TargetFrameworkMoniker framework)
 		{
 			return framework.Identifier == ".NETFramework";
@@ -75,6 +48,34 @@ namespace MonoDevelop.DotNetCore
 		public static bool IsNetStandardOrNetCoreApp (this TargetFrameworkMoniker framework)
 		{
 			return framework.IsNetStandard () || framework.IsNetCoreApp ();
+		}
+
+		static bool IsVersionOrHigher (this TargetFrameworkMoniker framework, DotNetCoreVersion version)
+		{
+			DotNetCoreVersion.TryParse (framework.Version, out var dotNetCoreVersion);
+			if (dotNetCoreVersion == null)
+				return false;
+
+			// Only compare $major.$minor, as Version parsing sets some fields to -1
+			// (Build), which gives false positives/negatives when comparing, for instance,
+			// 3.1.100-preview1-014459 with an unsupported 3.1, and we're really only
+			// interested in the target framework version, which only uses $major.$minor.
+			if (dotNetCoreVersion.Major > version.Major)
+				return true;
+			if (dotNetCoreVersion.Major < version.Major)
+				return false;
+
+			return dotNetCoreVersion.Minor >= version.Minor;
+		}
+
+		public static bool IsNetCoreAppOrHigher (this TargetFrameworkMoniker framework, DotNetCoreVersion version)
+		{
+			return framework.IsNetCoreApp () && framework.IsVersionOrHigher (version);
+		}
+
+		public static bool IsNetStandardOrHigher (this TargetFrameworkMoniker framework, DotNetCoreVersion version)
+		{
+			return framework.IsNetStandard () && framework.IsVersionOrHigher (version);
 		}
 	}
 }

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 
 namespace MonoDevelop.FSW
 {
@@ -16,11 +17,12 @@ namespace MonoDevelop.FSW
 		readonly int start;
 		readonly int length;
 
-		readonly List<object> ids = new List<object> ();
-		internal void RegisterId (object id) => ids.Add (id);
-		internal bool UnregisterId (object id) => ids.Remove (id);
+		internal List<object> Ids { get; } = new List<object> ();
+		internal int IdCount => Ids.Count;
+		internal void RegisterId (object id) => Ids.Add (id);
+		internal bool UnregisterId (object id) => Ids.Remove (id);
 
-		public bool IsLive => ids.Count != 0;
+		public bool IsLive => Ids.Count != 0;
 		public ReadOnlySpan<char> GetPath () => fullPath.AsSpan (0, start + length);
 		internal ReadOnlySpan<char> GetSegment () => fullPath.AsSpan (start, length);
 		internal string Segment => fullPath.Substring (start, length);
@@ -34,7 +36,7 @@ namespace MonoDevelop.FSW
 			}
 		}
 
-		public PathTreeNode (string fullPath, int start, int length)
+		internal PathTreeNode (string fullPath, int start, int length)
 		{
 			this.fullPath = fullPath;
 			this.start = start;
@@ -66,6 +68,37 @@ namespace MonoDevelop.FSW
 			}
 
 			return (rootNode, lastNode);
+		}
+
+		public override string ToString ()
+		{
+			var sb = new StringBuilder ();
+			PrettyPrint (sb, this, "");
+			return sb.ToString ();
+		}
+
+		static void PrettyPrint (StringBuilder builder, PathTreeNode node, string indent)
+		{
+			builder.Append (indent);
+			if (node.Next == null) {
+				builder.Append ("\\-");
+				indent += "  ";
+			} else {
+				builder.Append ("|-");
+				indent += "| ";
+			}
+
+			builder.Append (node.Segment);
+			if (node.IdCount != 0) {
+				builder.AppendFormat (" ({0})", node.IdCount);
+			}
+
+			node = node.FirstChild;
+			while (node != null) {
+				builder.AppendLine ();
+				PrettyPrint (builder, node, indent);
+				node = node.Next;
+			}
 		}
 	}
 }

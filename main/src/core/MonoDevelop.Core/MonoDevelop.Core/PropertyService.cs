@@ -71,7 +71,7 @@ namespace MonoDevelop.Core
 		
 		static PropertyService ()
 		{
-			Counters.PropertyServiceInitialization.BeginTiming ();
+			using var timer = Counters.PropertyServiceInitialization.BeginTiming ();
 			
 			string migrateVersion = null;
 			UserProfile migratableProfile = null;
@@ -109,8 +109,6 @@ namespace MonoDevelop.Core
 					PropertyChanged?.Invoke (sender, args);
 				});
 			};
-			
-			Counters.PropertyServiceInitialization.EndTiming ();
 		}
 		
 		internal static bool GetMigratableProfile (out UserProfile profile, out string version)
@@ -123,7 +121,7 @@ namespace MonoDevelop.Core
 			int userProfileMostRecent = UserProfile.ProfileVersions.Length - 2;
 			for (int i = userProfileMostRecent; i >= 1; i--) {
 				string v = UserProfile.ProfileVersions[i];
-				var p = UserProfile.GetProfile (v);
+				var p = UserProfile.GetProfile (v, false);
 				if (File.Exists (p.ConfigDir.Combine (FileName))) {
 					profile = p;
 					version = v;

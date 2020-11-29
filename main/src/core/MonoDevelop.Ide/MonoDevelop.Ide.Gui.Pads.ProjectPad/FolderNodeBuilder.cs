@@ -47,6 +47,7 @@ using MonoDevelop.Ide.Gui.Dialogs;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide.Gui.Components;
 using MonoDevelop.Ide.Projects;
+using MonoDevelop.Ide.Projects.FileNesting;
 
 namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 {
@@ -91,7 +92,8 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 					continue;
 				
 				if (file.Subtype != Subtype.Directory) {
-					if (file.DependsOnFile != null)
+					// If file depends on something other than a directory, continue
+					if ((file.DependsOnFile != null && file.DependsOnFile.Subtype != Subtype.Directory) || FileNestingService.HasParent (file))
 						continue;
 					
 					dir = file.IsLink
@@ -199,8 +201,11 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			var groupedFiles = new HashSet<ProjectFile> ();
 
 			foreach (var pf in dataObjects.OfType<ProjectFile> ()) {
-				foreach (var child in pf.DependentChildren)
-					groupedFiles.Add (child);
+				var children = FileNestingService.GetDependentOrNestedChildren (pf);
+				if (children != null) {
+					foreach (var child in children)
+						groupedFiles.Add (child);
+				}
 			}
 
 			foreach (object dataObject in dataObjects)
@@ -247,7 +252,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 				} else {
 					source = file.FilePath;
 				}
-				groupedChildren = file.DependentChildren;
+				groupedChildren = FileNestingService.GetDependentOrNestedTree (file);
 				what = null;
 			}
 			else if (dataObject is Gtk.SelectionData) {
@@ -432,9 +437,32 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			}
 			CurrentNode.Expanded = true;
 			if (IdeApp.Workbench.ActiveDocument != null)
-				IdeApp.Workbench.ActiveDocument.Window.SelectWindow ();
+				IdeApp.Workbench.ActiveDocument.Select ();
 		}
-		
+
+		[CommandHandler (ProjectCommands.AddEmptyClass)]
+		protected void OnAddEmptyClass ()
+		{
+			var project = (Project)CurrentNode.GetParentDataItem (typeof (Project), true);
+			if (project != null) {
+				if (IdeApp.ProjectOperations.CreateProjectFile (project, GetFolderPath (CurrentNode.DataItem), "EmptyClass")) {
+					CurrentNode.Expanded = true;
+				}
+			}
+		}
+
+		[CommandUpdateHandler (ProjectCommands.AddEmptyClass)]
+		protected void UpdateAddEmptyClass (CommandInfo info)
+		{
+			var project = (Project)CurrentNode.GetParentDataItem (typeof (Project), true);
+			if (project != null) {
+				info.Visible = IdeApp.ProjectOperations.CanCreateProjectFile (project, GetFolderPath (CurrentNode.DataItem), "EmptyClass");
+			} else {
+				info.Visible = false;
+			}
+		}
+
+
 		void OnFileInserted (ITreeNavigator nav)
 		{
 			nav.Selected = true;

@@ -1,4 +1,4 @@
-//
+﻿//
 // GuiBuilderProject.cs
 //
 // Author:
@@ -71,7 +71,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		{
 			this.fileName = fileName;
 			this.project = project;
-			Counters.GuiProjectsLoaded++;
+			Counters.GuiProjectsLoaded.Inc (1);
 			GuiBuilderService.NotifyGuiProjectLoaded ();
 		}
 		
@@ -96,7 +96,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 				hasError = true;
 			}
 
-			Counters.SteticProjectsLoaded++;
+			Counters.SteticProjectsLoaded.Inc (1);
 			gproject.ResourceProvider = GtkDesignInfo.FromProject (project).ResourceProvider;
 			gproject.WidgetAdded += OnAddWidget;
 			gproject.WidgetRemoved += OnRemoveWidget;
@@ -125,8 +125,8 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 			if (gproject == null)
 				return;
 
-			Counters.SteticProjectsLoaded--;
-			
+			Counters.SteticProjectsLoaded.Dec (1);
+
 			if (Unloaded != null)
 				Unloaded (this, EventArgs.Empty);
 			if (formInfos != null) {
@@ -252,7 +252,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 			if (disposed)
 				return;
 			GuiBuilderService.NotifyGuiProjectUnloaded ();
-			Counters.GuiProjectsLoaded--;
+			Counters.GuiProjectsLoaded.Dec (1);
 			disposed = true;
 			if (watcher != null)
 				watcher.Dispose ();
@@ -340,10 +340,10 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		void OnFileAdded (object sender, ProjectFileEventArgs e)
 		{
 			foreach (ProjectFileEventInfo args in e) {
-				var docId = TypeSystemService.GetDocumentId (args.Project, args.ProjectFile.Name);
+				var docId = IdeApp.TypeSystemService.GetDocumentId (args.Project, args.ProjectFile.Name);
 				if (docId == null)
 					continue;
-				var doc = TypeSystemService.GetCodeAnalysisDocument (docId);
+				var doc = IdeApp.TypeSystemService.GetCodeAnalysisDocument (docId);
 				if (doc == null)
 					continue;
 	
@@ -373,10 +373,10 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 
 			foreach (ProjectFileEventInfo args in e) {
 
-				var docId = TypeSystemService.GetDocumentId (args.Project, args.ProjectFile.Name);
+				var docId = IdeApp.TypeSystemService.GetDocumentId (args.Project, args.ProjectFile.Name);
 				if (docId == null)
 					continue;
-				var doc = TypeSystemService.GetCodeAnalysisDocument (docId);
+				var doc = IdeApp.TypeSystemService.GetCodeAnalysisDocument (docId);
 				if (doc == null)
 					continue;
 				var semanticModel = doc.GetSemanticModelAsync ().Result;
@@ -554,7 +554,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		{
 			System.Threading.Tasks.Task<Compilation> task;
 			do {
-				task = TypeSystemService.GetCompilationAsync (Project);
+				task = IdeApp.TypeSystemService.GetCompilationAsync (Project);
 				task.Wait (500);
 			} while (!task.IsCompleted);
 

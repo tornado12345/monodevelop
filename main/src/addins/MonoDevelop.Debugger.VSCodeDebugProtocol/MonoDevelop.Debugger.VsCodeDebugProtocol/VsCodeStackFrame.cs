@@ -1,24 +1,28 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Linq;
+
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
+
 using Mono.Debugging.Client;
+
+using VsStackFrame = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages.StackFrame;
 using VsFormat = Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages.StackFrameFormat;
 
 namespace MonoDevelop.Debugger.VsCodeDebugProtocol
 {
-	class VsCodeStackFrame : Mono.Debugging.Client.StackFrame
+	public class VsCodeStackFrame : Mono.Debugging.Client.StackFrame
 	{
 		public static VsFormat GetStackFrameFormat (EvaluationOptions evalOptions)
 		{
-			return new VsFormat (
-				evalOptions.StackFrameFormat.ParameterTypes ||
-				evalOptions.StackFrameFormat.ParameterNames ||
-				evalOptions.StackFrameFormat.ParameterValues,
-				evalOptions.StackFrameFormat.ParameterTypes,
-				evalOptions.StackFrameFormat.ParameterNames,
-				evalOptions.StackFrameFormat.ParameterValues,
-				evalOptions.StackFrameFormat.Line,
-				evalOptions.StackFrameFormat.Module);
+			return new VsFormat {
+				Parameters = evalOptions.StackFrameFormat.ParameterTypes || evalOptions.StackFrameFormat.ParameterNames || evalOptions.StackFrameFormat.ParameterValues,
+				ParameterTypes = evalOptions.StackFrameFormat.ParameterTypes,
+				ParameterNames = evalOptions.StackFrameFormat.ParameterNames,
+				ParameterValues = evalOptions.StackFrameFormat.ParameterValues,
+				Line = evalOptions.StackFrameFormat.Line,
+				Module = evalOptions.StackFrameFormat.Module
+			};
 		}
 
 		static string GetLanguage (string path)
@@ -34,14 +38,27 @@ namespace MonoDevelop.Debugger.VsCodeDebugProtocol
 			return null;
 		}
 
+		static SourceLink GetSourceLink(VSSourceLinkInfo info)
+		{
+			if (info == null)
+				return null;
+			return new SourceLink (info.Url, info.RelativeFilePath);
+		}
+
+		static SourceLocation GetSourceLocation (VsStackFrame frame)
+		{
+			var sourceLink = GetSourceLink (frame.Source?.VsSourceLinkInfo);
+			return new SourceLocation (frame.Name, frame.Source?.Path, frame.Line, frame.Column, frame.EndLine ?? -1, frame.EndColumn ?? -1, GetHashBytes (frame.Source), sourceLink);
+		}
+
 		VsFormat format;
 		readonly int threadId;
 		readonly int frameIndex;
 		internal readonly int frameId;
 		string fullStackframeText;
 
-		public VsCodeStackFrame (VsFormat format, int threadId, int frameIndex, Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages.StackFrame frame)
-			: base (0, new SourceLocation (frame.Name, frame.Source?.Path, frame.Line, frame.Column, frame.EndLine ?? -1, frame.EndColumn ?? -1, GetHashBytes (frame.Source)), GetLanguage (frame.Source?.Path))
+		public VsCodeStackFrame (VsFormat format, int threadId, int frameIndex, VsStackFrame frame)
+			: base (0, GetSourceLocation (frame), GetLanguage (frame.Source?.Path))
 		{
 			this.format = format;
 			this.threadId = threadId;
@@ -50,25 +67,58 @@ namespace MonoDevelop.Debugger.VsCodeDebugProtocol
 			this.frameId = frame.Id;
 		}
 
-		static byte [] HexToByteArray (string hex)
+		static byte ToXDigit (char c)
 		{
-			if (hex.Length % 2 == 1)
-				throw new ArgumentException ();
-			byte [] bytes = new byte [hex.Length / 2];
-			for (int i = 0; i < bytes.Length; i++) {
-				bytes [i] = Convert.ToByte (hex.Substring (i * 2, 2), 16);
-			}
-			return bytes;
+			if (c >= 'A' && c <= 'F')
+				return (byte) ((c - 'A') + 10);
+
+			if (c >= 'a' && c <= 'f')
+				return (byte) ((c - 'a') + 10);
+
+			if (c >= '0' && c <= '9')
+				return (byte) (c - '0');
+
+			throw new ArgumentException ();
 		}
 
-		static byte [] GetHashBytes (Source source)
+		public static byte[] HexToByteArray (string hex)
+		{
+			if (hex.Length % 2 == 1)
+				return null;
+
+			try {
+				var bytes = new byte[hex.Length / 2];
+				for (int i = 0, j = 0; i < bytes.Length; i++, j += 2) {
+					var x1 = ToXDigit (hex[j]);
+					var x2 = ToXDigit (hex[j + 1]);
+
+					bytes[i] = (byte) ((x1 << 4) | x2);
+				}
+
+				return bytes;
+			} catch {
+				return null;
+			}
+		}
+
+		static byte[] GetHashBytes (Source source)
 		{
 			if (source == null)
 				return null;
-			var checkSum = source.Checksums.FirstOrDefault (c => c.Algorithm == ChecksumAlgorithm.SHA1);
-			if (checkSum == null)
-				return null;
-			return HexToByteArray (checkSum.ChecksumValue);
+
+			foreach (var checksum in source.Checksums) {
+				switch (checksum.Algorithm) {
+				case ChecksumAlgorithm.SHA256:
+				case ChecksumAlgorithm.SHA1:
+				case ChecksumAlgorithm.MD5:
+					var hash = HexToByteArray (checksum.ChecksumValue);
+					if (hash != null)
+						return hash;
+					break;
+				}
+			}
+
+			return null;
 		}
 
 		public override string FullStackframeText {
@@ -83,7 +133,7 @@ namespace MonoDevelop.Debugger.VsCodeDebugProtocol
 					currentFormat.ParameterTypes != format.ParameterTypes ||
 					currentFormat.ParameterValues != format.ParameterValues) {
 					format = currentFormat;
-					var body = ((VSCodeDebuggerSession)DebuggerSession).protocolClient.SendRequestSync (new StackTraceRequest (threadId, frameIndex, 1, currentFormat));
+					var body = ((VSCodeDebuggerSession)DebuggerSession).protocolClient.SendRequestSync (new StackTraceRequest (threadId) { StartFrame = frameIndex, Levels = 1, Format = currentFormat });
 					fullStackframeText = body.StackFrames [0].Name;
 				}
 				return fullStackframeText;

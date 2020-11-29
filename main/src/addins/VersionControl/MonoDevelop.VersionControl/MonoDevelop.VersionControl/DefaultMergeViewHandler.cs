@@ -28,18 +28,15 @@ using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.VersionControl.Views;
 using MonoDevelop.Projects.Text;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.VersionControl
 {
 	public class DefaultMergeViewHandler : IVersionControlViewHandler
 	{
-		public bool CanHandle (VersionControlItem item, DocumentView primaryView)
-		{
-			return (primaryView == null || primaryView.GetContent <ITextFile> () != null)
-				&& item.Repository.GetFileIsText (item.Path);
-		}
+		public bool CanHandle (VersionControlItem item, DocumentController controller) => DefaultBlameViewHandler.DefaultVCSViewCanHandle (item, controller);
 
-		public BaseViewContent CreateView (VersionControlDocumentInfo info)
+		public DocumentController CreateView (VersionControlDocumentInfo info)
 		{
 			return new MergeView (info);
 		}

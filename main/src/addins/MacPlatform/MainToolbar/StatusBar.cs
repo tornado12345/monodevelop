@@ -43,6 +43,7 @@ using System.Threading;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using MonoDevelop.MacInterop;
+using MonoDevelop.Components.AtkCocoaHelper;
 
 namespace MonoDevelop.MacIntegration.MainToolbar
 {
@@ -473,7 +474,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 	}
 
 	[Register]
-	class StatusBar : NSFocusButton, MonoDevelop.Ide.StatusBar
+	class StatusBar : NSFocusButton, MonoDevelop.Ide.ITestableStatusBar
 	{
 		public enum MessageType
 		{
@@ -596,7 +597,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 			updateHandler = delegate {
 				int ec = 0, wc = 0;
 
-				foreach (var t in TaskService.Errors) {
+				foreach (var t in IdeServices.TaskService.Errors) {
 					if (t.Severity == TaskSeverity.Error)
 						ec++;
 					else if (t.Severity == TaskSeverity.Warning)
@@ -617,8 +618,8 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 
 			updateHandler (null, null);
 
-			TaskService.Errors.TasksAdded += updateHandler;
-			TaskService.Errors.TasksRemoved += updateHandler;
+			IdeServices.TaskService.Errors.TasksAdded += updateHandler;
+			IdeServices.TaskService.Errors.TasksRemoved += updateHandler;
 			BrandingService.ApplicationNameChanged += ApplicationNameChanged;
 
 			AddSubview (cancelButton);
@@ -666,8 +667,8 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 
 		protected override void Dispose (bool disposing)
 		{
-			TaskService.Errors.TasksAdded -= updateHandler;
-			TaskService.Errors.TasksRemoved -= updateHandler;
+			IdeServices.TaskService.Errors.TasksAdded -= updateHandler;
+			IdeServices.TaskService.Errors.TasksRemoved -= updateHandler;
 			Ide.Gui.Styles.Changed -= LoadStyles;
 			BrandingService.ApplicationNameChanged -= ApplicationNameChanged;
 			base.Dispose (disposing);
@@ -700,6 +701,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 		public override void ViewDidMoveToWindow ()
 		{
 			base.ViewDidMoveToWindow ();
+
 			ReconstructString ();
 			RepositionContents ();
 		}
@@ -720,30 +722,22 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				imageView.Image = image;
 				if (updatePopover) {
 					DestroyPopover (null, null);
-					ShowPopoverForStatusBar ();
+
+					// Window will be null if the StatusBar has been removed from its parent
+					// In that case we want to destroy the popover, but we don't want to show
+					// it again
+					if (Window != null) {
+						ShowPopoverForStatusBar ();
+					}
 				}
 			}
 		}
 
-		readonly List<StatusIcon> statusIcons = new List<StatusIcon> ();
-
-		// Xamarin.Mac has a bug where NSView.NextKeyView cannot be set to null
-		// Work around it here by rebinding it ourselves
-		// https://github.com/xamarin/xamarin-macios/issues/4558
-		[DllImport ("/usr/lib/libobjc.dylib", EntryPoint = "objc_msgSend")]
-		static extern void void_objc_msgSend_IntPtr (IntPtr receiver, IntPtr selector, IntPtr nextKeyViewHandle);
-		static readonly IntPtr setNextKeyViewSelector = ObjCRuntime.Selector.GetHandle ("setNextKeyView:");
-		static void NullableSetNextKeyView (NSView parent, NSView nextKeyView)
-		{
-			if (parent == null) {
-				throw new ArgumentNullException (nameof (parent));
-			}
-
-			void_objc_msgSend_IntPtr (parent.Handle, setNextKeyViewSelector, nextKeyView != null ? nextKeyView.Handle : IntPtr.Zero);
-		}
-
 		// Used by AutoTest.
-		internal string[] StatusIcons => statusIcons.Select(x => x.ToolTip).ToArray ();
+		string [] ITestableStatusBar.CurrentIcons => statusIcons.Select (x => x.ToolTip).ToArray ();
+		string ITestableStatusBar.CurrentText => text;
+
+		readonly List<StatusIcon> statusIcons = new List<StatusIcon> ();
 
 		internal void RemoveStatusIcon (StatusIcon icon)
 		{
@@ -934,8 +928,13 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 
 			bool changed = LoadText (message, isMarkup, statusType);
 			LoadPixbuf (image);
-			if (changed)
+			if (changed) {
 				ReconstructString ();
+				// announce new status if vo/a11y is enabled
+				if (IdeServices.DesktopService.AccessibilityInUse) {
+					IdeServices.DesktopService.MakeAccessibilityAnnouncement (text);
+				}
+			}
 		}
 
 		bool LoadText (string message, bool isMarkup, MessageType statusType)

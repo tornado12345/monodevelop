@@ -30,31 +30,25 @@ using Microsoft.CodeAnalysis.Editor.Shared.Utilities;
 using MonoDevelop.Core;
 using System.Threading;
 using System.Threading.Tasks;
+using MonoDevelop.Ide.Composition;
+using MonoDevelop.Ide.Editor;
+using UnitTests;
 
 namespace MonoDevelop.Ide.RoslynServices
 {
 	[TestFixture]
+	[RequireService (typeof (CompositionManager))]
 	public class RoslynServiceTests : IdeTestBase
 	{
-		[TestCase (false, false)]
-		[TestCase (true, false)]
-		[TestCase (true, true)]
-		public async Task TestForegroundThread (bool initAgain, bool inBg)
+		[TestCase (true)]
+		[TestCase (false)]
+		public async Task TestForegroundThread (bool inBg)
 		{
-			if (initAgain) {
-				var current = ForegroundThreadAffinitizedObject.CurrentForegroundThreadData;
-				if (inBg) {
-					await Task.Run (() => { RoslynService.Initialize (); });
-				} else
-					RoslynService.Initialize ();
-				Assert.AreSame (current, ForegroundThreadAffinitizedObject.CurrentForegroundThreadData);
-			}
+			var context = CompositionManager.Instance.GetExportedValue<IThreadingContext> ();
+			var obj = new ForegroundThreadAffinitizedObject (context, false);
 
-			var obj = new ForegroundThreadAffinitizedObject (false);
-
-			// FIXME: Roslyn does not about Xwt Synchronization context.
-			//Assert.AreEqual (ForegroundThreadDataKind.MonoDevelopGtk, obj.ForegroundKind);
-			Assert.AreEqual (Runtime.MainTaskScheduler, obj.ForegroundTaskScheduler);
+			var roslynContext = obj.ThreadingContext.JoinableTaskContext;
+			Assert.AreSame (Runtime.MainThread, roslynContext.MainThread);
 			Assert.IsTrue (obj.IsForeground ());
 
 			await Task.Run (() => {
@@ -62,14 +56,14 @@ namespace MonoDevelop.Ide.RoslynServices
 			});
 
 			int x = 0;
-			await obj.InvokeBelowInputPriority (() => {
+			await obj.InvokeBelowInputPriorityAsync (() => {
 				Assert.IsTrue (obj.IsForeground ());
 				x++;
 			});
 
 			Assert.AreEqual (1, x);
 
-			await Task.Run (() => obj.InvokeBelowInputPriority (() => {
+			await Task.Run (() => obj.InvokeBelowInputPriorityAsync (() => {
 				Assert.IsTrue (obj.IsForeground ());
 				x++;
 			}));

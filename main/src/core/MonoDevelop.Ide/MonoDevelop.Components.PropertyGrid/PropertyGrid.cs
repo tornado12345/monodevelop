@@ -1,4 +1,4 @@
-/* 
+﻿/* 
  * PropertyGrid.cs - A Gtk# widget that displays and allows 
  * editing of all of an object's public properties 
  *
@@ -45,12 +45,13 @@ using MonoDevelop.Components.PropertyGrid.PropertyEditors;
 using System.Collections.Generic;
 using System.Linq;
 using MonoDevelop.Ide.Fonts;
+using MonoDevelop.Ide;
 
 namespace MonoDevelop.Components.PropertyGrid
 {
 	[System.ComponentModel.Category("MonoDevelop.Components")]
 	[System.ComponentModel.ToolboxItem(true)]
-	public class PropertyGrid: Gtk.VBox
+	public class PropertyGrid: Gtk.VBox, IPropertyGrid
 	{
 		object currentObject;
 		object[] propertyProviders;
@@ -74,7 +75,9 @@ namespace MonoDevelop.Components.PropertyGrid
 		PropertySort propertySort = PropertySort.Categorized;
 		
 		const string PROP_HELP_KEY = "MonoDevelop.PropertyPad.ShowHelp";
-		
+
+		public Widget Widget => this;
+
 		public PropertyGrid (): this (new EditorManager ())
 		{
 		}
@@ -287,11 +290,11 @@ namespace MonoDevelop.Components.PropertyGrid
 			QueueDraw ();
 		}
 
-		internal bool IsEditing {
+		public bool IsEditing {
 			get { return tree.IsEditing; } 
 		}
 		
-		internal void Populate (bool saveEditSession)
+		public void Populate (bool saveEditSession)
 		{
 			PropertyDescriptorCollection properties;
 			
@@ -388,7 +391,7 @@ namespace MonoDevelop.Components.PropertyGrid
 			descTextView.Editable = false;
 			descTextView.LeftMargin = 5;
 			descTextView.RightMargin = 5;
-			descTextView.ModifyFont (FontService.SansFont.CopyModified (Ide.Gui.Styles.FontScale11));
+			descTextView.ModifyFont (IdeServices.FontService.SansFont.CopyModified (Ide.Gui.Styles.FontScale11));
 			
 			textScroll.Add (descTextView);
 			
@@ -421,7 +424,14 @@ namespace MonoDevelop.Components.PropertyGrid
 			descTitle = descText = null;
 			UpdateHelp ();
 		}
-		
+
+		public void BlankPad () => CurrentObject = null;
+
+		public void OnPadContentShown ()
+		{
+			//not implemented
+		}
+
 		public interface IToolbarProvider
 		{
 			void Insert (Widget w, int pos);

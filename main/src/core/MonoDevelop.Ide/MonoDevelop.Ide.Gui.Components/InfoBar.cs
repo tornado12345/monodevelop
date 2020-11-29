@@ -32,7 +32,7 @@ using Xwt.Drawing;
 
 namespace MonoDevelop.Ide.Gui.Components
 {
-	class XwtInfoBar : Widget
+	sealed class XwtInfoBar : Widget
 	{
 		static Image closeImage = Image.FromResource ("pad-close-9.png");
 		static Image closeImageInactive = Image.FromResource ("pad-close-9.png").WithAlpha (0.5);
@@ -43,17 +43,29 @@ namespace MonoDevelop.Ide.Gui.Components
 
 		public XwtInfoBar (string description, Action onDispose, params InfoBarItem[] items)
 		{
+			items ??= Array.Empty<InfoBarItem> ();
+
 			this.onDispose = onDispose;
 
 			var mainBox = new HBox {
 				BackgroundColor = Styles.NotificationBar.BarBackgroundColor,
+				MinHeight = 30
 			};
 
 			mainBox.PackStart (new ImageView (ImageService.GetIcon (Stock.Information, Gtk.IconSize.Menu)), marginLeft: 11);
 			mainBox.PackStart (descriptionLabel = new Label (description));
 
+			int firstItem = 0;
 			if (items.Length > 0 && items[0].Kind == InfoBarItemKind.Hyperlink) {
+				firstItem = 1;
+				var link = new InfoBarLink {
+					Text = items [0].Title,
+				};
+				link.AddAction (items [0].Action);
+				if (items [0].CloseAfter)
+					link.AddAction (() => Dispose ());
 				mainBox.PackStart (new Label ("–"));
+				mainBox.PackStart (link);
 			}
 
 			var closeButton = new InfoBarCloseButton {
@@ -62,7 +74,10 @@ namespace MonoDevelop.Ide.Gui.Components
 			};
 			closeButton.AddAction (() => Dispose ());
 
-			foreach (var item in items) {
+			var widgets = new List<Widget> (items.Length);
+
+			for (int i = items.Length - 1; i >= firstItem; i--) {
+				var item = items [i];
 				// TODO: abstract this into a factory.
 				Widget toAdd = null;
 				switch (item.Kind)
@@ -98,10 +113,12 @@ namespace MonoDevelop.Ide.Gui.Components
 				}
 
 				if (toAdd != null)
-					mainBox.PackStart (toAdd);
+					widgets.Add (toAdd);
 			}
 
 			mainBox.PackEnd (closeButton);
+			foreach (var widget in widgets)
+				mainBox.PackEnd (widget);
 
 			if (IdeApp.Preferences == null || IdeApp.Preferences.UserInterfaceTheme == Theme.Light) {
 				Content = new FrameBox (mainBox) {

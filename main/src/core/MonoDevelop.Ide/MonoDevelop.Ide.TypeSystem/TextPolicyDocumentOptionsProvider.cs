@@ -39,7 +39,7 @@ namespace MonoDevelop.Ide.TypeSystem
 	[Export (typeof (IDocumentOptionsProviderFactory))]
 	class TextPolicyDocumentOptionsProviderFactory : IDocumentOptionsProviderFactory
 	{
-		public IDocumentOptionsProvider Create (Workspace workspace)
+		public IDocumentOptionsProvider TryCreate (Workspace workspace)
 		{
 			return new TextPolicyDocumentOptionsProvider ();
 		}
@@ -49,12 +49,12 @@ namespace MonoDevelop.Ide.TypeSystem
 	{
 		public Task<IDocumentOptions> GetOptionsForDocumentAsync (Document document, CancellationToken cancellationToken)
 		{
-			var mimeChain = DesktopService.GetMimeTypeInheritanceChainForRoslynLanguage (document.Project.Language);
+			var mimeChain = IdeServices.DesktopService.GetMimeTypeInheritanceChainForRoslynLanguage (document.Project.Language);
 			if (mimeChain == null) {
 				return Task.FromResult<IDocumentOptions>(null);
 			}
 
-			var project = TypeSystemService.GetMonoProject (document.Project);
+			var project = IdeApp.TypeSystemService.GetMonoProject (document.Project);
 			var policy = project.Policies.Get<TextStylePolicy> (mimeChain);
 			return Task.FromResult<IDocumentOptions>(new TextDocumentOptions (policy));
 		}
@@ -68,7 +68,7 @@ namespace MonoDevelop.Ide.TypeSystem
 				this.policy = policy;
 			}
 
-			public bool TryGetDocumentOption (OptionKey option, OptionSet underlyingOptions, out object value)
+			public bool TryGetDocumentOption (OptionKey option, out object value)
 			{
 				if (option.Option == FormattingOptions.UseTabs) {
 					value = !policy.TabsToSpaces;

@@ -105,7 +105,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 
 		public override AppResult CheckType (Type desiredType)
 		{
-			if (ResultObject.GetType () == desiredType || ResultObject.GetType ().IsSubclassOf (desiredType)) {
+			if (desiredType.IsInstanceOfType (ResultObject)) {
 				return this;
 			}
 
@@ -196,7 +196,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 				var children = new List<AppResult> ();
 				for (int i = 0; i < control.RowCount; i++) {
 					LoggingService.LogInfo ($"Found row {i} of NSTableView -  {control.Identifier} - {control.AccessibilityIdentifier}");
-					children.Add (new NSObjectResult (control, i));
+					children.Add (DisposeWithResult (new NSObjectResult (control, i)));
 				}
 				return children;
 			}
@@ -221,7 +221,8 @@ namespace MonoDevelop.Components.AutoTest.Results
 				}
 				return true;
 			}
-			return false;
+
+			return ResultObject is NSView obj && obj.Window != null && obj.Window.MakeFirstResponder (obj);
 		}
 
 		public override AppResult Selected ()
@@ -274,17 +275,14 @@ namespace MonoDevelop.Components.AutoTest.Results
 
 		public override bool EnterText (string text)
 		{
-			NSControl control = ResultObject as NSControl;
-			if (control == null) {
-				return false;
+			if (ResultObject is NSView view && view.Window != null && view.Window.MakeFirstResponder(view)) {
+				foreach (var c in text) {
+					RealTypeKey (c);
+				}
+				return true;
 			}
 
-			control.Window.MakeFirstResponder (control);
-			foreach (var c in text) {
-				RealTypeKey (c);
-			}
-
-			return true;
+			return false;
 		}
 
 		public override bool TypeKey (char key, string state = "")
@@ -319,9 +317,69 @@ namespace MonoDevelop.Components.AutoTest.Results
 			SetProperty (ResultObject, propertyName, value);
 		}
 
-#region MacPlatform.MacIntegration.MainToolbar.SelectorView
+		#region MacPlatform.MacIntegration.MainToolbar.SelectorView
+		PropertyInfo GetPropertyInfo (string propertyName)
+		{
+			var type = ResultObject.GetType ();
+			return type.GetProperty (propertyName);
+		}
+
+		object GetModelObject (PropertyInfo propertyInfo)
+		{
+			return propertyInfo.GetValue (ResultObject, null);
+		}
+
+		public IConfigurationModel[] GetConfigurationModels ()
+		{
+			var pinfo = GetPropertyInfo ("ConfigurationModel");
+			if (pinfo == null) {
+				return null;
+			}
+			var models = (IEnumerable<IConfigurationModel>)GetModelObject (pinfo);
+
+			return models?.ToArray ();
+		}
+
+		public IRuntimeMutableModel[] GetRuntimeModels ()
+		{
+			var pinfo = GetPropertyInfo ("RuntimeModel");
+			if (pinfo == null) {
+				return null;
+			}
+			var topModels = (IEnumerable<IRuntimeModel>)GetModelObject (pinfo);
+			return AllRuntimes (topModels).Where (x => !x.IsSeparator && x.IsIndented).Select (x => x.GetMutableModel ()).ToArray ();
+		}
+
+		public IConfigurationModel GetActiveConfiguration ()
+		{
+			var pinfo = GetPropertyInfo ("ActiveConfiguration");
+			return (IConfigurationModel)pinfo.GetValue (ResultObject);
+		}
+
+		public string GetActiveStartupProject ()
+		{
+			var pinfo = GetPropertyInfo ("ActiveRunConfiguration");
+			var activeRuntime = (IRunConfigurationModel)pinfo.GetValue (ResultObject);
+			return activeRuntime.DisplayString;
+		}
+
+		public IRuntimeMutableModel GetActiveRuntime ()
+		{
+			var pinfo = GetPropertyInfo ("ActiveRuntime");
+			var activeRuntime = (IRuntimeModel)pinfo.GetValue (ResultObject);
+			return activeRuntime.GetMutableModel ();
+		}
+
+		public string[] GetStartupProjectNames ()
+		{
+			var pinfo = GetPropertyInfo ("RunConfigurationModel");
+			var runConfigs = (IEnumerable<IRunConfigurationModel>)pinfo.GetValue (ResultObject);
+			return runConfigs.Select (x => x.DisplayString).ToArray ();
+		}
+
 		public override bool SetActiveConfiguration (string configurationName)
 		{
+			LoggingService.LogDebug ($"Set Active configuration with name as '{configurationName}'");
 			Type type = ResultObject.GetType ();
 			PropertyInfo pinfo = type.GetProperty ("ConfigurationModel");
 			if (pinfo == null) {
@@ -329,7 +387,10 @@ namespace MonoDevelop.Components.AutoTest.Results
 			}
 
 			IEnumerable<IConfigurationModel> model = (IEnumerable<IConfigurationModel>)pinfo.GetValue (ResultObject, null);
-			var configuration = model.FirstOrDefault (c => c.DisplayString == configurationName);
+			LoggingService.LogDebug (string.Format ("Found configurations: {0}",
+				string.Join(", ", model.Select(m => $"['{m.OriginalId}' '{m.DisplayString}']"))));
+			var configuration = model.FirstOrDefault (
+				c => c.DisplayString.Contains(configurationName) || c.OriginalId.Contains(configurationName));
 			if (configuration == null) {
 				return false;
 			}
@@ -339,22 +400,60 @@ namespace MonoDevelop.Components.AutoTest.Results
 				return false;
 			}
 
+			LoggingService.LogDebug ($"Setting the active configuration as: '{configuration.OriginalId}' '{configuration.DisplayString}'");
 			pinfo.SetValue (ResultObject, configuration);
+
+			var activeConfiguration = (IConfigurationModel)pinfo.GetValue (ResultObject);
+			if (activeConfiguration != null) {
+				LoggingService.LogDebug ($"Checking active configuration is actually set: '{configuration.OriginalId}' '{configuration.DisplayString}'");
+				if (configuration.OriginalId == activeConfiguration.OriginalId)
+					return true;
+			}
 			return true;
 		}
 
 		public override bool SetActiveRuntime (string runtimeName)
 		{
+			LoggingService.LogDebug ($"Set Active runtime with name/ID as '{runtimeName}'");
 			Type type = ResultObject.GetType ();
 			PropertyInfo pinfo = type.GetProperty ("RuntimeModel");
 			if (pinfo == null) {
+				LoggingService.LogDebug ($"Could not find 'RuntimeModel' property on {type}");
 				return false;
 			}
 
-			IEnumerable<IRuntimeModel> model = (IEnumerable<IRuntimeModel>)pinfo.GetValue (ResultObject, null);
+			var pObject = pinfo.GetValue (ResultObject, null);
+			LoggingService.LogDebug ($"'RuntimeModel' property on '{type}' is '{pObject}' and is of type '{pinfo.PropertyType}'");
+			var topRunTimeModels = (IEnumerable<IRuntimeModel>)pObject;
+			var model = AllRuntimes (topRunTimeModels);
+			model = model.Where (x => !x.IsSeparator);
 
-			var runtime = model.FirstOrDefault (r => r.GetMutableModel ().FullDisplayString == runtimeName);
+			var runtime = model.FirstOrDefault (r => {
+				var mutableModel = r.GetMutableModel ();
+				LoggingService.LogDebug ($"[IRuntimeModel.IRuntimeMutableModel] FullDisplayString: '{mutableModel.FullDisplayString}' | DisplayString: '{mutableModel.DisplayString}'");
+
+				if (string.IsNullOrEmpty (runtimeName))
+					return false;
+
+				if (!string.IsNullOrWhiteSpace(mutableModel.FullDisplayString) && mutableModel.FullDisplayString.Contains (runtimeName))
+					return true;
+				if (!string.IsNullOrWhiteSpace(mutableModel.DisplayString) && mutableModel.DisplayString.Contains (runtimeName))
+					return true;
+
+				var execTargetPInfo = r.GetType().GetProperty ("ExecutionTarget");
+				if(execTargetPInfo != null) {
+					if (execTargetPInfo.GetValue (r) is Core.Execution.ExecutionTarget execTarget) {
+						LoggingService.LogDebug ($"[IRuntimeModel.ExecutionTarget] Id: '{execTarget.Id}' | FullName: '{execTarget.FullName}'");
+						if (execTarget.Id != null && execTarget.Id.Contains (runtimeName))
+							return true;
+						if (execTarget.FullName != null && execTarget.FullName.Contains (runtimeName))
+							return true;
+					}
+				}
+				return false;
+			});
 			if (runtime == null) {
+				LoggingService.LogDebug ($"Did not find an IRuntimeModel for '{runtimeName}'");
 				return false;
 			}
 
@@ -363,9 +462,28 @@ namespace MonoDevelop.Components.AutoTest.Results
 				return false;
 			}
 
+			LoggingService.LogDebug ($"Setting ActiveRuntime: Id: '{runtime.GetMutableModel ().FullDisplayString}'");
 			pinfo.SetValue (ResultObject, runtime);
-			return true;
+
+			// Now we need to make sure that the ActiveRuntime is actually set
+			var activeRuntime = (IRuntimeModel)pinfo.GetValue (ResultObject);
+			if(activeRuntime != null) {
+				LoggingService.LogDebug ($"Checking ActiveRuntime: Id: '{activeRuntime.GetMutableModel().FullDisplayString}'");
+				if (activeRuntime.GetMutableModel ().DisplayString == runtime.GetMutableModel ().DisplayString)
+					return true;
+			}
+			return false;
 		}
+
+		IEnumerable<IRuntimeModel> AllRuntimes (IEnumerable<IRuntimeModel> runtimes)
+		{
+			foreach (var runtime in runtimes) {
+				yield return runtime;
+				foreach (var childRuntime in AllRuntimes (runtime.Children))
+					yield return childRuntime;
+			}
+		}
+
 		#endregion
 
 		protected override void Dispose (bool disposing)

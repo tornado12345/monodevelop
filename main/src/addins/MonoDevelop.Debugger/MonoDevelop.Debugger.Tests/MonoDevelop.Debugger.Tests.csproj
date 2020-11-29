@@ -17,8 +17,13 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\..\..\..\external\debugger-libs\UnitTests\Mono.Debugging.Tests\Shared\*.cs" />
+    <Compile Include="..\..\..\..\external\debugger-libs\UnitTests\Mono.Debugging.Tests\Shared\Sdb\*.cs" />
+    <Compile Include="..\..\..\..\external\debugger-libs\UnitTests\Mono.Debugging.Tests\Shared\Win32\*.cs" />
     <Compile Include="DebugTests.MonoDevelop.cs" />
     <Compile Include="TextFile.cs" />
+    <Compile Include="VsCodeStackFrameTests.cs" />
+    <Compile Include="BreakpointsAndSteppingTests.cs" />
+    <Compile Include="ObjectValueTreeViewControllerTests.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MonoDevelop.Debugger.csproj">
@@ -36,11 +41,6 @@
       <Name>MonoDevelop.Ide</Name>
       <Private>False</Private>
     </ProjectReference>
-    <ProjectReference Include="..\..\..\..\external\nrefactory\ICSharpCode.NRefactory\ICSharpCode.NRefactory.csproj">
-      <Project>{3B2A5653-EC97-4001-BB9B-D90F1AF2C371}</Project>
-      <Name>ICSharpCode.NRefactory</Name>
-      <Private>False</Private>
-    </ProjectReference>
     <ProjectReference Include="..\..\..\..\external\mono-addins\Mono.Addins\Mono.Addins.csproj">
       <Project>{91DD5A2D-9FE3-4C3C-9253-876141874DAD}</Project>
       <Name>Mono.Addins</Name>
@@ -54,10 +54,16 @@
     <ProjectReference Include="..\..\..\..\external\guiunit\src\framework\GuiUnit_NET_4_5.csproj">
       <Project>{D12F0F7B-8DE3-43EC-BA49-41052D065A9B}</Project>
       <Name>GuiUnit_NET_4_5</Name>
+      <Private>False</Private>
     </ProjectReference>
     <ProjectReference Include="..\..\..\..\external\debugger-libs\Mono.Debugging.Soft\Mono.Debugging.Soft.csproj">
       <Project>{DE40756E-57F6-4AF2-B155-55E3A88CCED8}</Project>
       <Name>Mono.Debugging.Soft</Name>
+      <Private>False</Private>
+    </ProjectReference>
+    <ProjectReference Include="..\..\MonoDevelop.Debugger.VSCodeDebugProtocol\MonoDevelop.Debugger.VsCodeDebugProtocol\MonoDevelop.Debugger.VsCodeDebugProtocol.csproj">
+      <Project>{10F5BBD5-8A1D-4563-BCE4-DE681DFD82FD}</Project>
+      <Name>MonoDevelop.Debugger.VsCodeDebugProtocol</Name>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />

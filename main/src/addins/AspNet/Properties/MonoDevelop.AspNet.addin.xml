@@ -57,6 +57,7 @@
 		<Import file = "Templates/EmptyLessFile.xft.xml"/>
 		<Import file = "Templates/EmptyScssFile.xft.xml"/>
 		<Import file = "Templates/EmptyJsonFile.xft.xml"/>
+		<Import file = "Templates/EmptyJavaScriptFile.xft.xml"/>
 		<Import file = "Templates/EmptyTypeScriptFile.xft.xml"/>
 		<Import file = "Templates/GlobalAsax.xft.xml"/>
 		<Import file = "Templates/JsonFileTemplate.json"/>
@@ -87,10 +88,6 @@
 	</ExtensionPoint>
 
 	<ExtensionPoint path = "/MonoDevelop/Asp/CompletionBuilders">
-		<ExtensionNode name="Class" />
-	</ExtensionPoint>
-
-	<ExtensionPoint path = "/MonoDevelop/Razor/CompletionBuilders">
 		<ExtensionNode name="Class" />
 	</ExtensionPoint>
 
@@ -176,6 +173,8 @@
 		              file = "Templates/EmptyScssFile.xft.xml"/>
 		<FileTemplate id   = "EmptyJSONFile"
 		              file = "Templates/EmptyJsonFile.xft.xml"/>
+		<FileTemplate id   = "EmptyJavaScriptFile"
+		              file = "Templates/EmptyJavaScriptFile.xft.xml"/>
 		<FileTemplate id   = "EmptyTypeScriptFile"
 		              file = "Templates/EmptyTypeScriptFile.xft.xml"/>
 		
@@ -197,7 +196,11 @@
 		            _label = "HTML Files"
 		            extensions = "*.htm,*.html"/>
 	</Extension>
-
+	
+	<Extension path="/MonoDevelop/TextEditor/LegacyEditorSupport">
+        <LegacyEditorSupport id="aspx" extensions=".aspx,.ashx,.asmx,.ascx,.master,.asax" />
+    </Extension>
+	
 	<Extension path = "/MonoDevelop/ProjectModel/ProjectModelExtensions">
 		<ProjectFlavor
 			guid="{603C0E0B-DB56-11DC-BE95-000D561079B0}"
@@ -349,7 +352,6 @@
 	<Extension path = "/MonoDevelop/Ide/TextEditorExtensions">
 		<Class fileExtensions=".aspx, .ascx, .master" class = "MonoDevelop.AspNet.WebForms.WebFormsEditorExtension" />
 		<Class mimeTypes="text/html,application/x-spark" class = "MonoDevelop.AspNet.Html.HtmlEditorExtension" />
-		<Class mimeTypes="text/x-cshtml" class = "MonoDevelop.AspNet.Razor.RazorCSharpEditorExtension" />
 	</Extension>
 
 	<Extension path = "/MonoDevelop/Html/DocTypes">
@@ -405,7 +407,7 @@
 
 	<Extension path = "/MonoDevelop/Ide/CustomTools">
 		<!-- NOTE: we explicitly do no call this "RazorGenerator" to avoid conflicts with http://razorgenerator.codeplex.com/ -->
-		<Tool name="RazorTemplatePreprocessor" type="MonoDevelop.AspNet.Razor.Generator.RazorTemplatePreprocessor"/>
+		<Tool name="RazorTemplatePreprocessor" type="MonoDevelop.AspNet.Razor.Generator.RazorTemplatePreprocessor" extensions=".cshtml" />
 	</Extension>
 
 	<Extension path = "/MonoDevelop/Ide/FileTemplateConditionTypes">
@@ -417,10 +419,10 @@
 	</Extension>
 
 	<Extension path="/MonoDevelop/Ide/TemplateImages">
-		<Image id="md-aspnet-empty-project" resource="project-aspnet-template.png" />
+		<Image id="md-aspnet-empty-project" resource="aspnet-sidebar.png" />
 	</Extension>
 	
 	<Extension path="/MonoDevelop/Core/StockIcons">
-		<StockIcon stockid="md-aspnet-empty-project" resource="project-aspnet-32.png" size="Dnd" />
+		<StockIcon stockid="md-aspnet-empty-project" resource="aspnet-project.png" size="Dnd" />
 	</Extension>
 </ExtensionModel>

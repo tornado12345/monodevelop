@@ -603,8 +603,8 @@ namespace MonoDevelop.Projects.MSBuild
 					return false;
 
 				LoggingService.LogError (Environment.StackTrace);
-				monitor.ReportError ("Could not open unmigrated project and no migrator was supplied", null);
-				throw new UserException ("Project migration failed");
+				monitor.ReportError (GettextCatalog.GetString ("Could not open unmigrated project and no migrator was supplied"), null);
+				throw new UserException (GettextCatalog.GetString ("Project migration failed"));
 			}
 			
 			var migrationType = st.MigrationHandler.CanPromptForMigration
@@ -612,8 +612,8 @@ namespace MonoDevelop.Projects.MSBuild
 				: projectLoadMonitor.ShouldMigrateProject ();
 			if (migrationType == MigrationType.Ignore) {
 				if (st.IsMigrationRequired) {
-					monitor.ReportError (string.Format ("{1} cannot open the project '{0}' unless it is migrated.", Path.GetFileName (fileName), BrandingService.ApplicationName), null);
-					throw new UserException ("The user choose not to migrate the project");
+					monitor.ReportError (GettextCatalog.GetString ("{1} cannot open the project '{0}' unless it is migrated.", Path.GetFileName (fileName), BrandingService.ApplicationName), null);
+					throw new UserException (GettextCatalog.GetString ("The user choose not to migrate the project"));
 				} else
 					return false;
 			}
@@ -635,7 +635,7 @@ namespace MonoDevelop.Projects.MSBuild
 			}
 
 			if (!await st.MigrationHandler.Migrate (projectLoadMonitor, p, fileName, language))
-				throw new UserException ("Project migration failed");
+				throw new UserException (GettextCatalog.GetString ("Project migration failed"));
 
 			return true;
 		}
@@ -783,25 +783,25 @@ namespace MonoDevelop.Projects.MSBuild
 			if (file == null)
 				return Task.FromResult<SolutionItem> (new GenericProject ());
 
-			return Task<SolutionItem>.Factory.StartNew (delegate {
-				var t = ReadGenericProjectType (file);
-				if (t == null)
-					throw new UserException ("Unknown project type");
+			// Unknown project types are already displayed in the solution view, we don't need to tell the user with a modal dialog as well
+			var t = ReadGenericProjectType (file);
+			if (t == null)
+				return Task.FromException<SolutionItem> (new UnknownSolutionItemTypeException (GettextCatalog.GetString ("Unknown project type")));
 
-				var dt = Services.ProjectService.DataContext.GetConfigurationDataType (t);
-				if (dt != null) {
-					if (!typeof(Project).IsAssignableFrom (dt.ValueType))
-						throw new UserException ("Unknown project type: " + t);
-					return (SolutionItem)Activator.CreateInstance (dt.ValueType);
-				}
+			var dt = Services.ProjectService.DataContext.GetConfigurationDataType (t);
+			if (dt != null) {
+				if (!typeof (Project).IsAssignableFrom (dt.ValueType))
+					return Task.FromException<SolutionItem> (new UnknownSolutionItemTypeException (GettextCatalog.GetString ("Unknown project type: {0}", t)));
 
-				Type type;
-				lock (genericProjectTypes) {
-					if (!genericProjectTypes.TryGetValue (t, out type))
-						throw new UserException ("Unknown project type: " + t);
-				}
-				return (SolutionItem)Activator.CreateInstance (type);
-			});
+				return Task.FromResult ((SolutionItem)Activator.CreateInstance (dt.ValueType));
+			}
+
+			Type type;
+			lock (genericProjectTypes) {
+				if (!genericProjectTypes.TryGetValue (t, out type))
+					return Task.FromException<SolutionItem> (new UnknownSolutionItemTypeException (GettextCatalog.GetString ("Unknown project type: {0}", t)));
+			}
+			return Task.FromResult ((SolutionItem)Activator.CreateInstance (type));
 		}
 
 		static string ReadGenericProjectType (string file)
@@ -841,7 +841,7 @@ namespace MonoDevelop.Projects.MSBuild
 		{
 			int i = str.IndexOfAny (specialCharacters);
 			if (i != -1) {
-				var sb = new System.Text.StringBuilder ();
+				var sb = StringBuilderCache.Allocate ();
 				int start = 0;
 				while (i != -1) {
 					sb.Append (str, start, i - start);
@@ -853,7 +853,7 @@ namespace MonoDevelop.Projects.MSBuild
 				}
 				if (start < str.Length)
 					sb.Append (str, start, str.Length - start);
-				return sb.ToString ();
+				return StringBuilderCache.ReturnAndFree (sb);
 			}
 			return str;
 		}

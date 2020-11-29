@@ -24,23 +24,19 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+using System;
+using System.Linq;
+using System.Threading.Tasks;
 using MonoDevelop.Core;
 using MonoDevelop.Core.Execution;
 using MonoDevelop.Ide;
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Net.Sockets;
+using MonoDevelop.Core.Web;
 
 namespace MonoDevelop.AspNetCore
 {
 	class AspNetCoreExecutionHandler : IExecutionHandler
 	{
-		public bool CanExecute (ExecutionCommand command)
-		{
-			return command is AspNetCoreExecutionCommand;
-		}
+		public bool CanExecute (ExecutionCommand command) => command is AspNetCoreExecutionCommand;
 
 		public ProcessAsyncOperation Execute (ExecutionCommand command, OperationConsole console)
 		{
@@ -48,7 +44,8 @@ namespace MonoDevelop.AspNetCore
 
 			// ApplicationURL is passed to ASP.NET Core server via ASPNETCORE_URLS enviorment variable
 			var envVariables = dotNetCoreCommand.EnvironmentVariables.ToDictionary ((arg) => arg.Key, (arg) => arg.Value);
-			envVariables ["ASPNETCORE_URLS"] = dotNetCoreCommand.ApplicationURL;
+			if (!envVariables.ContainsKey ("ASPNETCORE_URLS"))
+				envVariables ["ASPNETCORE_URLS"] = dotNetCoreCommand.ApplicationURLs;
 
 			var process = Runtime.ProcessService.StartConsoleProcess (
 				dotNetCoreCommand.Command,
@@ -56,21 +53,21 @@ namespace MonoDevelop.AspNetCore
 				dotNetCoreCommand.WorkingDirectory,
 				console,
 				envVariables);
+
 			if (dotNetCoreCommand.LaunchBrowser) {
-				LaunchBrowser (dotNetCoreCommand.ApplicationURL, dotNetCoreCommand.LaunchURL, process.Task).Ignore ();
+				LaunchBrowserAsync (dotNetCoreCommand.ApplicationURL, dotNetCoreCommand.LaunchURL, dotNetCoreCommand.Target, process.Task).Ignore ();
 			}
+
 			return process;
 		}
 
-		public static async Task LaunchBrowser (string appUrl, string launchUrl, Task processTask)
+		public static async Task LaunchBrowserAsync (string appUrl, string launchUrl, ExecutionTarget target, Task processTask)
 		{
 			launchUrl = launchUrl ?? "";
-			Uri launchUri;
-			//Check if lanuchUrl is valid absolute url and use it if it is...
-			if (!Uri.TryCreate (launchUrl, UriKind.Absolute, out launchUri)) {
-				//Otherwise check if appUrl is valid absolute and lanuchUrl is relative then concat them...
-				Uri appUri;
-				if (!Uri.TryCreate (appUrl, UriKind.Absolute, out appUri)) {
+			//Check if launchUrl is valid absolute url and use it if it is...
+			if (!Uri.TryCreate (launchUrl, UriKind.Absolute, out var launchUri) || launchUri.IsFile) {
+				//Otherwise check if appUrl is valid absolute and launchUrl is relative then concat them...
+				if (!Uri.TryCreate (appUrl, UriKind.Absolute, out var appUri) || appUri.IsFile) {
 					LoggingService.LogWarning ("Failed to launch browser because invalid launch and app urls.");
 					return;
 				}
@@ -83,13 +80,13 @@ namespace MonoDevelop.AspNetCore
 
 			//Try to connect every 50ms while process is running
 			while (!processTask.IsCompleted) {
-				await Task.Delay (50);
-				using (var tcpClient = new TcpClient ()) {
+				await Task.Delay (50).ConfigureAwait (false);
+				using (var httpClient = HttpClientProvider.CreateHttpClient (launchUri.AbsoluteUri)) {
 					try {
-						tcpClient.Connect (launchUri.Host, launchUri.Port);
-						// pause briefly to allow the server process to initialize
-						await Task.Delay (TimeSpan.FromSeconds (1));
-						break;
+						using (var response = await httpClient.GetAsync (launchUri.AbsoluteUri, System.Net.Http.HttpCompletionOption.ResponseHeadersRead)) {
+							await Task.Delay (1000).ConfigureAwait (false);
+							break;
+						}
 					} catch {
 					}
 				}
@@ -101,7 +98,12 @@ namespace MonoDevelop.AspNetCore
 			}
 
 			// Process is still alive hence we succesfully connected inside loop to web server, launch browser
-			DesktopService.ShowUrl (launchUri.AbsoluteUri);
+			var aspNetCoreTarget = target as AspNetCoreExecutionTarget;
+			if (aspNetCoreTarget != null && !aspNetCoreTarget.DesktopApplication.IsDefault) {
+				aspNetCoreTarget.DesktopApplication.Launch (launchUri.AbsoluteUri);
+			} else {
+				IdeServices.DesktopService.ShowUrl (launchUri.AbsoluteUri);
+			}
 		}
 	}
 }

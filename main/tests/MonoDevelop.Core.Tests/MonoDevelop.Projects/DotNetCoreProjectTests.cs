@@ -27,15 +27,13 @@
 using System;
 using System.IO;
 using System.Diagnostics;
-using System.Xml;
 using NUnit.Framework;
 using UnitTests;
 using MonoDevelop.Core;
+using MonoDevelop.Core.Execution;
 using System.Linq;
 using MonoDevelop.Projects.MSBuild;
 using System.Threading.Tasks;
-using MonoDevelop.Core.Serialization;
-using MonoDevelop.Projects.Extensions;
 
 namespace MonoDevelop.Projects
 {
@@ -320,9 +318,7 @@ namespace MonoDevelop.Projects
 		{
 			FilePath solFile = Util.GetSampleProject ("NetStandardXamarinForms", "NetStandardXamarinForms.sln");
 
-			var process = Process.Start ("msbuild", $"/t:Restore \"{solFile}\"");
-			Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-			Assert.AreEqual (0, process.ExitCode);
+			Util.RunMSBuild ($"/t:Restore \"{solFile}\"");
 
 			var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile);
 			var p = (Project)sol.Items [0];
@@ -347,9 +343,7 @@ namespace MonoDevelop.Projects
 		{
 			FilePath solFile = Util.GetSampleProject ("NetStandardXamarinForms", "NetStandardXamarinForms.sln");
 
-			var process = Process.Start ("msbuild", $"/t:Restore \"{solFile}\"");
-			Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-			Assert.AreEqual (0, process.ExitCode);
+			Util.RunMSBuild ($"/t:Restore \"{solFile}\"");
 
 			var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile);
 			var p = (Project)sol.Items [0];
@@ -397,9 +391,7 @@ namespace MonoDevelop.Projects
 		{
 			FilePath solFile = Util.GetSampleProject ("NetStandardXamarinForms", "NetStandardXamarinForms.sln");
 
-			var process = Process.Start ("msbuild", $"/t:Restore \"{solFile}\"");
-			Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-			Assert.AreEqual (0, process.ExitCode);
+			Util.RunMSBuild ($"/t:Restore \"{solFile}\"");
 
 			var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile);
 			var p = (Project)sol.Items [0];
@@ -452,9 +444,7 @@ namespace MonoDevelop.Projects
 				// No DependsOn set until NuGet restore and re-evaluation.
 				Assert.AreEqual (string.Empty, xamlCSharpFile.DependsOn);
 
-				var process = Process.Start ("msbuild", $"/t:Restore \"{solFile}\"");
-				Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-				Assert.AreEqual (0, process.ExitCode);
+				Util.RunMSBuild ($"/t:Restore \"{solFile}\"");
 
 				await p.ReevaluateProject (Util.GetMonitor ());
 
@@ -498,9 +488,7 @@ namespace MonoDevelop.Projects
 			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
 				var p = (Project)sol.Items [0];
 
-				var process = Process.Start ("msbuild", $"/t:Restore \"{solFile}\"");
-				Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-				Assert.AreEqual (0, process.ExitCode);
+				Util.RunMSBuild ($"/t:Restore \"{solFile}\"");
 
 				await p.ReevaluateProject (Util.GetMonitor ());
 
@@ -525,9 +513,7 @@ namespace MonoDevelop.Projects
 				var p = (Project)sol.Items [0];
 				Assert.AreEqual ("DotNetCoreNoMainPropertyGroup", p.Name);
 
-				var process = Process.Start ("msbuild", $"/t:Restore \"{solFile}\"");
-				Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-				Assert.AreEqual (0, process.ExitCode);
+				Util.RunMSBuild ($"/t:Restore \"{solFile}\"");
 
 				await p.ReevaluateProject (Util.GetMonitor ());
 
@@ -538,6 +524,276 @@ namespace MonoDevelop.Projects
 				string savedProjectXml = File.ReadAllText (p.FileName);
 				Assert.AreEqual (projectXml, savedProjectXml);
 			}
+		}
+
+		[Test]
+		public async Task ItemDefinitionGroup ()
+		{
+			FilePath projFile = Util.GetSampleProject ("project-with-item-def-group", "netstandard-sdk.csproj");
+			RunMSBuildRestore (projFile);
+
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectItem = p.Files.Single (f => f.Include == "Class1.cs");
+
+				Assert.AreEqual ("NewValue", projectItem.Metadata.GetValue ("OverriddenProperty"));
+				Assert.AreEqual ("Test", projectItem.Metadata.GetValue ("TestProperty"));
+				Assert.AreEqual (FileCopyMode.PreserveNewest, projectItem.CopyToOutputDirectory);
+			}
+		}
+
+		[Test]
+		public async Task ItemDefinitionGroup_AddFileWithSameMetadataAsItemDefinition_MetadataNotSaved ()
+		{
+			FilePath projFile = Util.GetSampleProject ("project-with-item-def-group", "netstandard-sdk.csproj");
+			RunMSBuildRestore (projFile);
+
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectItem = p.Files.Single (f => f.Include == "Class1.cs");
+
+				var refXml = File.ReadAllText (p.FileName);
+
+				var newItemFileName = projectItem.FilePath.ChangeName ("NewItem");
+				var newProjectItem = new ProjectFile (newItemFileName, projectItem.BuildAction);
+				newProjectItem.CopyToOutputDirectory = FileCopyMode.PreserveNewest;
+				newProjectItem.Metadata.SetValue ("TestProperty", "Test");
+				newProjectItem.Metadata.SetValue ("OverriddenProperty", "OriginalValue");
+
+				File.WriteAllText (newItemFileName, "class NewItem {}");
+
+				p.Files.Add (newProjectItem);
+				await p.SaveAsync (Util.GetMonitor ());
+
+				var savedXml = File.ReadAllText (p.FileName);
+
+				Assert.AreEqual (refXml, savedXml);
+			}
+		}
+
+		[Test]
+		public async Task ItemDefinitionGroup_AddFileWithoutMetadata_MetadataUsesEmptyElements ()
+		{
+			FilePath projFile = Util.GetSampleProject ("project-with-item-def-group", "netstandard-sdk.csproj");
+			RunMSBuildRestore (projFile);
+
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectItem = p.Files.Single (f => f.Include == "Class1.cs");
+
+				var newItemFileName = projectItem.FilePath.ChangeName ("NewItem");
+				var newProjectItem = new ProjectFile (newItemFileName, projectItem.BuildAction);
+				newProjectItem.CopyToOutputDirectory = FileCopyMode.PreserveNewest;
+
+				File.WriteAllText (newItemFileName, "class NewItem {}");
+
+				p.Files.Add (newProjectItem);
+				await p.SaveAsync (Util.GetMonitor ());
+
+				var refXml = File.ReadAllText (p.FileName + ".add-file-no-metadata");
+				var savedXml = File.ReadAllText (p.FileName);
+
+				Assert.AreEqual (refXml, savedXml);
+			}
+		}
+
+		[Test]
+		public async Task CustomAvailableItemName_FileImportedWithWildcard_FileAvailableInProject ()
+		{
+			FilePath solFile = Util.GetSampleProject ("sdk-imported-files", "netstandard.sln");
+
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = (Project)sol.Items [0];
+				var textFile = p.Files.SingleOrDefault (fi => fi.FilePath.FileName == "test.txt");
+
+				Assert.AreEqual ("MyTextFile", textFile.BuildAction);
+
+				// Ensure build actions are not cached too early and contain any custom MSBuild items
+				// defined directly in the project file.
+
+				string[] buildActions = p.GetBuildActions ();
+				Assert.That (buildActions, Contains.Item ("CustomBuildActionInProject"));
+			}
+		}
+
+		[Test]
+		[Platform (Exclude = "Win")]
+		public async Task BuildMultiTargetProject ()
+		{
+			FilePath projFile = Util.GetSampleProject ("multi-target", "multi-target2.csproj");
+
+			RunMSBuildRestore (projFile);
+
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+
+				var res = await p.RunTarget (Util.GetMonitor (false), "Build", ConfigurationSelector.Default);
+				var buildResult = res.BuildResult;
+
+				var expectedNetCoreOutputFile = projFile.ParentDirectory.Combine ("bin", "Debug", "netcoreapp1.1", "multi-target2.dll");
+				var expectedNetStandardOutputFile = projFile.ParentDirectory.Combine ("bin", "Debug", "netstandard1.0", "multi-target2.dll");
+
+				Assert.AreEqual (0, buildResult.Errors.Count);
+				Assert.IsTrue (File.Exists (expectedNetCoreOutputFile), ".NET Core assembly not built");
+				Assert.IsTrue (File.Exists (expectedNetStandardOutputFile), ".NET Standard assembly not built");
+
+				res = await p.RunTarget (Util.GetMonitor (false), "Clean", ConfigurationSelector.Default);
+				buildResult = res.BuildResult;
+
+				Assert.AreEqual (0, buildResult.Errors.Count);
+				Assert.IsFalse (File.Exists (expectedNetCoreOutputFile), ".NET Core assembly not removed on clean");
+				Assert.IsFalse (File.Exists (expectedNetStandardOutputFile), ".NET Standard assembly not removed on clean");
+			}
+		}
+
+		/// <summary>
+		/// Tests that on saving the project after making a small change the .xaml.fs files still depend on the
+		/// correct .xaml file.
+		/// </summary>
+		[Test]
+		[Platform (Exclude = "Win")]
+		public async Task FSharpXamarinFormsProject_SaveProject_XamlFilesDependentUponUnchanged ()
+		{
+			FilePath solFile = Util.GetSampleProject ("FSharpForms", "FSharpForms.sln");
+
+			RunMSBuildRestore (solFile);
+
+			using (var s = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = s.GetAllProjects ().OfType<DotNetProject> ().Single ();
+
+				await p.SaveAsync (Util.GetMonitor ());
+
+				// Re-evaluate to force the Project.Files to be refreshed. This would cause the DependsUpon
+				// to be changed for the ProjectFiles.
+				await p.ReevaluateProject (Util.GetMonitor ());
+
+				var mainPageXamlFSharp = p.Files.FirstOrDefault (f => f.FilePath.FileName == "MainPage.xaml.fs");
+				var appXamlFSharp = p.Files.FirstOrDefault (f => f.FilePath.FileName == "App.xaml.fs");
+
+				Assert.IsTrue (appXamlFSharp.DependsOn.EndsWith ("App.xaml", StringComparison.Ordinal), "Should end with App.xaml was '{0}'", appXamlFSharp.DependsOn);
+				Assert.IsTrue (mainPageXamlFSharp.DependsOn.EndsWith ("MainPage.xaml", StringComparison.Ordinal), "Should end with MainPage.xaml was '{0}'", mainPageXamlFSharp.DependsOn);
+			}
+		}
+
+		[Test]
+		public async Task LoadProject_UnknownNuGetSDKPackage_SDKResolutionErrorsReported ()
+		{
+			FilePath solFile = Util.GetSampleProject ("unknown-nuget-sdk", "UnknownNuGetSdk.sln");
+
+			using (var item = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = item.Items [0] as UnknownSolutionItem;
+				Assert.AreEqual (p.LoadError, "Unable to find SDK 'Test.Unknown.NET.Sdk/1.2.3'");
+			}
+		}
+
+		/// <summary>
+		/// Compile items preferred over None items.
+		/// </summary>
+		[Test]
+		public async Task GetSourceFilesAsync_SdkProjectWithCSharpFileDefindAsNoneThenCompileItem_FileHasCompileBuildAction ()
+		{
+			FilePath solFile = Util.GetSampleProject ("duplicate-none-compile-items", "duplicate-none-compile-items.sln");
+
+			RunMSBuildRestore (solFile);
+
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = (Project)sol.Items [0];
+
+				var files = await p.GetSourceFilesAsync (ConfigurationSelector.Default);
+				var class1File = files.Single (f => f.FilePath.FileName == "Class1.cs");
+
+				Assert.AreEqual (BuildAction.Compile, class1File.BuildAction);
+			}
+		}
+
+		[Test]
+		public async Task AddNewFileToProjectAndSave_ProjectHas1500CSharpFiles_SavingIsFast ()
+		{
+			FilePath solFile = Util.GetSampleProject ("netstandard-sdk", "netstandard-sdk.sln");
+
+			// Create 1500 C# files.
+			var sourceDirectory = solFile.ParentDirectory.Combine ("Files");
+			Directory.CreateDirectory (sourceDirectory);
+
+			for (int i = 0; i < 1500; ++i) {
+				string fileName = sourceDirectory.Combine ($"Test{i}.cs");
+				string code = "class Test" + i + "{}";
+				File.WriteAllText (fileName, code);
+			}
+
+			using (var solution = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = solution.GetAllProjects ().Single () as DotNetProject;
+				// Sanity check - ensure project and solution in same directory otherwise the generated .cs files
+				// will not be used.
+				Assert.AreEqual (solution.BaseDirectory, p.BaseDirectory);
+
+				string fileName = p.BaseDirectory.Combine ("NewClass.cs");
+				string code = "class NewClass {}";
+				File.WriteAllText (fileName, code);
+
+				p.AddFile (fileName, BuildAction.Compile);
+
+				var timer = Stopwatch.StartNew ();
+				await p.SaveAsync (Util.GetMonitor ());
+				timer.Stop ();
+
+				// This was taking 20 seconds before.
+				// Takes about 300ms with ProjectFile.Include caching. Here we use 2 seconds
+				// in case the build server is slow.
+				Assert.That (timer.ElapsedMilliseconds, Is.LessThan (2000));
+			}
+		}
+
+		[Test]
+		public async Task MultiTargetProject_ExecutionTargets ()
+		{
+			FilePath solutionFile = Util.GetSampleProject ("multi-target-execution-targets", "multi-target.sln");
+
+			RunMSBuildRestore (solutionFile);
+
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solutionFile)) {
+				var p = (DotNetProject)sol.Items [0];
+
+				var executionTargets = p.GetExecutionTargets (ConfigurationSelector.Default)
+					.Cast<TargetFrameworkExecutionTarget> ()
+					.ToList ();
+
+				var names = executionTargets.Select (t => t.Name).ToList ();
+				var frameworks = executionTargets.Select (t => t.Framework.ToString ()).ToList ();
+				var frameworkShortNames = executionTargets.Select (t => t.FrameworkShortName).ToList ();
+
+				Assert.That (names, Contains.Item ("net472"));
+				Assert.That (names, Contains.Item ("netcoreapp1.1"));
+				Assert.That (frameworks, Contains.Item (".NETFramework,Version=v4.7.2"));
+				Assert.That (frameworks, Contains.Item (".NETCoreApp,Version=v1.1"));
+				Assert.That (frameworkShortNames, Contains.Item ("net472"));
+				Assert.That (frameworkShortNames, Contains.Item ("netcoreapp1.1"));
+				Assert.AreEqual (2, executionTargets.Count);
+				Assert.AreEqual ("md-framework-dependency", executionTargets [0].Image);
+				Assert.AreEqual ("md-framework-dependency", executionTargets [1].Image);
+			}
+		}
+
+		static void RunMSBuildRestore (FilePath fileName)
+		{
+			CreateNuGetConfigFile (fileName.ParentDirectory);
+
+			Util.RunMSBuild ($"/t:Restore \"{fileName}\"");
+		}
+
+		/// <summary>
+		/// Clear all other package sources and just use the main NuGet package source when
+		/// restoring the packages for the project tests.
+		/// </summary>
+		static void CreateNuGetConfigFile (FilePath directory)
+		{
+			var fileName = directory.Combine ("NuGet.Config");
+
+			string xml =
+				"<configuration>\r\n" +
+				"  <packageSources>\r\n" +
+				"    <clear />\r\n" +
+				"    <add key=\"NuGet v3 Official\" value=\"https://api.nuget.org/v3/index.json\" />\r\n" +
+				"  </packageSources>\r\n" +
+				"</configuration>";
+
+			File.WriteAllText (fileName, xml);
 		}
 	}
 }

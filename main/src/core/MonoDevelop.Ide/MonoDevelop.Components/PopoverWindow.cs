@@ -1,4 +1,4 @@
-//
+﻿//
 // SearchPopupWindow.cs
 //
 // Author:
@@ -245,9 +245,12 @@ namespace MonoDevelop.Components
 			QueueResize ();
 		}
 
+		bool IsDestroyed { get; set; }
+
 		protected override void OnDestroyed ()
 		{
 			this.AbortAnimation ("Resize");
+			IsDestroyed = true;
 			base.OnDestroyed ();
 		}
 
@@ -277,7 +280,7 @@ namespace MonoDevelop.Components
 
 		public virtual void RepositionWindow (Gdk.Rectangle? newCaret = null)
 		{
-			if (!HasParent)
+			if (!HasParent || IsDestroyed)
 				return;
 
 			if (newCaret.HasValue) {//Update caret if parameter is given
@@ -399,8 +402,8 @@ namespace MonoDevelop.Components
 
 			Move (x, y);
 			Show ();
-			if (!ShowWindowShadow)
-				DesktopService.RemoveWindowShadow (this);
+			if (!ShowWindowShadow && !IsDestroyed)
+				IdeServices.DesktopService.RemoveWindowShadow (this);
 		}
 		
 		public bool SupportsAlpha {
@@ -583,6 +586,20 @@ namespace MonoDevelop.Components
 				OnPagerRightClicked ();
 
 			return retval;
+		}
+
+		protected override void OnShown ()
+		{
+			base.OnShown ();
+			#if MAC
+			if (Core.Platform.IsMac && (Type == Gtk.WindowType.Popup || TypeHint == WindowTypeHint.PopupMenu || TypeHint == WindowTypeHint.Tooltip)) {
+				var wndnative = Mac.GtkMacInterop.GetNSWindow (this);
+				// the native window level is initially NSWindowLevel.PopUpMenu, but
+				// for some reason it gets resetted to NSWindowLevel.Normal after the window
+				// has been shown, so reset it back:
+				wndnative.Level = AppKit.NSWindowLevel.PopUpMenu;
+			}
+			#endif
 		}
 	}
 }

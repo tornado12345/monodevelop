@@ -66,14 +66,6 @@
 		/>
 	</Extension>
 
-	<Extension path = "/MonoDevelop/Ide/Commands/CodeNavigation">
-		<Command id = "MonoDevelop.Refactoring.RefactoryCommands.GotoDeclaration"
-						_label = "_Go to Declaration"
-						shortcut = "F12"
-						macShortcut = "Meta|D F12"/>
-	</Extension>
-
-
 	<Extension path = "/MonoDevelop/ProjectModel/MSBuildItemTypes">
 		<DotNetProjectType
 			id="MonoDevelop.CSharp.Project.CSharpProject"
@@ -174,8 +166,9 @@
 	</Extension>
 
 	<Extension path = "/MonoDevelop/Core/MimeTypes">
-		<MimeType id="text/x-csharp" _description="C# source code" icon="md-csharp-file" isText="true" roslynName="C#">
+		<MimeType id="text/x-csharp" _description="C# source code" icon="md-csharp-file" isText="true" roslynName="C#" contentType="CSharp">
 			<File pattern="*.cs" />
+			<File pattern="*.csx" />
 		</MimeType>
 		<MimeType id="application/x-csproject" _description="C# project file" baseType="application/x-msbuild">
 			<File pattern="*.csproj" />
@@ -232,17 +225,6 @@
 	</Extension>
 
 <!--
-	<Extension path = "/MonoDevelop/Refactoring/CodeActions">
-		<Action mimeType="text/x-csharp"
-			_title = "Move type to another file"
-			_description = "Moves current type to another file that matches the name of the type."
-			class = "MonoDevelop.CSharp.Refactoring.CodeActions.MoveTypeToFile" />
-		<Action mimeType="text/x-csharp"
-			_title = "Convert to enum"
-			_description = "Converts constant fields to enumeration"
-			class = "MonoDevelop.CSharp.Refactoring.CodeActions.ConvertToEnumAction" />
-	</Extension>
-
 	<Extension path = "/MonoDevelop/Refactoring/CodeIssues">
 		<CodeIssue mimeType="text/x-csharp" severity = "Error" class="MonoDevelop.CSharp.Refactoring.CodeIssues.MonoTODOIssue"/>
 	</Extension> -->
@@ -344,5 +326,8 @@
 	<Extension path = "/MonoDevelop/Ide/GlobalOptionsDialog/TextEditor/Analysis/C#">
 		<Panel id="CodeStylePanel" _label="Code Style" fill="true" class="MonoDevelop.CSharp.OptionProvider.CodeStylePage" grouping="Tab" icon="md-prefs-code-rules" insertbefore="CodeActions" />
 	</Extension>
-
+	
+	<Extension path = "/MonoDevelop/TextEditor/CommandMapping">
+		<Map id="MonoDevelop.CSharp.Refactoring.Commands.SortAndRemoveImports" argsType="@MonoDevelop.CSharp.Refactoring.CommandArgsFactories.CreateSortAndRemoveUnnecessaryImportsCommandArgs" />
+	</Extension>
 </ExtensionModel>

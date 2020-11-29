@@ -1,21 +1,21 @@
-// 
+//
 // VersionControlView.cs
-//  
+//
 // Author:
 //       Mike Krüger <mkrueger@novell.com>
-// 
+//
 // Copyright (c) 2010 Novell, Inc (http://www.novell.com)
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -29,17 +29,27 @@ using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
 using System.Threading;
 using MonoDevelop.Core;
+using MonoDevelop.Ide.Gui.Documents;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.VersionControl.Views
 {
 	public class VersionControlDocumentInfo
 	{
 		bool alreadyStarted = false;
-		
-		public DocumentView Document {
+		Document document;
+
+		public Document Document {
+			get => document ?? Controller?.Document;
+			set => document = value;
+		}
+
+		public VersionControlDocumentController VersionControlExtension {
 			get;
 			set;
 		}
+
+		public DocumentController Controller { get; }
 
 		public VersionControlItem Item {
 			get;
@@ -50,19 +60,20 @@ namespace MonoDevelop.VersionControl.Views
 			get;
 			set;
 		}
-		
+
 		public Repository Repository {
 			get { return Item.Repository; }
 			set { Item.Repository = value; }
 		}
-		
+
 		public bool Started {
 			get { return alreadyStarted; }
 		}
 
-		public VersionControlDocumentInfo (DocumentView document, VersionControlItem item, Repository repository)
+		public VersionControlDocumentInfo (VersionControlDocumentController versionControlExtension, DocumentController controller, VersionControlItem item, Repository repository)
 		{
-			this.Document = document;
+			this.VersionControlExtension = versionControlExtension;
+			Controller = controller;
 			this.Item = item;
 			item.Repository = repository;
 		}
@@ -72,15 +83,19 @@ namespace MonoDevelop.VersionControl.Views
 			if (!rerun && alreadyStarted)
 				return;
 			alreadyStarted = true;
-			ThreadPool.QueueUserWorkItem (delegate {
+			Task.Run (async delegate {
+				if (!Item.Repository.TryGetVersionInfo (Item.Path, out var versionInfo))
+					versionInfo = VersionInfo.CreateUnversioned (Item.Path, false);
+				var history = await Item.Repository.GetHistoryAsync (Item.Path, null);
+
 				lock (updateLock) {
 					try {
-						History      = Item.Repository.GetHistory (Item.Path, null);
-						Item.VersionInfo  = Item.Repository.GetVersionInfo (Item.Path, VersionInfoQueryFlags.IgnoreCache);
+						History = history;
+						Item.VersionInfo  = versionInfo;
 					} catch (Exception ex) {
 						LoggingService.LogError ("Error retrieving history", ex);
 					}
-					
+
 					Runtime.RunInMainThread (delegate {
 						OnUpdated (EventArgs.Empty);
 					});
@@ -93,7 +108,7 @@ namespace MonoDevelop.VersionControl.Views
 		ManualResetEvent mre = new ManualResetEvent (false);
 
 		// Runs an action in the GUI thread.
-		public void RunAfterUpdate (Action act) 
+		public void RunAfterUpdate (Action act)
 		{
 			if (mre == null) {
 				act ();
@@ -109,7 +124,22 @@ namespace MonoDevelop.VersionControl.Views
 				});
 			});
 		}
-		
+
+
+		public void RunAfterUpdate (Func<Task> act)
+		{
+			if (mre == null) {
+				act ().Ignore ();
+				return;
+			}
+			Task.Run (async delegate {
+				mre.WaitOne ();
+				mre.Dispose ();
+				mre = null;
+				await Runtime.RunInMainThread (act);
+			}).Ignore ();
+			return;
+		}
 		protected virtual void OnUpdated (EventArgs e)
 		{
 			Updated?.Invoke (this, e);

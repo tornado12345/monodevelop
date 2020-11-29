@@ -85,7 +85,7 @@ namespace MonoDevelop.Projects
 			configurations = new SolutionItemConfigurationCollection (this);
 			configurations.ConfigurationAdded += OnConfigurationAddedToCollection;
 			configurations.ConfigurationRemoved += OnConfigurationRemovedFromCollection;
-			Counters.ItemsLoaded++;
+			Counters.ItemsLoaded.Inc (1);
 			fileStatusTracker = new FileStatusTracker<SolutionItemEventArgs> (this, OnReloadRequired, new SolutionItemEventArgs (this));
 		}
 
@@ -123,7 +123,7 @@ namespace MonoDevelop.Projects
 
 			fileStatusTracker.Dispose ();
 			base.OnDispose ();
-			Counters.ItemsLoaded--;
+			Counters.ItemsLoaded.Dec (1);
 
 			// items = null;
 			// wildcardItems = null;
@@ -460,7 +460,7 @@ namespace MonoDevelop.Projects
 
 					if (ItemExtension.OnCheckHasSolutionData () && !SavingSolution && ParentSolution != null) {
 						// The project has data that has to be saved in the solution, but the solution is not being saved. Do it now.
-						await SolutionFormat.SlnFileFormat.WriteFile (ParentSolution.FileName, ParentSolution, false, monitor);
+						await Task.Run (() => SolutionFormat.SlnFileFormat.WriteFile (ParentSolution.FileName, ParentSolution, false, monitor));
 						ParentSolution.NeedsReload = false;
 					}
 				}
@@ -525,12 +525,17 @@ namespace MonoDevelop.Projects
 			return ItemExtension.OnGetSupportedFeatures ().HasFlag (ProjectFeatures.RunConfigurations);
 		}
 
+		public bool SupportsUserSpecificRunConfigurations ()
+		{
+			return ItemExtension.OnGetSupportedFeatures ().HasFlag (ProjectFeatures.UserSpecificRunConfigurations);
+		}
+
 		protected virtual ProjectFeatures OnGetSupportedFeatures ()
 		{
 			if (IsUnsupportedProject)
 				return ProjectFeatures.Configurations;
 			else
-				return ProjectFeatures.Execute | ProjectFeatures.Build | ProjectFeatures.Configurations | ProjectFeatures.RunConfigurations;
+				return ProjectFeatures.Execute | ProjectFeatures.Build | ProjectFeatures.Configurations | ProjectFeatures.RunConfigurations | ProjectFeatures.UserSpecificRunConfigurations;
 		}
 
 		/// <summary>
@@ -1075,7 +1080,7 @@ namespace MonoDevelop.Projects
 		[Obsolete ("Use overload that takes a RunConfiguration")]
 		protected virtual Task OnExecute (ProgressMonitor monitor, ExecutionContext context, ConfigurationSelector configuration)
 		{
-			return Task.FromResult (0);
+			return Task.CompletedTask;
 		}
 
 		/// <summary>
@@ -1100,7 +1105,7 @@ namespace MonoDevelop.Projects
 		[Obsolete ("Use overload that takes a RunConfiguration")]
 		protected virtual Task OnPrepareExecution (ProgressMonitor monitor, ExecutionContext context, ConfigurationSelector configuration)
 		{
-			return Task.FromResult (true);
+			return Task.CompletedTask;
 		}
 
 		bool DoGetCanExecute (ExecutionContext context, ConfigurationSelector configuration, SolutionItemRunConfiguration runConfiguration)
@@ -1232,12 +1237,12 @@ namespace MonoDevelop.Projects
 
 		protected virtual Task OnLoad (ProgressMonitor monitor)
 		{
-			return Task.FromResult (0);
+			return Task.CompletedTask;
 		}
 
 		protected internal virtual Task OnSave (ProgressMonitor monitor)
 		{
-			return Task.FromResult (0);
+			return Task.CompletedTask;
 		}
 
 		public FilePath GetAbsoluteChildPath (FilePath relPath)
@@ -1884,6 +1889,22 @@ namespace MonoDevelop.Projects
 		public bool Cancelled {
 			get => GetProperty<bool> ();
 			set => SetProperty (value);
+		}
+
+		Dictionary<string, int> errors;
+
+		public void RegisterError(string errorCode)
+		{
+			if (errorCode == null)
+				return;
+
+			if (errors == null) {
+				errors = new Dictionary<string, int> ();
+				SetProperty (errors, "Errors");
+			}
+
+			errors.TryGetValue (errorCode, out int value);
+			errors [errorCode] = value + 1;
 		}
 	}
 }

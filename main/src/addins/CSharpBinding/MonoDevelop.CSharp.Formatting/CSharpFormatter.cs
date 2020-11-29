@@ -23,35 +23,34 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
-using ICSharpCode.NRefactory6.CSharp;
-using Microsoft.CodeAnalysis;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.Editor.Shared.Preview;
+using Microsoft.CodeAnalysis.Editor;
 using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.Formatting.Rules;
+using Microsoft.CodeAnalysis.Options;
+using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Text;
 using MonoDevelop.Core;
-using Microsoft.CodeAnalysis.Editor;
-using Microsoft.CodeAnalysis.Shared.Extensions;
-using MonoDevelop.Ide.TypeSystem;
-using ICSharpCode.NRefactory6.CSharp;
 using MonoDevelop.Ide;
 using MonoDevelop.Core.Text;
-using MonoDevelop.Ide;
+using MonoDevelop.CSharp.OptionProvider;
 using MonoDevelop.Ide.CodeFormatting;
+using MonoDevelop.Ide.Completion.Presentation;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Gui.Content;
-using MonoDevelop.Ide.TypeSystem;
 using MonoDevelop.Projects.Policies;
 using Roslyn.Utilities;
-using System.Threading;
 using Microsoft.CodeAnalysis.Options;
 using MonoDevelop.CSharp.OptionProvider;
 using Microsoft.VisualStudio.CodingConventions;
-using System.Collections.Generic;
-using Microsoft.CodeAnalysis.Formatting.Rules;
-using MonoDevelop.Ide.Completion.Presentation;
-using System.Threading.Tasks;
+using System.Linq;
+using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 
 namespace MonoDevelop.CSharp.Formatting
 {
@@ -65,15 +64,15 @@ namespace MonoDevelop.CSharp.Formatting
 
 		public override bool SupportsPartialDocumentFormatting { get { return true; } }
 
-		protected override void CorrectIndentingImplementation (PolicyContainer policyParent, TextEditor editor, int line)
+		protected override void CorrectIndentingImplementation (PolicyContainer policyParent, Ide.Editor.TextEditor editor, int line)
 		{
 			var doc = IdeApp.Workbench.ActiveDocument;
 			if (doc == null)
 				return;
-			CorrectIndentingImplementationAsync (editor, doc, line, line, default).Wait ();
+			CorrectIndentingImplementationAsync (editor, doc.DocumentContext, line, line, default).Ignore ();
 		}
 
-		protected async override Task CorrectIndentingImplementationAsync (TextEditor editor, DocumentContext context, int startLine, int endLine, CancellationToken cancellationToken)
+		protected async override Task CorrectIndentingImplementationAsync (Ide.Editor.TextEditor editor, DocumentContext context, int startLine, int endLine, CancellationToken cancellationToken)
 		{
 			if (editor.IndentationTracker == null)
 				return;
@@ -91,26 +90,28 @@ namespace MonoDevelop.CSharp.Formatting
 				if (formattingService == null || !formattingService.SupportsFormatSelection)
 					return;
 
-				var formattingRules = new List<IFormattingRule> ();
+				var formattingRules = new List<AbstractFormattingRule> ();
 				formattingRules.Add (ContainedDocumentPreserveFormattingRule.Instance);
 				formattingRules.AddRange (Formatter.GetDefaultFormattingRules (document));
 
 				var workspace = document.Project.Solution.Workspace;
-				var root = await document.GetSyntaxRootAsync (cancellationToken);
-				var options = await document.GetOptionsAsync (cancellationToken);
+				var root = await document.GetSyntaxRootAsync (cancellationToken).ConfigureAwait (false);
+				var options = await document.GetOptionsAsync (cancellationToken).ConfigureAwait (false);
 				var changes = Formatter.GetFormattedTextChanges (
 					root, new TextSpan [] { new TextSpan (startSegment.Offset, endSegment.EndOffset - startSegment.Offset) },
 					workspace, options, formattingRules, cancellationToken);
 
 				if (changes == null)
 					return;
-				editor.ApplyTextChanges (changes);
-				editor.FixVirtualIndentation ();
+				await Runtime.RunInMainThread (delegate {
+					editor.ApplyTextChanges (changes);
+					editor.FixVirtualIndentation ();
+				});
 			} catch (Exception e) {
 				LoggingService.LogError ("Error while indenting", e);
 			}
 		}
-		protected override async void OnTheFlyFormatImplementation (TextEditor editor, DocumentContext context, int startOffset, int length)
+		protected override async void OnTheFlyFormatImplementation (Ide.Editor.TextEditor editor, DocumentContext context, int startOffset, int length)
 		{
 			var doc = context.AnalysisDocument;
 
@@ -130,14 +131,14 @@ namespace MonoDevelop.CSharp.Formatting
 			var inputTree = CSharpSyntaxTree.ParseText (input);
 
 			var root = inputTree.GetRoot ();
-			var doc = Formatter.Format (root, new TextSpan (startOffset, endOffset - startOffset), TypeSystemService.Workspace, optionSet);
+			var doc = Formatter.Format (root, new TextSpan (startOffset, endOffset - startOffset), IdeApp.TypeSystemService.Workspace, optionSet);
 			var result = doc.ToFullString ();
 			return result.Substring (startOffset, endOffset + result.Length - input.Length - startOffset);
 		}
 
 		protected override ITextSource FormatImplementation (PolicyContainer policyParent, string mimeType, ITextSource input, int startOffset, int length)
 		{
-			var chain = DesktopService.GetMimeTypeInheritanceChain (mimeType);
+			var chain = IdeServices.DesktopService.GetMimeTypeInheritanceChain (mimeType);
 			var policy = policyParent.Get<CSharpFormattingPolicy> (chain);
 			var textPolicy = policyParent.Get<TextStylePolicy> (chain);
 			var optionSet = policy.CreateOptions (textPolicy);
@@ -146,7 +147,7 @@ namespace MonoDevelop.CSharp.Formatting
 				try {
 					var conventions = EditorConfigService.GetEditorConfigContext (doc.FileName).WaitAndGetResult ();
 					if (conventions != null)
-						optionSet = new FormattingDocumentOptionSet (optionSet, new CSharpDocumentOptionsProvider.DocumentOptions (optionSet, conventions.CurrentConventions));
+						optionSet = new FormattingDocumentOptionSet (optionSet, new DocumentOptions (optionSet, conventions.CurrentConventions));
 				} catch (Exception e) {
 					LoggingService.LogError ("Error while loading coding conventions.", e);
 				}
@@ -155,12 +156,57 @@ namespace MonoDevelop.CSharp.Formatting
 			return new StringTextSource (FormatText (optionSet, input.Text, startOffset, startOffset + length));
 		}
 
+		sealed class DocumentOptions : IDocumentOptions
+		{
+			readonly OptionSet optionSet;
+			readonly ICodingConventionsSnapshot codingConventionsSnapshot;
+			private static readonly ConditionalWeakTable<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, string>> s_convertedDictionaryCache =
+				new ConditionalWeakTable<IReadOnlyDictionary<string, object>, IReadOnlyDictionary<string, string>> ();
+
+
+			public DocumentOptions (OptionSet optionSet, ICodingConventionsSnapshot codingConventionsSnapshot)
+			{
+				this.optionSet = optionSet;
+				this.codingConventionsSnapshot = codingConventionsSnapshot;
+			}
+
+			public bool TryGetDocumentOption (OptionKey option, out object value)
+			{
+				if (codingConventionsSnapshot != null) {
+					var editorConfigPersistence = option.Option.StorageLocations.OfType<IEditorConfigStorageLocation> ().SingleOrDefault ();
+					if (editorConfigPersistence != null) {
+						// Temporarly map our old Dictionary<string, object> to a Dictionary<string, string>. This can go away once we either
+						// eliminate the legacy editorconfig support, or we change IEditorConfigStorageLocation.TryGetOption to take
+						// some interface that lets us pass both the Dictionary<string, string> we get from the new system, and the
+						// Dictionary<string, object> from the old system.
+						//
+						// We cache this with a conditional weak table so we're able to maintain the assumptions in EditorConfigNamingStyleParser
+						// that the instance doesn't regularly change and thus can be used for further caching
+						var allRawConventions = s_convertedDictionaryCache.GetValue (
+							codingConventionsSnapshot.AllRawConventions,
+							d => ImmutableDictionary.CreateRange (d.Select (c => KeyValuePairUtil.Create (c.Key, c.Value.ToString ()))));
+
+						try {
+							if (editorConfigPersistence.TryGetOption (allRawConventions, option.Option.Type, out value))
+								return true;
+						} catch (Exception ex) {
+							LoggingService.LogError ("Error while getting editor config preferences.", ex);
+						}
+					}
+				}
+
+				var result = optionSet.GetOption (option);
+				value = result;
+				return true;
+			}
+		}
+
 		sealed class FormattingDocumentOptionSet : OptionSet
 		{
 			readonly OptionSet fallbackOptionSet;
-			readonly CSharpDocumentOptionsProvider.DocumentOptions optionsProvider;
+			readonly IDocumentOptions optionsProvider;
 
-			internal FormattingDocumentOptionSet (OptionSet fallbackOptionSet, CSharpDocumentOptionsProvider.DocumentOptions optionsProvider)
+			internal FormattingDocumentOptionSet (OptionSet fallbackOptionSet, IDocumentOptions optionsProvider)
 			{
 				this.fallbackOptionSet = fallbackOptionSet;
 				this.optionsProvider = optionsProvider;
@@ -168,7 +214,7 @@ namespace MonoDevelop.CSharp.Formatting
 
 			public override object GetOption (OptionKey optionKey)
 			{
-				if (optionsProvider.TryGetDocumentOption (optionKey, fallbackOptionSet, out object value))
+				if (optionsProvider.TryGetDocumentOption (optionKey, out object value))
 					return value;
 				return fallbackOptionSet.GetOption (optionKey);
 			}

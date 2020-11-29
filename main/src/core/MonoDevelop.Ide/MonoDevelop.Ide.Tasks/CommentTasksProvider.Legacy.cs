@@ -1,4 +1,4 @@
-﻿//
+//
 // CommentTasksProvider.Legacy.cs
 //
 // Author:
@@ -29,22 +29,31 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MonoDevelop.Core;
+using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Projects;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.Ide.Tasks
 {
-	static partial class CommentTasksProvider
+	partial class CommentTasksProvider
 	{
 		internal static class Legacy
 		{
+			static Dictionary<Project, ProjectCommentTags> projectTags = new Dictionary<Project, ProjectCommentTags> ();
+			static CancellationTokenSource src = new CancellationTokenSource ();
+
 			internal static void Initialize ()
 			{
-				IdeApp.Workspace.LastWorkspaceItemClosed += LastWorkspaceItemClosed;
-				IdeApp.Workspace.WorkspaceItemUnloaded += OnWorkspaceItemUnloaded;
-				IdeApp.Workbench.DocumentOpened += WorkbenchDocumentOpened;
-				IdeApp.Workbench.DocumentClosed += WorkbenchDocumentClosed;
+				Runtime.ServiceProvider.WhenServiceInitialized<RootWorkspace> (s => {
+					s.LastWorkspaceItemClosed += LastWorkspaceItemClosed;
+					s.WorkspaceItemUnloaded += OnWorkspaceItemUnloaded;
+				});
 			}
+
+			public static Dictionary<Project, ProjectCommentTags> ProjectTags => projectTags;
+
+			public static CancellationToken CancellationToken => src.Token;
 
 			static void LastWorkspaceItemClosed (object sender, EventArgs e)
 			{
@@ -59,8 +68,6 @@ namespace MonoDevelop.Ide.Tasks
 				}
 			}
 
-			static Dictionary<Project, ProjectCommentTags> projectTags = new Dictionary<Project, ProjectCommentTags> ();
-			static CancellationTokenSource src = new CancellationTokenSource ();
 			static void UpdateCommentTagsForProject (Project project, CancellationToken token)
 			{
 				if (token.IsCancellationRequested)
@@ -72,11 +79,13 @@ namespace MonoDevelop.Ide.Tasks
 				}
 
 				var files = project.Files.Where (x => {
-					var mt = DesktopService.GetMimeTypeForUri (x.FilePath);
-					// FIXME: Handle all language services.
+					var mt = IdeServices.DesktopService.GetMimeTypeForUri (x.FilePath);
+					if (!IdeServices.DesktopService.GetMimeTypeIsText (mt))
+						return false;
 
-					// Discard files with known IToDoCommentService implementations
-					return mt != "text/x-csharp";
+					// Don't process files which are handled by roslyn.
+					var useLegacy = IdeServices.DesktopService.GetRoslynLanguageForMimeType (mt) == null;
+					return useLegacy;
 				}).ToArray ();
 
 				Task.Run (async () => {
@@ -86,16 +95,7 @@ namespace MonoDevelop.Ide.Tasks
 					} catch (Exception e) {
 						LoggingService.LogError ("Error while updating comment tags.", e);
 					}
-				});
-			}
-
-			public static string MimeTypeToLanguage (string mimeType)
-			{
-				switch (mimeType) {
-				case "text/x-csharp":
-					return Microsoft.CodeAnalysis.LanguageNames.CSharp;
-				}
-				return null;
+				}).Ignore();
 			}
 
 			internal static void LoadSolutionContents (Solution sln)
@@ -118,41 +118,66 @@ namespace MonoDevelop.Ide.Tasks
 					}
 				});
 			}
+		}
+	}
 
-			static void WorkbenchDocumentClosed (object sender, DocumentEventArgs e)
-			{
-				e.Document.DocumentParsed -= HandleDocumentParsed;
-			}
+	[ExportDocumentControllerExtension (MimeType = "*")]
+	class LegacyDocumentExtension: DocumentControllerExtension
+	{
+		DocumentContext context;
 
-			static void WorkbenchDocumentOpened (object sender, DocumentEventArgs e)
-			{
-				e.Document.DocumentParsed += HandleDocumentParsed;
-			}
+		public override async Task<bool> SupportsController (DocumentController controller)
+		{
+			if (!await base.SupportsController (controller) || !(controller is FileDocumentController))
+				return false;
 
-			static void HandleDocumentParsed (object sender, EventArgs e)
-			{
-				var doc = (Document)sender;
-
+			if (controller is FileDocumentController file) {
 				// C# uses the roslyn-provided todo comments system.
-				if (doc.Editor.MimeType == "text/x-csharp")
-					return;
+				if (IdeServices.DesktopService.GetRoslynLanguageForMimeType (file.MimeType) != null)
+					return false;
+			}
+			var s = controller.GetContent<DocumentContext> () != null;
+			return s;
+		}
 
-				var pd = doc.ParsedDocument;
-				var project = doc.Project;
-				if (pd == null || project == null)
+		public override Task Initialize (Properties status)
+		{
+			context = Controller.GetContent<DocumentContext> ();
+			context.DocumentParsed += Context_DocumentParsed;
+			return base.Initialize (status);
+		}
+
+		public override void Dispose ()
+		{
+			if (context != null)
+				context.DocumentParsed -= Context_DocumentParsed;
+			base.Dispose ();
+		}
+
+		void Context_DocumentParsed (object sender, EventArgs e)
+		{
+			try {
+				var pd = context.ParsedDocument;
+				if (pd == null)
 					return;
-				ProjectCommentTags tags;
-				if (!projectTags.TryGetValue (project, out tags))
+				if (!(Controller is FileDocumentController fileController) || !(Controller.Owner is Project project))
 					return;
-				var token = src.Token;
-				var file = doc.FileName;
+				if (!CommentTasksProvider.Legacy.ProjectTags.TryGetValue (project, out var tags))
+					return;
+				var token = CommentTasksProvider.Legacy.CancellationToken;
+				var file = fileController.FilePath;
 				Task.Run (async () => {
 					try {
 						tags.UpdateTags (project, file, await pd.GetTagCommentsAsync (token).ConfigureAwait (false));
 					} catch (OperationCanceledException) {
+					} catch (Exception ex) {
+						LoggingService.LogError ("Error while updating comment tags.", ex);
 					}
-				});
+				}).Ignore ();
+			} catch (Exception ex) {
+				LoggingService.LogInternalError (ex);
 			}
 		}
+
 	}
 }

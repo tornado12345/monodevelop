@@ -1,4 +1,4 @@
-﻿//
+//
 // OnTheFlyFormattingPanel.cs
 //
 // Author:
@@ -25,18 +25,15 @@
 // THE SOFTWARE.
 
 using MonoDevelop.Components;
-using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Core;
 using MonoDevelop.Ide.Gui.Dialogs;
-using Mono.TextEditor;
-using MonoDevelop.Ide.Editor;
 using Xwt;
-using MonoDevelop.Ide.Composition;
 using Microsoft.CodeAnalysis.Options;
 using MonoDevelop.Ide.TypeSystem;
 using Microsoft.CodeAnalysis.Editor.Shared.Options;
 using Microsoft.CodeAnalysis;
 using System;
+using MonoDevelop.Ide;
 
 namespace MonoDevelop.SourceEditor.OptionPanels
 {
@@ -68,13 +65,15 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 			readonly CheckBox formatOnCloseBraceCheckBox;
 			readonly CheckBox formatOnReturnCheckBox;
 			readonly CheckBox formatOnPasteCheckBox;
+			readonly CheckBox showFilterButtonsCheckBox;
+			readonly CheckBox triggerCompletionOnDeletionCheckBox;
 			readonly Ide.RoslynServices.Options.RoslynPreferences.PerLanguagePreferences preferences;
 
 			public OnTheFlyFormattingPanelWidget ()
 			{
-				preferences = Ide.IdeApp.Preferences.Roslyn.CSharp;
+				preferences = IdeApp.Preferences.Roslyn.CSharp;
 
-				OptionService = TypeSystemService.Workspace.Services.GetService<IOptionService> ();
+				OptionService = IdeApp.TypeSystemService.Workspace.Services.GetService<IOptionService> ();
 				formatOnTypeCheckBox = new CheckBox (GettextCatalog.GetString ("Automatically format when typing"));
 				formatOnTypeCheckBox.Active = preferences.AutoFormattingOnTyping;
 				formatOnTypeCheckBox.Toggled += FormatOnTypeCheckBox_Toggled;
@@ -98,6 +97,14 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 				formatOnPasteCheckBox.Active = preferences.FormatOnPaste;
 				PackStart (formatOnPasteCheckBox);
 				FormatOnTypeCheckBox_Toggled (this, EventArgs.Empty);
+
+				showFilterButtonsCheckBox = new CheckBox (GettextCatalog.GetString ("Show completion item filters"));
+				showFilterButtonsCheckBox.Active = preferences.ShowCompletionItemFilters;
+				PackStart (showFilterButtonsCheckBox);
+
+				triggerCompletionOnDeletionCheckBox = new CheckBox (GettextCatalog.GetString ("Show completion list after a character is deleted"));
+				triggerCompletionOnDeletionCheckBox.Active = preferences.TriggerOnDeletion.Value ?? false;
+				PackStart (triggerCompletionOnDeletionCheckBox);
 			}
 
 			void FormatOnTypeCheckBox_Toggled (object sender, System.EventArgs e)
@@ -113,6 +120,8 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 				preferences.AutoFormattingOnCloseBrace.Value = formatOnCloseBraceCheckBox.Active;
 				preferences.AutoFormattingOnReturn.Value = formatOnReturnCheckBox.Active;
 				preferences.FormatOnPaste.Value = formatOnPasteCheckBox.Active;
+				preferences.ShowCompletionItemFilters.Value = showFilterButtonsCheckBox.Active;
+				preferences.TriggerOnDeletion.Value = triggerCompletionOnDeletionCheckBox.Active;
 				PropertyService.SaveProperties ();
 
 			}

@@ -1,4 +1,4 @@
-﻿// 
+// 
 // RoslynSearchCategory.cs
 //  
 // Author:
@@ -53,26 +53,17 @@ namespace MonoDevelop.Components.MainToolbar
 	{
 		public RoslynSearchCategory () : base (GettextCatalog.GetString ("Solution"))
 		{
-			sortOrder = FirstCategory;
+			sortOrder = FirstCategoryOrder;
 		}
 
-		static readonly string [] tags = new [] {
+		public override string [] Tags { get; } = new [] {
 				// Types
 				"type", "t", "class", "struct", "interface", "enum", "delegate",
 				// Members
 				"member", "m", "method", "property", "field", "event"
 		};
 
-		public override string [] Tags {
-			get {
-				return tags;
-			}
-		}
-
-		public override bool IsValidTag (string tag)
-		{
-			return tags.Contains (tag);
-		}
+		public override bool IsValidTag (string tag) => Array.IndexOf (Tags, tag) >= 0;
 
 		static readonly IImmutableSet<string> typeKinds = ImmutableHashSet.Create (
 			NavigateToItemKind.Class,
@@ -154,14 +145,17 @@ namespace MonoDevelop.Components.MainToolbar
 			if (string.IsNullOrEmpty (searchPattern.Pattern))
 				return Task.CompletedTask;
 
-			if (searchPattern.Tag != null && !tags.Contains (searchPattern.Tag) || searchPattern.HasLineNumber)
+			if (searchPattern.Tag != null && Array.IndexOf (Tags, searchPattern.Tag) < 0 || searchPattern.HasLineNumber)
 				return Task.CompletedTask;
 			
 			return Task.Run (async delegate {
 				try {
 					var kinds = GetTagKinds (searchPattern.Tag);
+
+					// TODO: Fill this right.
+					var priorityDocuments = ImmutableArray.Create<Document> ();
 					// Maybe use language services instead of AbstractNavigateToSearchService
-					var aggregatedResults = await Task.WhenAll (TypeSystemService.AllWorkspaces
+					var aggregatedResults = await Task.WhenAll (IdeApp.TypeSystemService.AllWorkspaces
 										.Select (ws => ws.CurrentSolution)
 										.SelectMany (sol => sol.Projects)
 										.Select (async proj => {
@@ -169,7 +163,7 @@ namespace MonoDevelop.Components.MainToolbar
 												var searchService = TryGetNavigateToSearchService (proj);
 												if (searchService == null)
 													return ImmutableArray<INavigateToSearchResult>.Empty;
-												return await searchService.SearchProjectAsync (proj, searchPattern.Pattern, kinds ?? searchService.KindsProvided, token).ConfigureAwait (false);
+												return await searchService.SearchProjectAsync (proj, priorityDocuments, searchPattern.Pattern, kinds ?? searchService.KindsProvided, token).ConfigureAwait (false);
 											}
 										})
 					).ConfigureAwait (false);

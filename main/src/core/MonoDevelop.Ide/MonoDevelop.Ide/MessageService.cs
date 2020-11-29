@@ -134,7 +134,7 @@ namespace MonoDevelop.Ide
 		static Window defaultRootWindow;
 		public static Window RootWindow {
 			get {
-				if (WelcomePageService.WelcomeWindowVisible)
+				if (WelcomePageService.WelcomeWindowVisible && !IdeApp.Workbench.RootWindow.Visible)
 					return WelcomePageService.WelcomeWindow;
 				return defaultRootWindow;
 			}
@@ -263,34 +263,58 @@ namespace MonoDevelop.Ide
 			return messageService.GenericAlert (null, message) == message.ConfirmButton;
 		}
 		#endregion
-		
+
 		#region AskQuestion
-		public static AlertButton AskQuestion (string primaryText, params AlertButton[] buttons)
+		public static AlertButton AskQuestion (string primaryText, params AlertButton [] buttons)
 		{
 			return AskQuestion (primaryText, null, buttons);
 		}
-		
-		public static AlertButton AskQuestion (string primaryText, string secondaryText, params AlertButton[] buttons)
+
+		public static AlertButton AskQuestion (string primaryText, string secondaryText, params AlertButton [] buttons)
 		{
 			return GenericAlert (MonoDevelop.Ide.Gui.Stock.Question, primaryText, secondaryText, buttons);
 		}
-		public static AlertButton AskQuestion (string primaryText, int defaultButton, params AlertButton[] buttons)
+		public static AlertButton AskQuestion (string primaryText, int defaultButton, params AlertButton [] buttons)
 		{
 			return AskQuestion (primaryText, null, defaultButton, buttons);
 		}
-		
-		public static AlertButton AskQuestion (string primaryText, string secondaryText, int defaultButton, params AlertButton[] buttons)
+
+		public static AlertButton AskQuestion (string primaryText, string secondaryText, int defaultButton, params AlertButton [] buttons)
 		{
 			return GenericAlert (MonoDevelop.Ide.Gui.Stock.Question, primaryText, secondaryText, defaultButton, buttons);
 		}
-		
+
 		public static AlertButton AskQuestion (QuestionMessage message)
 		{
 			return messageService.GenericAlert (null, message);
 		}
-		
+
+		public static AlertButton AskQuestion (Window parent, string primaryText, params AlertButton [] buttons)
+		{
+			return AskQuestion (parent, primaryText, null, buttons);
+		}
+
+		public static AlertButton AskQuestion (Window parent, string primaryText, string secondaryText, params AlertButton [] buttons)
+		{
+			return GenericAlert (parent, MonoDevelop.Ide.Gui.Stock.Question, primaryText, secondaryText, buttons);
+		}
+		public static AlertButton AskQuestion (Window parent, string primaryText, int defaultButton, params AlertButton [] buttons)
+		{
+			return AskQuestion (parent, primaryText, null, defaultButton, buttons);
+		}
+
+		public static AlertButton AskQuestion (Window parent, string primaryText, string secondaryText, int defaultButton, params AlertButton [] buttons)
+		{
+			return GenericAlert (parent, MonoDevelop.Ide.Gui.Stock.Question, primaryText, secondaryText, defaultButton, buttons);
+		}
+
+		public static AlertButton AskQuestion (Window parent, QuestionMessage message)
+		{
+			return messageService.GenericAlert (parent, message);
+		}
+
 		#endregion
-		
+
 		/// <summary>
 		/// Places, runs and destroys a transient dialog.
 		/// </summary>
@@ -322,7 +346,7 @@ namespace MonoDevelop.Ide
 			// if dialog is modal, make sure it's parented on any existing modal dialog
 			Gtk.Dialog dialog = dlg;
 			if (dialog.Modal) {
-				parent = DesktopService.GetParentForModalWindow ();
+				parent = IdeServices.DesktopService.GetParentForModalWindow ();
 			}
 
 			//ensure the dialog has a parent
@@ -330,11 +354,11 @@ namespace MonoDevelop.Ide
 				if (dialog.TransientFor != null)
 					parent = dialog.TransientFor;
 				else
-					parent = RootWindow;
+					parent = IdeServices.DesktopService.GetFocusedTopLevelWindow ();
 			}
 
 			//TODO: use native parenting API for native windows
-			if (parent.nativeWidget is Gtk.Window) {
+			if (parent?.nativeWidget is Gtk.Window) {
 				dialog.TransientFor = parent;
 				dialog.DestroyWithParent = true;
 			}
@@ -348,13 +372,18 @@ namespace MonoDevelop.Ide
 			Runtime.RunInMainThread (() => {
 				// If there is a native NSWindow model window running, we need
 				// to show the new dialog over that window.
-				if (NSApplication.SharedApplication.ModalWindow != null || (parent.nativeWidget is NSWindow && dialog.Modal)) {
-					EventHandler shownHandler = null;
-					shownHandler = (s,e) => {
+				if (NSApplication.SharedApplication.ModalWindow != null || parent?.nativeWidget is NSWindow) {
+					if (dialog.Modal) {
+						EventHandler shownHandler = null;
+						shownHandler = (s, e) => {
+							ShowCustomModalDialog (dialog, parent);
+							dialog.Shown -= shownHandler;
+						};
+						dialog.Shown += shownHandler;
+					} else {
+						// If parent is a native NSWindow, run the dialog modally anyway
 						ShowCustomModalDialog (dialog, parent);
-						dialog.Shown -= shownHandler;
-					};
-					dialog.Shown += shownHandler;
+					}
 				} else {
 					PlaceDialog (dialog, parent);
 				}
@@ -365,10 +394,11 @@ namespace MonoDevelop.Ide
 			try {
 				Xwt.MessageDialog.RootWindow = Xwt.Toolkit.CurrentEngine.WrapWindow (dialog);
 				IdeApp.DisableIdleActions ();
+				IdeApp.CommandService.RegisterTopWindow (dialog);
 				int result = GtkWorkarounds.RunDialogWithNotification (dialog);
 				// Focus parent window once the dialog is ran, as focus gets lost
 				if (parent != null) {
-					DesktopService.FocusWindow (parent);
+					IdeServices.DesktopService.FocusWindow (parent);
 				}
 
 				return result;
@@ -379,20 +409,34 @@ namespace MonoDevelop.Ide
 		}
 
 		#if MAC
+
 		static void ShowCustomModalDialog (Gtk.Window dialog, Window parent)
 		{
 			CenterWindow (dialog, parent);
 
 			var nsdialog = GtkMacInterop.GetNSWindow (dialog);
 			// Make the GTK window modal WRT the current modal NSWindow
-			var s = NSApplication.SharedApplication.BeginModalSession (nsdialog);
 
-			EventHandler unrealizer = null;
-			unrealizer = delegate {
+			NSWindow nativeParent = null;
+			try {
+				nativeParent = parent;
+				if (nativeParent.Handle == nsdialog.Handle)
+					throw new InvalidOperationException ("Can't add dialog as child to itself.");
+				nativeParent.AddChildWindow (nsdialog, NSWindowOrderingMode.Above);
+			} catch (Exception ex) {
+				LoggingService.LogInternalError ("Failed to get the native parent window", ex);
+			}
+			var s = NSApplication.SharedApplication.BeginModalSession (nsdialog);
+			void unrealizer (object sender, EventArgs e)
+			{
+				if (nativeParent != null) {
+					nativeParent.RemoveChildWindow (nsdialog);
+				}
 				NSApplication.SharedApplication.EndModalSession (s);
 				dialog.Unrealized -= unrealizer;
-			};
+			}
 			dialog.Unrealized += unrealizer;
+
 		}
 		#endif
 		
@@ -408,7 +452,7 @@ namespace MonoDevelop.Ide
 			if (parent == null) {
 				if (childControl.nativeWidget is Gtk.Window gtkChild) {
 					if (gtkChild.Modal)
-						parent = DesktopService.GetParentForModalWindow ();
+						parent = IdeServices.DesktopService.GetParentForModalWindow ();
 				}
 			}
 
@@ -416,7 +460,7 @@ namespace MonoDevelop.Ide
 		}
 
 		/// <summary>Centers a window relative to its parent.</summary>
-		static void CenterWindow (Window childControl, Window parentControl)
+		internal static void CenterWindow (Window childControl, Window parentControl)
 		{
 			var gtkChild = childControl?.nativeWidget as Gtk.Window;
 			var gtkParent = parentControl?.nativeWidget as Gtk.Window;
@@ -428,8 +472,8 @@ namespace MonoDevelop.Ide
 				if (nsParent == null || !nsParent.IsVisible) {
 					nsChild.Center ();
 				} else {
-					int x = (int) Math.Max (0, nsParent.Frame.Left + (nsParent.Frame.Width - nsChild.Frame.Width) / 2);
-					int y = (int) Math.Max (0, nsParent.Frame.Top + (nsParent.Frame.Height - nsChild.Frame.Height) / 2);
+					int x = (int) (nsParent.Frame.Left + (nsParent.Frame.Width - nsChild.Frame.Width) / 2);
+					int y = (int) (nsParent.Frame.Top + (nsParent.Frame.Height - nsChild.Frame.Height) / 2);
 					nsChild.SetFrameOrigin (new CoreGraphics.CGPoint (x, y));
 				}
 
@@ -441,7 +485,6 @@ namespace MonoDevelop.Ide
 				int x, y;
 				gtkChild.GetSize (out var w, out var h);
 				if (gtkParent != null) {
-					gtkChild.TransientFor = gtkParent;
 					gtkParent.GetSize (out var winw, out var winh);
 					gtkParent.GetPosition (out var winx, out var winy);
 					x = Math.Max (0, (winw - w) / 2) + winx;
@@ -449,13 +492,25 @@ namespace MonoDevelop.Ide
 					gtkChild.Move (x, y);
 #if MAC
 				} else if (nsParent != null) {
+					x = (int) (nsParent.Frame.Left + (nsParent.Frame.Width - w) / 2);
+					y = (int) (nsParent.Frame.Top + (nsParent.Frame.Height - h) / 2);
 					nsChild = GtkMacInterop.GetNSWindow (gtkChild);
-					x = (int) Math.Max (0, nsParent.Frame.Left + (nsParent.Frame.Width - w) / 2);
-					y = (int) Math.Max (0, nsParent.Frame.Top + (nsParent.Frame.Height - h) / 2);
-					nsChild.SetFrameOrigin (new CoreGraphics.CGPoint (x, y));
+					if (nsChild != null) {
+						nsChild.SetFrameOrigin (new CoreGraphics.CGPoint (x, y));
+					} else {
+						gtkChild.Move (x, y);
+					}
 #endif
 				} else {
+#if MAC
+					// There is no parent, so just center the dialog
+					nsChild = GtkMacInterop.GetNSWindow (gtkChild);
+					if (nsChild != null) {
+						nsChild.Center ();
+					}
+#else
 					gtkChild.SetPosition (Gtk.WindowPosition.Center);
+#endif
 				}
 			}
 		}
@@ -589,7 +644,7 @@ namespace MonoDevelop.Ide
 			public AlertButton GenericAlert (Window parent, MessageDescription message)
 			{
 				var dialog = new AlertDialog (message) {
-					TransientFor = parent ?? DesktopService.GetParentForModalWindow ()
+					TransientFor = parent ?? IdeServices.DesktopService.GetFocusedTopLevelWindow ()
 				};
 				return dialog.Run ();
 			}
@@ -633,6 +688,7 @@ namespace MonoDevelop.Ide
 		
 		public string Text { get; set; }
 		public string SecondaryText { get; set; }
+		public string HelpUrl { get; set; }
 		public bool AllowApplyToAll { get; set; }
 		public int DefaultButton { get; set; }
 		public CancellationToken CancellationToken { get; private set; }

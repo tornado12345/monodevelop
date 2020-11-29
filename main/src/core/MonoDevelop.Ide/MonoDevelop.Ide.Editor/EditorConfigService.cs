@@ -1,4 +1,4 @@
-﻿//
+//
 // EditorConfigService.cs
 //
 // Author:
@@ -39,6 +39,8 @@ namespace MonoDevelop.Ide.Editor
 	static class EditorConfigService
 	{
 		public readonly static string MaxLineLengthConvention = "max_line_length";
+		public readonly static string RulersConvention = "rulers";
+
 		readonly static object contextCacheLock = new object ();
 		readonly static ICodingConventionsManager codingConventionsManager = CodingConventionsManagerFactory.CreateCodingConventionsManager (new ConventionsFileManager());
 		static ImmutableDictionary<string, ICodingConventionContext> contextCache = ImmutableDictionary<string, ICodingConventionContext>.Empty;
@@ -83,16 +85,18 @@ namespace MonoDevelop.Ide.Editor
 			}
 		}
 
-		public static async Task RemoveEditConfigContext (string fileName)
+		public static Task RemoveEditConfigContext (string fileName)
 		{
-			ICodingConventionContext ctx;
-			lock (contextCacheLock) {
-				if (!contextCache.TryGetValue (fileName, out ctx))
-					return;
-				contextCache = contextCache.Remove(fileName);
-			}
-			if (ctx != null)
-				ctx.Dispose ();
+			return Task.Run (() => {
+				ICodingConventionContext ctx;
+				lock (contextCacheLock) {
+					if (!contextCache.TryGetValue (fileName, out ctx))
+						return;
+					contextCache = contextCache.Remove (fileName);
+				}
+				if (ctx != null)
+					ctx.Dispose ();
+			});
 		}
 
 		class ConventionsFileManager : IFileWatcher
@@ -187,7 +191,7 @@ namespace MonoDevelop.Ide.Editor
 			void WatchDirectories ()
 			{
 				var directories = watchedFiles.Count == 0 ? null : watchedFiles.Select (file => new FilePath (file).ParentDirectory);
-				FileWatcherService.WatchDirectories (this, directories);
+				FileWatcherService.WatchDirectories (this, directories).Ignore ();
 			}
 		}
 	}

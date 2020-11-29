@@ -1,4 +1,4 @@
-//
+﻿//
 // SearchResult.cs
 //
 // Author:
@@ -71,57 +71,75 @@ namespace MonoDevelop.Ide.FindInFiles
 		internal int GetLineNumber (SearchResultWidget widget)
 		{
 			if (!location.HasValue)
-				FillCache (widget);
+				FillLineCache (widget);
 			return location.Value.Line;
 		}
 
 		internal DocumentLocation GetLocation (SearchResultWidget widget)
 		{
 			if (!location.HasValue)
-				FillCache (widget);
+				FillLineCache (widget);
 			return location.Value;
 		}
 
 		internal string GetCopyData (SearchResultWidget widget)
 		{
 			if (copyData == null)
-				FillCache (widget);
+				FillCache (widget).Ignore ();
 			return copyData;
 		}
 
 		internal string GetMarkup(SearchResultWidget widget, bool isSelected)
 		{
 			if (markup == null)
-				FillCache (widget);
+				FillCache (widget).Ignore ();
 			return isSelected ? selectedMarkup : markup;
 		}
 
-		void FillCache (SearchResultWidget widget)
+		void FillLineCache (SearchResultWidget widget)
 		{
+			if (location != null)
+				return;
 			location = DocumentLocation.Empty;
-			copyData = "";
-			markup = selectedMarkup = "";
-
 			var doc = GetDocument ();
 			if (doc == null) {
 				return;
 			}
+			int lineNr = doc.OffsetToLineNumber (Offset);
+			var line = doc.GetLine (lineNr);
+			if (line != null) {
+				location = new DocumentLocation (lineNr, Offset - line.Offset + 1);
+			}
+		}
+
+		async Task FillCache (SearchResultWidget widget)
+		{
+			FillLineCache (widget);
+			copyData = "";
+			markup = selectedMarkup = "";
+
 			try {
-				int lineNr = doc.OffsetToLineNumber (Offset);
+				var doc = GetDocument ();
+				if (doc == null) {
+					return;
+				}
+
+				var lineNr = location.Value.Line;
 				var line = doc.GetLine (lineNr);
 				if (line != null) {
 					location = new DocumentLocation (lineNr, Offset - line.Offset + 1);
 					copyData = $"{FileName} ({location.Value.Line}, {location.Value.Column}):{doc.GetTextAt (line.Offset, line.Length)}";
-					CreateMarkup (widget, doc, line);
+					markup = await CreateMarkupAsync (widget, doc, line);
+					widget.QueueDraw ();
 				}
 			} catch (Exception e) {
 				LoggingService.LogError ("Error while getting search result", e);
 			}
 		}
 
-		const int maximumMarkupLength = 78;
+		const int maximumMarkupLength = 475;
 
-		async void CreateMarkup (SearchResultWidget widget, TextEditor doc, Editor.IDocumentLine line)
+		async Task<string> CreateMarkupAsync (SearchResultWidget widget, TextEditor doc, Editor.IDocumentLine line)
 		{
 			int startIndex = 0, endIndex = 0;
 
@@ -156,7 +174,7 @@ namespace MonoDevelop.Ide.FindInFiles
 					end = (uint)TranslateIndexToUTF8 (lineText, Math.Min (lineText.Length, col - markupStartOffset + Length));
 				} catch (Exception e) {
 					LoggingService.LogError ("Exception while translating index to utf8 (column was:" + col + " search result length:" + Length + " line text:" + lineText + ")", e);
-					return;
+					return "";
 				}
 				startIndex = (int)start;
 				endIndex = (int)end;
@@ -175,8 +193,11 @@ namespace MonoDevelop.Ide.FindInFiles
 			markup = FormatMarkup (PangoHelper.ColorMarkupBackground (selectedMarkup, (int)startIndex, (int)endIndex, searchColor), trimStart, trimEnd, tabSize);
 			selectedMarkup = FormatMarkup (PangoHelper.ColorMarkupBackground (selectedMarkup, (int)startIndex, (int)endIndex, selectedSearchColor), trimStart, trimEnd, tabSize);
 
-			var newMarkup = await doc.GetMarkupAsync (line.Offset + markupStartOffset + indent, length, new MarkupOptions (MarkupFormat.Pango));
-			newMarkup = widget.AdjustColors (newMarkup);
+			string newMarkup;
+			using (var markupTimeoutSource = new CancellationTokenSource (150)) {
+				newMarkup = await doc.GetMarkupAsync (line.Offset + markupStartOffset + indent, length, new MarkupOptions (MarkupFormat.Pango), markupTimeoutSource.Token).ConfigureAwait (false);
+				newMarkup = widget.AdjustColors (newMarkup);
+			}
 
 			try {
 				double delta = Math.Abs (b1 - b2);
@@ -196,10 +217,7 @@ namespace MonoDevelop.Ide.FindInFiles
 				LoggingService.LogError ("Error while setting the text renderer markup to: " + newMarkup, e);
 			}
 
-			newMarkup = FormatMarkup (newMarkup, trimStart, trimEnd, tabSize);
-
-			this.markup = newMarkup;
-			widget.QueueDraw ();
+			return FormatMarkup (newMarkup, trimStart, trimEnd, tabSize);
 		}
 
 		static string FormatMarkup (string str, bool trimeStart, bool trimEnd, int tabSize)
@@ -257,10 +275,15 @@ namespace MonoDevelop.Ide.FindInFiles
 
 		TextEditor GetDocument ()
 		{
-			if (cachedEditor == null || cachedEditor.FileName != FileName || cachedEditorFileProvider != FileProvider) {
+			var fileProvider = FileProvider;
+			if (cachedEditor == null || cachedEditor.IsDisposed || cachedEditor.FileName != FileName || cachedEditorFileProvider != fileProvider) {
+				if (fileProvider == null)
+					throw new InvalidOperationException ("FileProvider == null");
 				var content = FileProvider.ReadString ();
+				if (content == null)
+					throw new InvalidOperationException ("FileProvider.ReadString () == null");
 				cachedEditor?.Dispose ();
-				cachedEditor = TextEditorFactory.CreateNewEditor (TextEditorFactory.CreateNewReadonlyDocument (new Core.Text.StringTextSource (content.ReadToEnd ()), FileName, DesktopService.GetMimeTypeForUri (FileName)));
+				cachedEditor = TextEditorFactory.CreateNewEditor (TextEditorFactory.CreateNewReadonlyDocument (new Core.Text.StringTextSource (content.ReadToEnd ()), FileName, IdeServices.DesktopService.GetMimeTypeForUri (FileName)));
 				cachedEditorFileProvider = FileProvider;
 			}
 			return cachedEditor;

@@ -25,6 +25,7 @@
 // THE SOFTWARE.
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -37,7 +38,7 @@ namespace MonoDevelop.DotNetCore.Templating
 	[Extension]
 	class DotNetCoreProjectTemplateStringTagProvider : IStringTagProvider
 	{
-		string [] SupportedSDK = { "2.1", "2.2", "3.0" };
+		readonly string [] SupportedSDK = { "2.1", "2.2", "3.0", "3.1" };
 
 		public IEnumerable<StringTagDescription> GetTags (Type type)
 		{
@@ -55,6 +56,11 @@ namespace MonoDevelop.DotNetCore.Templating
 				yield return new StringTagDescription (
 					$"DotNetCoreSdk.{SupportedSDK [i]}.Templates.Web.ProjectTemplates.nupkg",
 					GettextCatalog.GetString (string.Format (".NET Core SDK {0} Web Project Templates NuGet package path", SupportedSDK[i]))
+				);
+
+				yield return new StringTagDescription (
+					$"DotNetCoreSdk.{SupportedSDK [i]}.Templates.Web.Spa.ProjectTemplates.nupkg",
+					GettextCatalog.GetString (string.Format (".NET Core SDK {0} Spa Web Project Templates NuGet package path", SupportedSDK [i]))
 				);
 
 				yield return new StringTagDescription (
@@ -127,6 +133,7 @@ namespace MonoDevelop.DotNetCore.Templating
 			foreach (var sdk in SupportedSDK) {
 				if (tag.StartsWith ($"DotNetCoreSdk.{sdk}", StringComparison.OrdinalIgnoreCase)) {
 					dotNetCoreSdk = GetDotNetCoreSdkVersion (DotNetCoreVersion.Parse (sdk));
+					break;
 				}
 			}
 
@@ -134,16 +141,32 @@ namespace MonoDevelop.DotNetCore.Templating
 				return null;
 
 			string templatesDirectory = Path.Combine (
-				DotNetCoreSdk.SdkRootPath,
-				dotNetCoreSdk.OriginalString,
-				"Templates"
-			);
+					DotNetCoreSdk.SdkRootPath,
+					dotNetCoreSdk.OriginalString,
+					"Templates"
+				);
 
-			if (DirectoryExists (templatesDirectory)) {
-				return templatesDirectory;
+			if (!DirectoryExists (templatesDirectory)) {
+				// .NET Core 3.0 Preview 8 and higher place templates in the root dir
+				// and versioned by runtime, not SDK
+				var baseTemplatesDir = Path.Combine (Directory.GetParent (DotNetCoreSdk.SdkRootPath).FullName, "templates");
+				if (DirectoryExists (baseTemplatesDir)) {
+					var availableTemplates = new Dictionary<DotNetCoreVersion, string> ();
+					foreach (var dir in EnumerateDirectories (baseTemplatesDir)) {
+						if (DotNetCoreVersion.TryParse (Path.GetFileName (dir), out var version)) {
+							availableTemplates [version] = dir;
+						}
+					}
+
+					templatesDirectory = availableTemplates.Keys
+						.Where (v => v.Major < dotNetCoreSdk.Major || (v.Major == dotNetCoreSdk.Major && v.Minor <= dotNetCoreSdk.Minor))
+						.OrderByDescending (v => v)
+						.Select (v => availableTemplates [v])
+						.FirstOrDefault ();
+				}
 			}
 
-			return string.Empty;
+			return DirectoryExists (templatesDirectory) ? templatesDirectory : string.Empty;
 		}
 
 		DotNetCoreVersion GetDotNetCoreSdkVersion (DotNetCoreVersion version)
@@ -166,5 +189,10 @@ namespace MonoDevelop.DotNetCore.Templating
 		/// Used by unit tests.
 		/// </summary>
 		internal Func<string, IEnumerable<string>> EnumerateFiles = Directory.EnumerateFiles;
+
+		/// <summary>
+		/// Used by unit tests.
+		/// </summary>
+		internal Func<string, IEnumerable<string>> EnumerateDirectories = Directory.EnumerateDirectories;
 	}
 }

@@ -30,6 +30,8 @@ using System;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
+using MonoDevelop.Ide.Gui.Shell;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.DesignerSupport
 {
@@ -71,7 +73,6 @@ namespace MonoDevelop.DesignerSupport
 						return;
 					}
 				}
-				DesignerSupport.Service.ReSetPad ();
 			}
 		}
 
@@ -83,27 +84,43 @@ namespace MonoDevelop.DesignerSupport
 			if (ob == ((DefaultWorkbench)IdeApp.Workbench.RootWindow).ActiveWorkbenchWindow)
 				visitedCurrentDoc = true;
 
-			if (ob is MonoDevelop.Components.Docking.AutoHideBox) {
+			if (ob is Components.Docking.AutoHideBox) {
 				found = true;
 				return true;
 			}
+
 			if (ob is PropertyPad) {
 				// Don't change the property grid selection when the focus is inside the property grid itself
 				found = true;
 				return true;
 			}
-			else if (ob is IPropertyPadProvider) {
+			if (ob is DocumentView dv) {
+				foreach (var dc in dv.GetTopLevelDocumentView ().GetActiveControllerHierarchy ()) {
+					var ppProvider = dc.GetContent<IPropertyPadProvider> ();
+					if (ppProvider != null) {
+						DesignerSupport.Service.SetPadContent (ppProvider, activeWidget);
+						found = true;
+						return true;
+					}
+					var cppProvider = dc.GetContent<ICustomPropertyPadProvider> ();
+					if (cppProvider != null) {
+						DesignerSupport.Service.SetPadContent (cppProvider, activeWidget);
+						found = true;
+						return true;
+					}
+				}
+			}
+			if (ob is IPropertyPadProvider) {
 				DesignerSupport.Service.SetPadContent ((IPropertyPadProvider)ob, activeWidget);
 				found = true;
 				return true;
 			}
-			else if (ob is ICustomPropertyPadProvider) {
+			if (ob is ICustomPropertyPadProvider) {
 				DesignerSupport.Service.SetPadContent ((ICustomPropertyPadProvider)ob, activeWidget);
 				found = true;
 				return true;
 			}
-			else
-				return false;
+			return false;
 		}
 	}
 }

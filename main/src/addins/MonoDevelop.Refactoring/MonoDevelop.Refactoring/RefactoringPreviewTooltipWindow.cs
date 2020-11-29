@@ -1,4 +1,4 @@
-﻿//
+//
 // RefactoringPreviewTooltipWindow.cs
 //
 // Author:
@@ -40,12 +40,13 @@ using Pango;
 using MonoDevelop.Ide.Editor.Highlighting;
 using Gdk;
 using MonoDevelop.Ide.TypeSystem;
+using MonoDevelop.Ide.Fonts;
 
 namespace MonoDevelop.Refactoring
 {
 	class RefactoringPreviewTooltipWindow : PopoverWindow
 	{
-		TextEditor editor;
+		Ide.Editor.TextEditor editor;
 		CodeAction codeAction;
 		DocumentContext documentContext;
 		CancellationTokenSource popupSrc = new CancellationTokenSource ();
@@ -57,22 +58,26 @@ namespace MonoDevelop.Refactoring
 
 		static RefactoringPreviewTooltipWindow currentPreviewWindow;
 
-		RefactoringPreviewTooltipWindow (TextEditor editor, CodeAction codeAction)
+		RefactoringPreviewTooltipWindow (Ide.Editor.TextEditor editor, CodeAction codeAction)
 		{
 			this.editor = editor;
 			this.documentContext = documentContext = editor.DocumentContext;
 			this.codeAction = codeAction;
 			TransientFor = IdeApp.Workbench.RootWindow;
-
-			fontDescription = Pango.FontDescription.FromString (DefaultSourceEditorOptions.Instance.FontName);
-			fontDescription.Size = (int)(fontDescription.Size * 0.8f);
+			var font = Xwt.Drawing.Font.FromName (DefaultSourceEditorOptions.Instance.FontName);
+			if (font != null) {
+				fontDescription = font.ToPangoFont ();
+				fontDescription.Size = (int)(fontDescription.Size * 0.8f);
+			} else {
+				LoggingService.LogError ("Error loading font : " + DefaultSourceEditorOptions.Instance.FontName);
+			}
 
 			using (var metrics = PangoContext.GetMetrics (fontDescription, PangoContext.Language)) {
 				lineHeight = (int)Math.Ceiling (0.5 + (metrics.Ascent + metrics.Descent) / Pango.Scale.PangoScale);
 			}
 		}
 
-		public static void ShowPreviewTooltip (TextEditor editor, CodeAction fix, Xwt.Rectangle rect)
+		public static void ShowPreviewTooltip (Ide.Editor.TextEditor editor, CodeAction fix, Xwt.Rectangle rect)
 		{
 			HidePreviewTooltip ();
 			currentPreviewWindow = new RefactoringPreviewTooltipWindow (editor, fix);
@@ -179,12 +184,12 @@ namespace MonoDevelop.Refactoring
 
 		class DiffProcessor
 		{
-			readonly TextEditor baseDocument;
+			readonly Ide.Editor.TextEditor baseDocument;
 			readonly IReadonlyTextDocument changedTextDocument;
 
 			public int IndentLength { get; set; }
 
-			public DiffProcessor (TextEditor baseDocument, IReadonlyTextDocument changedTextDocument)
+			public DiffProcessor (Ide.Editor.TextEditor baseDocument, IReadonlyTextDocument changedTextDocument)
 			{
 				this.baseDocument = baseDocument;
 				this.changedTextDocument = changedTextDocument;
@@ -277,7 +282,7 @@ namespace MonoDevelop.Refactoring
 				var length = Math.Max (0, line.Length - correctedIndentLength);
 
 				string text = null;
-				if (lineKind != LineKind.Normal || !(document is TextEditor)) {
+				if (lineKind != LineKind.Normal || !(document is Ide.Editor.TextEditor)) {
 					text = Ambience.EscapeText (document.GetTextAt (offset, length));
 				} // Ignore markup items as the markup needs to be requested on the UI thread.
 

@@ -32,7 +32,9 @@ using System.IO;
 using NUnit.Framework;
 using UnitTests;
 using MonoDevelop.Core;
+using MonoDevelop.Core.Assemblies;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MonoDevelop.Projects.Policies;
 using System.Xml;
@@ -581,6 +583,60 @@ namespace MonoDevelop.Projects
 		}
 
 		[Test]
+		public async Task ProjectReferences_ReferenceSourceTargetAvailableFromItemDefinitionGroup ()
+		{
+			string solFile = Util.GetSampleProject ("console-with-libs", "console-with-libs.sln");
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+
+				var p = (DotNetProject)sol.FindProjectByName ("console-with-libs");
+				var lib1Project = (DotNetProject)sol.FindProjectByName ("library1");
+				var lib2Project = (DotNetProject)sol.FindProjectByName ("library2");
+
+				var projectRefs = p.References.Where (r => r.ReferenceType == ReferenceType.Project);
+				var lib1ProjectRef = projectRefs.FirstOrDefault (r => r.Reference == "library1");
+				var lib2ProjectRef = projectRefs.FirstOrDefault (r => r.Reference == "library2");
+
+				var refs = await p.GetReferences (ConfigurationSelector.Default);
+
+				var projectAssemblyRefs = refs.Where (r => r.IsProjectReference).ToList ();
+				var lib1AssemblyRef = projectAssemblyRefs.FirstOrDefault (r => r.FilePath.FileName == "library1.dll");
+				var lib2AssemblyRef = projectAssemblyRefs.FirstOrDefault (r => r.FilePath.FileName == "library2.dll");
+
+				Assert.AreEqual ("ProjectReference", lib1ProjectRef.Metadata.GetValue ("ReferenceSourceTarget"));
+				Assert.AreEqual ("ProjectReference", lib2ProjectRef.Metadata.GetValue ("ReferenceSourceTarget"));
+				Assert.AreEqual ("ProjectReference", lib1AssemblyRef.Metadata.GetValue ("ReferenceSourceTarget"));
+				Assert.AreEqual ("ProjectReference", lib2AssemblyRef.Metadata.GetValue ("ReferenceSourceTarget"));
+				Assert.AreEqual (lib1Project, lib1AssemblyRef.GetReferencedItem (sol));
+				Assert.AreEqual (lib2Project, lib2AssemblyRef.GetReferencedItem (sol));
+				Assert.IsTrue (lib1AssemblyRef.ReferenceOutputAssembly);
+				Assert.IsTrue (lib2AssemblyRef.ReferenceOutputAssembly);
+				Assert.IsTrue (lib1AssemblyRef.IsCopyLocal);
+				Assert.IsTrue (lib2AssemblyRef.IsCopyLocal);
+			}
+		}
+
+		[Test]
+		public async Task AddProjectReference_EmptyReferenceSourceTargetNotAdded ()
+		{
+			string solFile = Util.GetSampleProject ("ref-source-target", "console-project.sln");
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+
+				var p = (DotNetProject)sol.FindProjectByName ("console-project");
+				var lib2Project = (DotNetProject)sol.FindProjectByName ("library2");
+
+				var reference = ProjectReference.CreateProjectReference (lib2Project);
+				p.References.Add (reference);
+
+				await p.SaveAsync (Util.GetMonitor ());
+
+				string expectedProjectXml = File.ReadAllText (p.FileName + "-saved");
+				string projectXml = File.ReadAllText (p.FileName);
+
+				Assert.AreEqual (expectedProjectXml, projectXml);
+			}
+		}
+
+		[Test]
 		public async Task DefaultMSBuildSupport ()
 		{
 			string solFile = Util.GetSampleProject ("console-project", "ConsoleProject.sln");
@@ -815,6 +871,41 @@ namespace MonoDevelop.Projects
 		}
 
 		[Test]
+		public async Task AddRemoveFileEvents ()
+		{
+			string solFile = Util.GetSampleProject ("console-project", "ConsoleProject.sln");
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = (DotNetProject)sol.Items [0];
+				int modifiedRefs = 0;
+				int modifiedFiles = 0;
+
+				SolutionItemModifiedEventHandler modifiedHandler = delegate (object sender, SolutionItemModifiedEventArgs e) {
+					foreach (var ev in e) {
+						if (ev.Hint == "References")
+							modifiedRefs++;
+						if (ev.Hint == "Files")
+							modifiedFiles++;
+					}
+				};
+				p.Modified += modifiedHandler;
+
+				var file = new ProjectFile (p.BaseDirectory.Combine ("Test.txt"));
+				p.Items.Add (file);
+
+				Assert.AreEqual (0, modifiedRefs);
+				Assert.AreEqual (1, modifiedFiles);
+
+				modifiedRefs = 0;
+				modifiedFiles = 0;
+
+				p.Items.Remove (file);
+
+				Assert.AreEqual (0, modifiedRefs);
+				Assert.AreEqual (1, modifiedFiles);
+			}
+		}
+
+		[Test]
 		public void GetDefaultNamespaceWhenProjectRootNamespaceContainsHyphen ()
 		{
 			var project = Services.ProjectService.CreateDotNetProject ("C#");
@@ -881,6 +972,125 @@ namespace MonoDevelop.Projects
 		}
 
 		[Test]
+		public async Task SubstringOfPath_HandlesForwardSlashesInPath ()
+		{
+			if (!Platform.IsMac)
+				Assert.Ignore ();
+
+			string solFile = Util.GetSampleProject ("path-substring-eval", "path-substring-eval.sln");
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = (DotNetProject)sol.Items [0];
+				var expectedBaseIntermediateOutputPath = sol.BaseDirectory.Combine ("obj", "src");
+				var baseIntermediateOutputPath = p.MSBuildProject.EvaluatedProperties.GetPathValue ("BaseIntermediateOutputPath", relativeToProject: false);
+				Assert.AreEqual (expectedBaseIntermediateOutputPath, baseIntermediateOutputPath);
+			}
+		}
+
+		[Test]
+		public async Task ItemDefinitionGroup ()
+		{
+			string projFile = Util.GetSampleProject ("project-with-item-def-group", "item-definition-group.csproj");
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectItem = p.Files.Single (f => f.Include == "Test.myitem");
+
+				Assert.AreEqual ("NewValue", projectItem.Metadata.GetValue ("OverriddenProperty"));
+				Assert.IsTrue (projectItem.Metadata.GetValue<bool> ("BoolProperty"));
+				Assert.IsTrue (projectItem.Metadata.HasProperty ("BoolProperty"));
+				Assert.AreEqual (FileCopyMode.PreserveNewest, projectItem.CopyToOutputDirectory);
+			}
+		}
+
+		[Test]
+		public async Task ItemDefinitionGroup_ItemDefinedMultipleTimes ()
+		{
+			string projFile = Util.GetSampleProject ("project-with-item-def-group", "multiple-item-definitions-same-item.csproj");
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectItem = p.Files.Single (f => f.Include == "Test.myitem");
+
+				Assert.AreEqual ("NewValue", projectItem.Metadata.GetValue ("OverriddenProperty"));
+				Assert.IsTrue (projectItem.Metadata.HasProperty ("BoolProperty"));
+				Assert.IsTrue (projectItem.Metadata.GetValue<bool> ("BoolProperty"));
+				Assert.AreEqual (FileCopyMode.Always, projectItem.CopyToOutputDirectory);
+				Assert.AreEqual ("First", projectItem.Metadata.GetValue ("FirstItemDefinitionProperty"));
+				Assert.AreEqual ("Second", projectItem.Metadata.GetValue ("SecondItemDefinitionProperty"));
+			}
+		}
+
+		[Test]
+		public async Task ItemDefinitionGroup_AddFilesWithSameMetadataAsItemDefinition_MetadataNotSaved ()
+		{
+			string projFile = Util.GetSampleProject ("project-with-item-def-group", "item-definition-group.csproj");
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectItem = p.Files.Single (f => f.Include == "Test.myitem");
+
+				var newItemFileName = projectItem.FilePath.ChangeName ("NewItem");
+				var newProjectItem = new ProjectFile (newItemFileName, projectItem.BuildAction);
+				newProjectItem.CopyToOutputDirectory = FileCopyMode.PreserveNewest;
+				newProjectItem.Metadata.SetValue ("BoolProperty", true);
+				newProjectItem.Metadata.SetValue ("OverriddenProperty", "OriginalValue");
+
+				p.Files.Add (newProjectItem);
+				await p.SaveAsync (Util.GetMonitor ());
+
+				var refXml = File.ReadAllText (p.FileName + ".add-file-match-metadata");
+				var savedXml = File.ReadAllText (p.FileName);
+
+				Assert.AreEqual (refXml, savedXml);
+			}
+		}
+
+		[Test]
+		public async Task ItemDefinitionGroup_AddFilesWithoutMetadata_MetadataUsesEmptyElements ()
+		{
+			string projFile = Util.GetSampleProject ("project-with-item-def-group", "item-definition-group.csproj");
+			using (var p = (Project)await Services.ProjectService.ReadSolutionItem (Util.GetMonitor (), projFile)) {
+				var projectItem = p.Files.Single (f => f.Include == "Test.myitem");
+
+				var newItemFileName = projectItem.FilePath.ChangeName ("NewItem");
+				var newProjectItem = new ProjectFile (newItemFileName, projectItem.BuildAction);
+				newProjectItem.CopyToOutputDirectory = FileCopyMode.Always;
+
+				p.Files.Add (newProjectItem);
+				await p.SaveAsync (Util.GetMonitor ());
+
+				var refXml = File.ReadAllText (p.FileName + ".add-file-no-metadata");
+				var savedXml = File.ReadAllText (p.FileName);
+
+				Assert.AreEqual (refXml, savedXml);
+			}
+		}
+
+		[Test]
+		public async Task ResolveAssemblyReferences_CustomTargetDefinesExtraReferencePathItems_ReferencePathItemsIncludedInResolvedAssemblyReferences ()
+		{
+			FilePath location = typeof (System.ComponentModel.Composition.CreationPolicy).Assembly.Location;
+			var directory = location.ParentDirectory;
+
+			FilePath solFile = Util.GetSampleProject ("ReferencePathTest", "ReferencePathTest.sln");
+
+			string contents =
+				"<Project>\r\n" +
+				"  <PropertyGroup>\r\n" +
+				"  <MonoPath>" + MSBuildProjectService.ToMSBuildPath (null, directory) + "</MonoPath>\r\n" +
+				"  </PropertyGroup>\r\n" +
+				"</Project>";
+
+			var directoryBuildPropsFile = solFile.ParentDirectory.Combine ("Directory.Build.props");
+			File.WriteAllText (directoryBuildPropsFile, contents);
+
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = sol.GetAllProjects ().Single () as DotNetProject;
+
+				var refs = await p.GetReferencedAssemblies (ConfigurationSelector.Default);
+				var componentModelRef = refs.FirstOrDefault (r => r.FilePath.FileName == "System.ComponentModel.Composition.dll");
+				var refList = refs.Select (r => r.FilePath.FileName.ToString ()).ToList ();
+
+				Assert.That (refList, Contains.Item ("System.ComponentModel.Composition.dll"));
+				Assert.AreEqual ("test-value", componentModelRef.Metadata.GetValue ("Test"));
+			}
+		}
+
+		[Test]
 		public async Task XamarinIOSProjectReferencesCollectionsImmutableNetStandardAssembly_GetReferencedAssembliesShouldIncludeNetStandard ()
 		{
 			if (!Platform.IsMac) {
@@ -891,9 +1101,7 @@ namespace MonoDevelop.Projects
 			FilePath solFile = Util.GetSampleProject ("iOSImmutableCollections", "iOSImmutableCollections.sln");
 			CreateNuGetConfigFile (solFile.ParentDirectory);
 
-			var process = Process.Start ("msbuild", $"/t:Restore /p:RestoreDisableParallel=true \"{solFile}\"");
-			Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-			Assert.AreEqual (0, process.ExitCode);
+			Util.RunMSBuild ($"/t:Restore /p:RestoreDisableParallel=true \"{solFile}\"");
 
 			using (var sol = (Solution) await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
 				var p = (DotNetProject) sol.Items [0];
@@ -922,9 +1130,15 @@ namespace MonoDevelop.Projects
 			FilePath solFile = Util.GetSampleProject ("expand-facades", "ExpandFacadesTest.sln");
 			CreateNuGetConfigFile (solFile.ParentDirectory);
 
-			var process = Process.Start ("nuget", $"restore -DisableParallelProcessing \"{solFile}\"");
+			var process = Process.Start (new ProcessStartInfo {
+				FileName = "nuget",
+				Arguments = $"restore -DisableParallelProcessing \"{solFile}\"",
+				RedirectStandardError = true,
+				RedirectStandardOutput = true,
+				UseShellExecute = false
+			});
 			Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
-			Assert.AreEqual (0, process.ExitCode);
+			Assert.AreEqual (0, process.ExitCode, await process.StandardError.ReadToEndAsync ());
 
 			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
 				var expandFalseProject = (DotNetProject)sol.FindProjectByName ("ExpandFacadesFalse");
@@ -941,6 +1155,34 @@ namespace MonoDevelop.Projects
 				systemComponentModelAnnotationsFromFacadesRef = expandFalseRefs.FirstOrDefault (r => r.FilePath.FileName == "System.ComponentModel.Annotations.dll");
 				Assert.IsNull (systemComponentModelAnnotationsFromFacadesRef);
 				Assert.IsFalse (expandFalseRefs.Any (r => r.FilePath.ParentDirectory.FileName.Equals ("Facades", StringComparison.OrdinalIgnoreCase)));
+			}
+		}
+
+		[Test]
+		public async Task UnknownNuGetPackageReferenceId_DesignTimeBuilds ()
+		{
+			FilePath solFile = Util.GetSampleProject ("UnknownPackageReference", "UnknownPackageReference.sln");
+			CreateNuGetConfigFile (solFile.ParentDirectory);
+
+			// Run restore but do not check result since this will fail.
+			using var process = Process.Start (new ProcessStartInfo {
+				FileName = "nuget",
+				Arguments = $"restore -DisableParallelProcessing \"{solFile}\"",
+				RedirectStandardError = true,
+				RedirectStandardOutput = true,
+				UseShellExecute = false
+			});
+			Assert.IsTrue (process.WaitForExit (120000), "Timeout restoring NuGet packages.");
+
+			using (var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var project = sol.GetAllProjects ().Single () as DotNetProject;
+				var references = (await project.GetReferencedAssemblies (ConfigurationSelector.Default)).ToArray ();
+				var packageDependencies = (await project.GetPackageDependencies (ConfigurationSelector.Default, CancellationToken.None)).ToArray ();
+
+				Assert.IsTrue (references.Any ());
+				Assert.IsTrue (references.Any (r => r.FilePath.FileName == "Newtonsoft.Json.dll"));
+				Assert.IsTrue (packageDependencies.Any ());
+				Assert.IsTrue (packageDependencies.Any (p => p.Name == "Newtonsoft.Json"));
 			}
 		}
 
@@ -961,6 +1203,26 @@ namespace MonoDevelop.Projects
 				"</configuration>";
 
 			File.WriteAllText (fileName, xml);
+		}
+
+		[Test]
+		public async Task ProjectDisposed_RunTarget_NullReferenceExceptionNotThrown ()
+		{
+			string solFile = Util.GetSampleProject ("console-project", "ConsoleProject.sln");
+			var sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile);
+
+			var p = (DotNetProject)sol.Items [0];
+			sol.Dispose ();
+
+			Assert.IsNull (p.MSBuildProject);
+
+			try {
+				// RunTarget should fail since BindTask will not register a task after Project has been disposed
+				await p.RunTarget (Util.GetMonitor (), "ResolveAssemblyReferences", ConfigurationSelector.Default);
+				Assert.Fail ("Should not reach here.");
+			} catch (TaskCanceledException) {
+				// Expected exception.
+			}
 		}
 
 		[Test]
@@ -997,6 +1259,145 @@ namespace MonoDevelop.Projects
 			{
 				base.OnModified (args);
 				ModifiedEventArgs.Add (args);
+			}
+		}
+
+		/// <summary>
+		/// Tests that the project will be disposed even if something fails when the Func passed to
+		/// BindTask throws an exception. We want to ensure that the active task is cleared if there is
+		/// an error to avoid the project waiting forever for this task to finish on disposing.
+		/// </summary>
+		[Test]
+		public async Task BindTask_FuncThrowsException_ProjectIsDisposed_ProjectDoesNotWaitForTask ()
+		{
+			string solFile = Util.GetSampleProject ("console-project", "ConsoleProject.sln");
+			using (Solution sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+				var p = (DotNetProject)sol.Items [0];
+
+				Task task = null;
+				try {
+					task = p.BindTask (arg => throw new ApplicationException ("Test"));
+					await task;
+					Assert.Fail ("Should not reach this line");
+				} catch (ApplicationException) {
+				}
+
+				Assert.IsNotNull (task);
+
+				Task<string> task2 = null;
+				try {
+					task2 = p.BindTask<string> (arg => throw new ApplicationException ("Test 2"));
+					await task2;
+					Assert.Fail ("Should not reach this line - BindTask<T>");
+				} catch (ApplicationException) {
+				}
+
+				Assert.IsNotNull (task2);
+
+				p.Dispose ();
+
+				const int timeout = 5000; // ms
+				int howLong = 0;
+				const int interval = 200; // ms
+
+				while (p.MSBuildProject != null) {
+					if (howLong >= timeout)
+						Assert.Fail ("Timed out waiting for project to be disposed");
+
+					await Task.Delay (interval);
+					howLong += interval;
+				}
+			}
+		}
+
+		[Test]
+		public async Task GetReferences_ProjectDisposed_BeforeTaskIsBound_DoesNotThrowNullReferenceException ()
+		{
+			var fn = new CustomItemNode<TestGetReferencesProjectExtension> ();
+			WorkspaceObject.RegisterCustomExtension (fn);
+
+			try {
+				string solFile = Util.GetSampleProject ("console-project", "ConsoleProject.sln");
+				using (Solution sol = (Solution)await Services.ProjectService.ReadWorkspaceItem (Util.GetMonitor (), solFile)) {
+					var p = (DotNetProject)sol.Items [0];
+
+					// The TestGetReferencesProjectExtension will call Project.Dispose during the GetReferences call.
+					// Previously the GetReferences would throw a TaskCanceledException and Project.OnGetReferences would
+					// throw a unhandled NullReferenceException since the project was disposed which results in MSBuildProject
+					// being set to null.
+					var refs = await p.GetReferences (ConfigurationSelector.Default, CancellationToken.None);
+					Assert.IsTrue (refs.Any (r => r.FilePath.FileName == "System.Xml.dll"));
+				}
+			} finally {
+				WorkspaceObject.UnregisterCustomExtension (fn);
+			}
+		}
+
+		/// <summary>
+		/// Ensure the cached value is updated when the Project or FileName changes.
+		/// </summary>
+		[Test]
+		public void ProjectFileIncludeCachingTests ()
+		{
+			using (var project = Services.ProjectService.CreateDotNetProject ("C#")) {
+				FilePath directory = Util.CreateTmpDir ("ProjectFileIncludeCachingTests");
+				project.FileName = directory.Combine ("Project.csproj");
+
+				var fileName = project.BaseDirectory.Combine ("Source", "Test.cs");
+				var projectFile = new ProjectFile (fileName);
+				projectFile.Project = project;
+
+				Assert.AreEqual (@"Source\Test.cs", projectFile.Include);
+
+				projectFile.Name = projectFile.FilePath.ChangeName ("Changed");
+				Assert.AreEqual (@"Source\Changed.cs", projectFile.Include);
+				Assert.AreEqual (@"Source\Changed.cs", projectFile.UnevaluatedInclude);
+
+				// Change project's ItemDirectory. This will change the ProjectFile's Include.
+				project.FileName = project.BaseDirectory.Combine ("Source", "Project.csproj");
+				Assert.AreEqual ("Changed.cs", projectFile.Include);
+			}
+		}
+
+		/// <summary>
+		/// Adding a new project to an existing solution does not call the Project's TargetFramework setter
+		/// so the TargetFrameworkMonikers was not initialized. When the TargetFramework's getter sets the
+		/// TargetFramework we also initialize the TargetFrameworkMonikers.
+		/// </summary>
+		[Test]
+		public void TargetFrameworkMonikers_NewProject_DoesNotThrowNullReferenceException ()
+		{
+			using (DotNetProject p = Services.ProjectService.CreateDotNetProject ("C#")) {
+				var moniker = p.TargetFrameworkMonikers.Single ();
+				Assert.AreEqual (p.TargetFramework.Id, moniker);
+
+				// Ensure target framework moniker is updated if the project's target framework is changed.
+				var newTargetFramework = Runtime.SystemAssemblyService.GetTargetFramework (TargetFrameworkMoniker.NET_4_5);
+				Assert.AreNotEqual (p.TargetFramework.Id, newTargetFramework.Id);
+				p.TargetFramework = newTargetFramework;
+
+				moniker = p.TargetFrameworkMonikers.Single ();
+				Assert.AreEqual (newTargetFramework.Id, moniker);
+			}
+		}
+
+		[Test]
+		public void EmptyFolderExistsInProject()
+		{
+			// Test case for bug #970095
+			var p = Services.ProjectService.CreateProject ("C#");
+			p.AddDirectory ("Model");
+			Assert.True(p.PathExistsInProject ("Model"));
+			p.Dispose ();
+		}
+
+		class TestGetReferencesProjectExtension : DotNetProjectExtension
+		{
+			protected internal override Task<List<AssemblyReference>> OnGetReferences (ConfigurationSelector configuration, CancellationToken token)
+			{
+				// Simulate the project being disposed whilst BindTask is called.
+				Project.Dispose ();
+				return base.OnGetReferences (configuration, token);
 			}
 		}
 	}

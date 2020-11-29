@@ -382,8 +382,8 @@ namespace MonoDevelop.Projects
 
 				InitBuildSyncEvent (project1);
 
-				// Start the build. Use RunTarget to avoid the BindTask which will cancel the build on project dispose.
-				var build1 = project1.RunTarget (Util.GetMonitor (), "Build", sol.Configurations [0].Selector);
+				// Start the build. Use RunTargetInternal to avoid the BindTask which will cancel the build on project dispose.
+				var build1 = project1.RunTargetInternal (Util.GetMonitor (), "Build", sol.Configurations [0].Selector);
 
 				// Wait for the build to reach the sync task
 				await WaitForBuildSyncEvent (project1);
@@ -418,6 +418,7 @@ namespace MonoDevelop.Projects
 								new StringWriter (),
 								new MSBuildLogger (),
 								MSBuildVerbosity.Quiet,
+								null,
 								new [] { "ResolveAssemblyReferences" },
 								new string [0],
 								new string [0],
@@ -620,11 +621,27 @@ namespace MonoDevelop.Projects
 
 					// The builder that was running the build and was shutdown should be immediately stopped after build finishes
 					Assert.AreEqual (0, RemoteBuildEngineManager.ActiveEnginesCount);
-					Assert.AreEqual (0, RemoteBuildEngineManager.EnginesCount);
 
+					await AssertWithTimeout (
+						10000,
+						() => 0 == RemoteBuildEngineManager.EnginesCount,
+						() => "Expecting 0 RemoteBuildEngineManager.EnginesCount but was " + RemoteBuildEngineManager.EnginesCount);
 				}
 			} finally {
 				RemoteBuildEngineManager.EngineDisposalDelay = currentDelay;
+			}
+		}
+
+		async Task AssertWithTimeout (int timeout, Func<bool> checkTest, Func<string> getFailureMessage)
+		{
+			int checkInterval = 100;
+			int timeWaited = 0;
+			while (!checkTest ()) {
+				await Task.Delay (checkInterval);
+				timeWaited += checkInterval;
+				if (timeWaited >= timeout) {
+					Assert.Fail (getFailureMessage ());
+				}
 			}
 		}
 

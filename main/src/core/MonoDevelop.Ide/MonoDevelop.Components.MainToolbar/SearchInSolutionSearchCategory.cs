@@ -43,6 +43,7 @@ namespace MonoDevelop.Components.MainToolbar
 	{
 		public SearchInSolutionSearchCategory () : base (GettextCatalog.GetString("Search"))
 		{
+			this.sortOrder = SearchInSolutionOrder;
 		}
 
 		public override Task GetResults (ISearchResultCallback searchResultCallback, SearchPopupSearchPattern pattern, CancellationToken token)
@@ -58,18 +59,9 @@ namespace MonoDevelop.Components.MainToolbar
 		//		return (ISearchDataSource)new SearchInSolutionDataSource (searchPattern);
 		//	});
 		//} 
-		static readonly string[] tags = { "search" };
+		public override string [] Tags { get; } = { "search" };
 
-		public override string[] Tags {
-			get {
-				return tags;
-			}
-		}
-
-		public override bool IsValidTag (string tag)
-		{
-			return tag == "search";
-		}
+		public override bool IsValidTag (string tag) => tag == "search";
 
 		class SearchInSolutionSearchResult : SearchResult
 		{
@@ -91,14 +83,14 @@ namespace MonoDevelop.Components.MainToolbar
 			public override void Activate ()
 			{
 				var options = new FilterOptions ();
-				if (PropertyService.Get ("AutoSetPatternCasing", true))
+				if (PropertyService.Get ("AutoSetPatternCasing", false))
 					options.CaseSensitive = pattern.Pattern.Any (char.IsUpper);
 				FindInFilesDialog.SearchReplace (pattern.Pattern, null, new WholeSolutionScope (), options, null, null);
 			}
 
 			public override string GetMarkupText (bool selected)
 			{
-				return GettextCatalog.GetString ("Search in Solution...");
+				return GettextCatalog.GetString ("Search in Solution…");
 			}
 		}
 	}

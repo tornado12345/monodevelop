@@ -26,31 +26,127 @@
 //
 
 using System;
-using Mono.Debugging.Client;
 using System.Collections.Generic;
-using System.Linq;
+
+using Mono.Debugging.Client;
 
 namespace MonoDevelop.Debugger
 {
 	public class LocalsPad : ObjectValuePad
 	{
-		public LocalsPad ()
+		static readonly bool EnableFakeNodes;
+
+		static LocalsPad ()
 		{
-			tree.AllowEditing = true;
-			tree.AllowAdding = false;
+			var env = Environment.GetEnvironmentVariable ("VSMAC_DEBUGGER_TESTING");
+
+			if (!string.IsNullOrEmpty (env)) {
+				var options = env.Split (new char [] { ',' });
+
+				for (int i = 0; i < options.Length; i++) {
+					var option = options[i].Trim ();
+
+					if (option == "fake-locals") {
+						EnableFakeNodes = true;
+						return;
+					}
+				}
+			}
+
+			EnableFakeNodes = false;
 		}
 
-		public override void OnUpdateList ()
+		public LocalsPad ()
 		{
-			base.OnUpdateList ();
+			if (UseNewTreeView) {
+				controller.AllowEditing = true;
+			} else {
+				tree.AllowEditing = true;
+				tree.AllowAdding = false;
+			}
+		}
 
+		void AddFakeNodes ()
+		{
+			var xx = new List<ObjectValueNode> ();
+
+			xx.Add (new FakeObjectValueNode ("f1"));
+			xx.Add (new FakeIsImplicitNotSupportedObjectValueNode ());
+
+			xx.Add (new FakeEvaluatingGroupObjectValueNode (1));
+			xx.Add (new FakeEvaluatingGroupObjectValueNode (0));
+			xx.Add (new FakeEvaluatingGroupObjectValueNode (5));
+
+			xx.Add (new FakeEvaluatingObjectValueNode ());
+			xx.Add (new FakeEnumerableObjectValueNode (10));
+			xx.Add (new FakeEnumerableObjectValueNode (20));
+			xx.Add (new FakeEnumerableObjectValueNode (23));
+
+			controller.AddValues (xx);
+		}
+
+		void ReloadValues (bool frameChanged)
+		{
 			var frame = DebuggingService.CurrentFrame;
-			
+
 			if (frame == null)
 				return;
 
-			tree.ClearValues ();
-			tree.AddValues (frame.GetAllLocals ().Where (l => !string.IsNullOrWhiteSpace (l.Name) && l.Name != "?").ToArray ());
+			ObjectValue[] locals;
+			TimeSpan elapsed;
+
+			using (var timer = frame.DebuggerSession.LocalVariableStats.StartTimer ()) {
+				try {
+					locals = frame.GetAllLocals ();
+					timer.Stop (true);
+				} catch {
+					locals = new ObjectValue[0];
+					timer.Stop (false);
+				}
+
+				elapsed = timer.Elapsed;
+			}
+
+			if (frameChanged) {
+				var metadata = new Dictionary<string, object> ();
+				metadata["LocalsCount"] = locals.Length;
+				metadata["Elapsed"] = elapsed.TotalMilliseconds;
+
+				Counters.LocalsPadFrameChanged.Inc (1, null, metadata);
+			}
+
+			DebuggerLoggingService.LogMessage ("Begin Local Variables:");
+			foreach (var local in locals)
+				DebuggerLoggingService.LogMessage ("\t{0}", local.Name);
+			DebuggerLoggingService.LogMessage ("End Local Variables");
+
+			if (UseNewTreeView) {
+				_treeview.BeginUpdates ();
+				try {
+					controller.ClearValues ();
+					controller.AddValues (locals);
+				} finally {
+					_treeview.EndUpdates ();
+				}
+
+				if (EnableFakeNodes)
+					AddFakeNodes ();
+			} else {
+				tree.ClearValues ();
+				tree.AddValues (locals);
+			}
+		}
+
+		public override void OnUpdateFrame ()
+		{
+			base.OnUpdateFrame ();
+			ReloadValues (true);
+		}
+
+		public override void OnUpdateValues ()
+		{
+			base.OnUpdateValues ();
+			ReloadValues (false);
 		}
 	}
 }

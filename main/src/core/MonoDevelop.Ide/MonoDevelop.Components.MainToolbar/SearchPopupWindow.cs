@@ -81,6 +81,11 @@ namespace MonoDevelop.Components.MainToolbar
 			Content.OpenFile ();
 		}
 
+		internal bool ProcessCommand (SearchPopupCommand command)
+		{
+			return Content.ProcessCommand (command);
+		}
+
 		internal bool ProcessKey (Key key, ModifierKeys state)
 		{
 			return Content.ProcessKey (key, state);
@@ -171,6 +176,10 @@ namespace MonoDevelop.Components.MainToolbar
 			#endregion
 		}
 
+		LoadingSearchProvidersCategory searchProvidersCategory;
+
+		readonly List<ProviderSearchResult> providerSearchResults;
+
 		public SearchPopupWidget ()
 		{
 			headerColor = Styles.GlobalSearch.HeaderTextColor;
@@ -185,6 +194,11 @@ namespace MonoDevelop.Components.MainToolbar
 			foreach (var cat in AddinManager.GetExtensionObjects<SearchCategory> ("/MonoDevelop/Ide/SearchCategories")) {
 				categories.Add (cat);
 				cat.Initialize (ParentWindow as XwtPopup);
+			}
+			
+			searchProvidersCategory = new LoadingSearchProvidersCategory ();
+			foreach (var category in categories) {
+				searchProvidersCategory.Add (category);
 			}
 
 			categories.Sort ();
@@ -224,12 +238,13 @@ namespace MonoDevelop.Components.MainToolbar
 
 		internal async void OpenFile ()
 		{
-			if (SelectedItem == null || SelectedItem.Item < 0 || SelectedItem.Item >= SelectedItem.DataSource.Count)
+			if (SelectedItem == null || !SelectedItem.IsValid)
 				return;
 
-			if (SelectedItem.DataSource[SelectedItem.Item].CanActivate) {
-				SelectedItem.DataSource[SelectedItem.Item].Activate ();
+			var item = SelectedItem.DataSource [SelectedItem.Item];
+			if (item.CanActivate) {
 				ParentWindow.Dispose ();
+				item.Activate ();
 			}
 			else {
 				var region = SelectedItemRegion;
@@ -314,6 +329,99 @@ namespace MonoDevelop.Components.MainToolbar
 			#endregion
 		}
 
+		sealed class ProviderSearchResult : SearchResult
+		{
+			readonly SearchCategory searchCategory;
+			public override bool CanActivate {
+				get {
+					return false;
+				}
+			}
+
+			public ProviderSearchResult (SearchCategory searchCategory) : base ("", "", 0)
+			{
+				this.searchCategory = searchCategory;
+			}
+
+			public override string AccessibilityMessage => GettextCatalog.GetString ("Loading {0} Search Results…", searchCategory.Name);
+
+			public override string GetMarkupText (bool selected)
+			{
+				return GettextCatalog.GetString ("{0} Search Results…", searchCategory.Name);
+			}
+		}
+
+		sealed class LoadingSearchProvidersCategory : SearchCategory
+		{
+			readonly Dictionary<SearchCategory, ProviderSearchResult> data = new Dictionary<SearchCategory, ProviderSearchResult> ();
+			readonly List<ProviderSearchResult> values = new List<ProviderSearchResult> ();
+			public IReadOnlyList<ProviderSearchResult> Values => values;
+
+			public int ProvidersLeft => values.Count;
+
+			public LoadingSearchProvidersCategory () : base (GettextCatalog.GetString ("Loading"))
+			{
+				this.sortOrder = LoadingCategoryOrder;
+			}
+
+			public void Add (SearchCategory provider)
+			{
+				if (data.ContainsKey (provider)) {
+					return;
+				}
+
+				var result = new ProviderSearchResult (provider);
+				values.Add (result);
+				data.Add (provider, result);
+			}
+
+			public void AddRange (IEnumerable<SearchCategory> providers)
+			{
+				foreach (var provider in providers)
+					Add (provider);
+			}
+
+			public void Remove (SearchCategory provider)
+			{
+				if (data.TryGetValue (provider, out ProviderSearchResult result)) {
+					values.Remove (result);
+					data.Remove (provider);
+				}
+			}
+
+			public void Clear ()
+			{
+				values.Clear ();
+				data.Clear ();
+			}
+
+			public override Task GetResults (ISearchResultCallback searchResultCallback, SearchPopupSearchPattern pattern, CancellationToken token)
+			{
+				foreach (var result in data) {
+					searchResultCallback.ReportResult (result.Value);
+				}
+				return Task.CompletedTask;
+			}
+
+			public override string [] Tags => Array.Empty<string> ();
+
+			public override bool IsValidTag (string tag)
+			{
+				return false;
+			}
+		}
+
+		int GetIndexFromCategory (IList<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> results, SearchCategory category)
+		{
+			for (int i = 0; i < results.Count; i++) {
+				if (results[i].Item1.SortOrder >= category.SortOrder) {
+					return i;
+				}
+			}
+			//last element
+			return results.Count - 1;
+		}
+
 		public void Update (SearchPopupSearchPattern pattern)
 		{
 			// in case of 'string:' it's not clear if the user ment 'tag:pattern'  or 'pattern:line' therefore guess
@@ -325,72 +433,146 @@ namespace MonoDevelop.Components.MainToolbar
 			this.pattern = pattern;
 			if (src != null)
 				src.Cancel ();
-			HideTooltip ();
+
 			src = new CancellationTokenSource ();
+			var token = src.Token;
 			isInSearch = true;
 			if (results.Count == 0) {
 				QueueDraw ();
 			}
+
+			var lastProvSrc = new CancellationTokenSource ();
+
+			//generating the collectors
 			var collectors = new List<SearchResultCollector> ();
-			var token = src.Token;
-			foreach (var _cat in categories) {
+
+			int total = categories.Count;
+			int current = 0;
+
+			var activeCategories = string.IsNullOrEmpty (pattern.Tag) ? categories : categories.Where (cat => cat.IsValidTag (pattern.Tag));
+			var loadingCatResults = Array.Empty<ProviderSearchResult> ();
+
+			lock (lockObject) {
+				if (!token.IsCancellationRequested) {
+					searchProvidersCategory.Clear ();
+					searchProvidersCategory.AddRange (activeCategories);
+				}
+				loadingCatResults = searchProvidersCategory.Values.ToArray ();
+			}
+
+			var newResults = ImmutableArray.Create (new Tuple<SearchCategory, IReadOnlyList<SearchResult>> (searchProvidersCategory, loadingCatResults));
+
+			foreach (var _cat in activeCategories) {
 				var cat = _cat;
-				if (!string.IsNullOrEmpty (pattern.Tag) && !cat.IsValidTag (pattern.Tag))
-					continue;
 				var col = new SearchResultCollector (_cat);
 				collectors.Add (col);
 				col.Task = cat.GetResults (col, pattern, token);
-			}
 
-			Task.WhenAll (collectors.Select (c => c.Task)).ContinueWith (t => {
-				if (token.IsCancellationRequested)
-					return;
-				var newResults = new List<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> (collectors.Count);
-				foreach (var col in collectors) {
-					if (col.Task.IsCanceled) {
-						continue;
-					} else if (col.Task.IsFaulted) {
-						LoggingService.LogError ($"Error getting search results for {col.Category}", col.Task.Exception);
-					} else {
-						newResults.Add (Tuple.Create (col.Category, col.Results));
-					}
-				}
+				//we append on finished  to process and show the results
+				col.Task.ContinueWith ((colTask) => {
 
-				List<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> failedResults = null;
-				ItemIdentifier topResult = null;
-				for (int i = 0; i < newResults.Count; i++) {
-					var tuple = newResults [i];
-					try {
-						if (tuple.Item2.Count == 0)
-							continue;
-						if (topResult == null || topResult.DataSource [topResult.Item].Weight < tuple.Item2 [0].Weight)
-							topResult = new ItemIdentifier (tuple.Item1, tuple.Item2, 0);
-					} catch (Exception e) {
-						LoggingService.LogError ("Error while showing result " + i, e);
-						if (failedResults == null)
-							failedResults = new List<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> ();
-						failedResults.Add (newResults [i]);
-						continue;
-					}
-				}
+					//cancel last provider continueWith task
+					lastProvSrc?.Cancel ();
 
-				if (failedResults != null)
-					failedResults.ForEach (failedResult => newResults.Remove (failedResult));
-
-				InvokeAsync (delegate {
-					if (token.IsCancellationRequested)
+					if (token.IsCancellationRequested || colTask.IsCanceled)
 						return;
-					ShowResults (newResults, topResult);
-					isInSearch = false;
 
-					OnPreferredSizeChanged ();
-				});
-			}, token);
+					lock (lockObject) {
+
+						current++;
+
+						lastProvSrc = new CancellationTokenSource ();
+
+						var builder = newResults.ToBuilder ();
+
+						//We add the results to the collection or we log the issue
+						if (colTask.IsFaulted) {
+							LoggingService.LogError ($"Error getting search results for {col.Category}", colTask.Exception);
+							return;
+						}
+
+						//we want order the new category processed 
+						var indexToInsert = GetIndexFromCategory (builder, col.Category);
+						builder.Insert(indexToInsert, Tuple.Create (col.Category, col.Results));
+
+						//que want remove it all the failed results from the search
+						var calculatedResult = GetTopResult (builder);
+						if (calculatedResult.failedResults != null) {
+							for (int i = 0; i < calculatedResult.failedResults.Count; i++) {
+								builder.Remove (calculatedResult.failedResults [i]);
+							}
+						}
+
+						//when a provider is processed we remove the result from the searh provider category group
+						if (searchProvidersCategory != null) {
+
+							//we remove the processed category
+							searchProvidersCategory.Remove (col.Category);
+
+							//we want remove the tuple and recreate
+							builder.Remove (builder.FirstOrDefault (s => s.Item1 == searchProvidersCategory));
+
+							if (current < total) {
+								//we want order the new category processed 
+								indexToInsert = GetIndexFromCategory (builder, searchProvidersCategory);
+								builder.Insert (indexToInsert, new Tuple<SearchCategory, IReadOnlyList<SearchResult>> (searchProvidersCategory, searchProvidersCategory.Values.ToArray ()));
+							}
+						}
+
+						ImmutableInterlocked.InterlockedExchange (ref newResults, builder.ToImmutable ());
+
+						if (lastProvSrc.IsCancellationRequested || token.IsCancellationRequested || colTask.IsCanceled)
+							return;
+
+						//refresh panel and show results 
+						Runtime.RunInMainThread (() => {
+							if (lastProvSrc.IsCancellationRequested || token.IsCancellationRequested || colTask.IsCanceled)
+								return;
+
+							ShowResults (newResults, calculatedResult.topResult);
+
+							//once we processed all the items our search is finished
+							if (current == total) {
+								isInSearch = false;
+							}
+
+							OnPreferredSizeChanged ();
+						}).Ignore ();
+					}
+				}, token, TaskContinuationOptions.NotOnCanceled, TaskScheduler.Default)
+					.Ignore ();
+			}
 		}
 
-		void ShowResults (List<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> newResults, ItemIdentifier topResult)
+		readonly object lockObject = new object ();
+
+		(List<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> failedResults, ItemIdentifier topResult) GetTopResult (ImmutableArray<Tuple<SearchCategory, IReadOnlyList<SearchResult>>>.Builder newResults)
 		{
-			results = newResults;
+			List<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> failedResults = null;
+			ItemIdentifier topResult = null;
+			for (int i = 0; i < newResults.Count; i++) {
+				var tuple = newResults [i];
+				try {
+					if (tuple.Item2.Count == 0 || tuple.Item1 is LoadingSearchProvidersCategory)
+						continue;
+					if (topResult == null || topResult.DataSource [topResult.Item].Weight < tuple.Item2 [0].Weight)
+						topResult = new ItemIdentifier (tuple.Item1, tuple.Item2, 0);
+				} catch (Exception e) {
+					LoggingService.LogError ("Error while showing result " + i, e);
+					if (failedResults == null)
+						failedResults = new List<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> ();
+					failedResults.Add (newResults [i]);
+					continue;
+				}
+			}
+
+			return (failedResults, topResult);
+		}
+
+		void ShowResults (ImmutableArray<Tuple<SearchCategory, IReadOnlyList<SearchResult>>> newResults, ItemIdentifier topResult)
+		{
+			results.Clear ();
+			results.AddRange (newResults);
 			SelectedItem = topItem = topResult;
 			ShowTooltip ();
 		}
@@ -454,7 +636,7 @@ namespace MonoDevelop.Components.MainToolbar
 		ItemIdentifier GetItemAt (double px, double py)
 		{
 			double y = ParentBounds.Y + yMargin;
-			if (topItem != null){
+			if (topItem != null && topItem.IsValid) {
 				layout.Markup = GetRowMarkup (topItem.DataSource[topItem.Item]);
 				var ls = layout.GetSize ();
 				y += ls.Height + itemSeparatorHeight + itemPadding * 2;
@@ -780,6 +962,31 @@ namespace MonoDevelop.Components.MainToolbar
 			QueueDraw ();
 		}
 
+		internal bool ProcessCommand (SearchPopupCommand command)
+		{
+			switch (command) {
+			case SearchPopupCommand.PreviousItem:
+				SelectItemUp ();
+				return true;
+			case SearchPopupCommand.NextItem:
+				SelectItemDown ();
+				return true;
+			case SearchPopupCommand.NextCategory:
+				SelectNextCategory ();
+				return true;
+			case SearchPopupCommand.PreviousCategory:
+				SelectPrevCategory ();
+				return true;
+			case SearchPopupCommand.Activate:
+				OnItemActivated (EventArgs.Empty);
+				return true;
+
+			default:
+				break;
+			}
+			return false;
+		}
+
 		internal bool ProcessKey (Xwt.Key key, Xwt.ModifierKeys state)
 		{
 			switch (key) {
@@ -825,7 +1032,7 @@ namespace MonoDevelop.Components.MainToolbar
 
 		public ISegment SelectedItemRegion {
 			get {
-				if (SelectedItem == null || SelectedItem.Item < 0 || SelectedItem.Item >= SelectedItem.DataSource.Count)
+				if (SelectedItem == null || !SelectedItem.IsValid)
 					return TextSegment.Invalid;
 				return SelectedItem.DataSource[SelectedItem.Item].Segment;
 			}
@@ -833,7 +1040,7 @@ namespace MonoDevelop.Components.MainToolbar
 
 		public string SelectedItemFileName {
 			get {
-				if (SelectedItem == null || SelectedItem.Item < 0 || SelectedItem.Item >= SelectedItem.DataSource.Count)
+				if (SelectedItem == null || !SelectedItem.IsValid)
 					return null;
 				return SelectedItem.DataSource[SelectedItem.Item].File;
 			}
@@ -843,6 +1050,7 @@ namespace MonoDevelop.Components.MainToolbar
 			public SearchCategory Category { get; private set; }
 			public IReadOnlyList<SearchResult> DataSource { get; private set; }
 			public int Item { get; private set; }
+			public bool IsValid { get => DataSource != null && 0 <= Item && Item < DataSource.Count; }
 
 			public ItemIdentifier (SearchCategory category, IReadOnlyList<SearchResult> dataSource, int item)
 			{
@@ -951,7 +1159,7 @@ namespace MonoDevelop.Components.MainToolbar
 
 			double y = alloc.Y + yMargin;
 			Size ls;
-			if (topItem != null) {
+			if (topItem != null && topItem.IsValid) {
 				headerLayout.Text = GettextCatalog.GetString ("Top Result");
 				ls = headerLayout.GetSize ();
 				context.SetColor (headerColor);
@@ -1043,7 +1251,7 @@ namespace MonoDevelop.Components.MainToolbar
 			}
 			if (y == alloc.Y + yMargin) {
 				context.SetColor (Styles.GlobalSearch.ResultTextColor);
-				layout.Markup = isInSearch ? GettextCatalog.GetString ("Searching...") : GettextCatalog.GetString ("No matches");
+				layout.Markup = isInSearch ? GettextCatalog.GetString ("Searching…") : GettextCatalog.GetString ("No matches");
 				context.DrawTextLayout (layout, alloc.X + xMargin, y);
 			}
 		}

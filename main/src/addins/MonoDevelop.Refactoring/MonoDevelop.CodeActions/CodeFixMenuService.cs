@@ -48,14 +48,14 @@ using MonoDevelop.Ide;
 using MonoDevelop.Ide.Composition;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Refactoring;
-using RefactoringEssentials;
 using MonoDevelop.AnalysisCore;
 
 namespace MonoDevelop.CodeActions
 {
+	[Obsolete ("Old editor")]
 	internal static class CodeFixMenuService
 	{
-		public static CodeFixMenu CreateFixMenu (TextEditor editor, CodeActionContainer fixes, CancellationToken cancellationToken = default(CancellationToken))
+		public static CodeFixMenu CreateFixMenu (Ide.Editor.TextEditor editor, CodeActionContainer fixes, CancellationToken cancellationToken = default(CancellationToken))
 		{
 			var menu = new CodeFixMenu ();
 
@@ -63,7 +63,7 @@ namespace MonoDevelop.CodeActions
 				return menu;
 			}
 
-			var options = ((MonoDevelopWorkspaceDiagnosticAnalyzerProviderService)Ide.Composition.CompositionManager.GetExportedValue<IWorkspaceDiagnosticAnalyzerProviderService> ()).GetOptionsAsync ().Result;
+			var options = ((MonoDevelopWorkspaceDiagnosticAnalyzerProviderService)Ide.Composition.CompositionManager.Instance.GetExportedValue<IWorkspaceDiagnosticAnalyzerProviderService> ()).GetOptionsAsync ().Result;
 			int mnemonic = 1;
 
 			var suppressLabel = GettextCatalog.GetString ("_Suppress");
@@ -114,8 +114,8 @@ namespace MonoDevelop.CodeActions
 					first = false;
 				}
 
-				foreach (var action in refactoring.Actions) {
-					AddFixMenuItem (editor, menu, null, ref mnemonic, action, null, cancellationToken);
+				foreach (var codeAction in refactoring.CodeActions) {
+					AddFixMenuItem (editor, menu, null, ref mnemonic, codeAction.action, null, cancellationToken);
 				}
 			}
 
@@ -155,7 +155,7 @@ namespace MonoDevelop.CodeActions
 			return desc.CustomTags.Any (c => CultureInfo.InvariantCulture.CompareInfo.Compare (c, tag) == 0);
 		}
 
-		static CodeFixMenuEntry CreateFixMenuEntry (TextEditor editor, CodeAction fix, ref int mnemonic)
+		static CodeFixMenuEntry CreateFixMenuEntry (Ide.Editor.TextEditor editor, CodeAction fix, ref int mnemonic)
 		{
 			var label = mnemonic < 0 ? fix.Title : CreateLabel (fix.Title, ref mnemonic);
 			var item = new CodeFixMenuEntry (label, async delegate {
@@ -169,7 +169,7 @@ namespace MonoDevelop.CodeActions
 			return item;
 		}
 
-		static CodeFixMenuEntry CreateFixAllMenuEntry (TextEditor editor, FixAllState fixState, ref int mnemonic, CancellationToken token)
+		static CodeFixMenuEntry CreateFixAllMenuEntry (Ide.Editor.TextEditor editor, FixAllState fixState, ref int mnemonic, CancellationToken token)
 		{
 			var provider = fixState?.FixAllProvider;
 			if (provider == null)
@@ -214,7 +214,7 @@ namespace MonoDevelop.CodeActions
 			return item;
 		}
 
-		static void AddFixMenuItem (TextEditor editor, CodeFixMenu menu, CodeFixMenu fixAllMenu, ref int mnemonic, CodeAction fix, FixAllState fixState, CancellationToken token)
+		static void AddFixMenuItem (Ide.Editor.TextEditor editor, CodeFixMenu menu, CodeFixMenu fixAllMenu, ref int mnemonic, CodeAction fix, FixAllState fixState, CancellationToken token)
 		{
 			if (fix is CodeAction.CodeActionWithNestedActions nested) {
 				// Inline code actions if they are, otherwise add a nested fix menu
@@ -244,7 +244,7 @@ namespace MonoDevelop.CodeActions
 			}
 		}
 
-		static void AddNestedFixMenu (TextEditor editor, CodeFixMenu menu, CodeFixMenu fixAllMenu, CodeAction.CodeActionWithNestedActions fixes, FixAllState fixState, CancellationToken token)
+		static void AddNestedFixMenu (Ide.Editor.TextEditor editor, CodeFixMenu menu, CodeFixMenu fixAllMenu, CodeAction.CodeActionWithNestedActions fixes, FixAllState fixState, CancellationToken token)
 		{
 			int subMnemonic = 0;
 			var subMenu = new CodeFixMenu (fixes.Title);
@@ -267,10 +267,10 @@ namespace MonoDevelop.CodeActions
 		internal class ContextActionRunner
 		{
 			readonly CodeAction act;
-			readonly TextEditor editor;
+			readonly Ide.Editor.TextEditor editor;
 			DocumentContext documentContext;
 
-			public ContextActionRunner (TextEditor editor, CodeAction act)
+			public ContextActionRunner (Ide.Editor.TextEditor editor, CodeAction act)
 			{
 				this.editor = editor;
 				this.act = act;
@@ -280,36 +280,6 @@ namespace MonoDevelop.CodeActions
 			public async Task Run ()
 			{
 				var token = default (CancellationToken);
-				if (act is InsertionAction insertionAction) {
-					var insertion = await insertionAction.CreateInsertion (token).ConfigureAwait (false);
-
-					var document = await IdeApp.Workbench.OpenDocument (insertion.Location.SourceTree.FilePath, documentContext.Project);
-					var parsedDocument = await document.UpdateParseDocument ();
-					var model = await document.AnalysisDocument.GetSemanticModelAsync (token);
-					if (parsedDocument != null) {
-						var insertionPoints = InsertionPointService.GetInsertionPoints (
-							document.Editor,
-							model,
-							insertion.Type,
-							insertion.Location.SourceSpan.Start
-						);
-
-						var options = new InsertionModeOptions (
-							insertionAction.Title,
-							insertionPoints,
-							point => {
-								if (!point.Success)
-									return;
-								var node = Formatter.Format (insertion.Node, document.RoslynWorkspace, document.GetOptionSet (), token);
-								point.InsertionPoint.Insert (document.Editor, document, node.ToString ());
-								// document = await Simplifier.ReduceAsync(document.AnalysisDocument, Simplifier.Annotation, cancellationToken: token).ConfigureAwait(false);
-							}
-						);
-
-						document.Editor.StartInsertionMode (options);
-						return;
-					}
-				}
 
 				var oldSolution = documentContext.AnalysisDocument.Project.Solution;
 				var updatedSolution = oldSolution;

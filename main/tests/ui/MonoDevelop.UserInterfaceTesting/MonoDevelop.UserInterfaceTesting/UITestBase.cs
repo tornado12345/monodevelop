@@ -1,4 +1,4 @@
-﻿//
+//
 // UserInterfaceTest.cs
 //
 // Author:
@@ -107,7 +107,7 @@ namespace MonoDevelop.UserInterfaceTesting
 			currentWorkingDirectory = Directory.GetCurrentDirectory ();
 		}
 
-		[TestFixtureSetUp]
+		[OneTimeSetUp]
 		public virtual void FixtureSetup ()
 		{
 			testResultFolder = Path.Combine (currentWorkingDirectory, "TestResults");
@@ -115,6 +115,7 @@ namespace MonoDevelop.UserInterfaceTesting
 
 		public void PreStart ()
 		{
+			UnitTests.Util.ClearTmpDir ();
 			SetupTestResultFolder ();
 			SetupTestLogger ();
 			SetupScreenshotsFolder ();
@@ -125,13 +126,8 @@ namespace MonoDevelop.UserInterfaceTesting
 		public virtual void SetUp ()
 		{
 			PreStart ();
-			var mdProfile = Util.CreateTmpDir ();
+			OpenApplicationAndWait ();
 
-			TestService.Session.DebugObject = new UITestDebug ();
-			StartSession (mdProfile);
-			FoldersToClean.Add (mdProfile);
-
-			Session.WaitForElement (IdeQuery.DefaultWorkbench);
 			TakeScreenShot ("Application-Started");
 			CloseIfXamarinUpdateOpen ();
 			TakeScreenShot ("Application-Ready");
@@ -146,27 +142,36 @@ namespace MonoDevelop.UserInterfaceTesting
 			Session.WaitForElement (IdeQuery.DefaultWorkbench);
 		}
 
-		public void OpenExampleSolutionAndWait (out bool waitForPackages)
+		public string OpenExampleSolutionAndWait (out bool waitForPackages)
 		{
-			var sln = Path.Combine (MainPath, "build/tests/TestSolutions/ExampleFormsSolution/ExampleFormsSolution.sln");
+			return OpenSolutionAndWait (out waitForPackages, "performance", "sdk-library", "sdk-library.sln");
+		}
+
+		public string OpenSolutionAndWait (out bool waitForPackages, params string[] projectName)
+		{
+			FilePath sln = UnitTests.Util.GetSampleProject (projectName);
 
 			if (!File.Exists (sln)) {
 				throw new FileNotFoundException ("Could not find test solution", sln);
 			}
 
 			// Tell the app to track time to code
-			Session.SetGlobalValue ("MonoDevelop.Ide.IdeApp.ReportTimeToCode", true);
-			Session.RunAndWaitForTimer (() => Session.GlobalInvoke ("MonoDevelop.Ide.IdeApp.Workspace.OpenWorkspaceItem", (Core.FilePath)sln), "Ide.Shell.SolutionOpened", 60000);
+			Session.GlobalInvoke ("MonoDevelop.Ide.IdeStartupTracker.StartupTracker.StartTimeToCodeLoadTimer", null);
+			Session.RunAndWaitForTimer (() => Session.GlobalInvoke ("MonoDevelop.Ide.IdeApp.Workspace.OpenWorkspaceItem", sln), "Ide.Shell.SolutionOpened", 60000);
+			Session.GlobalInvoke ("MonoDevelop.Ide.IdeStartupTracker.StartupTracker.TrackTimeToCode", MonoDevelop.Ide.TimeToCodeMetadata.DocumentType.Solution);
 
 			// Currently we only have one solution which needs packages waited for.
 			// When we have more projects, we'll need a more clever system for detecting
 			// if packages need updated.
 			waitForPackages = true;
+
+			return sln;
 		}
 
 		public void StartSession (string mdProfile, string args = null)
 		{
 			TestService.StartSession (MonoDevelopBinPath, mdProfile, args);
+			TestService.Session.DebugObject = new UITestDebug ();
 		}
 
 		[TearDown]
@@ -291,7 +296,7 @@ namespace MonoDevelop.UserInterfaceTesting
 					if (folder != null && Directory.Exists (folder))
 						Directory.Delete (folder, true);
 				} catch (IOException e) {
-					TestService.Session.DebugObject.Debug ("Cleanup failed\n" +e);
+					TestService.Session.DebugObject.Debug ($"Failed to cleanup directory: {folder}\n" + e);
 				} catch (UnauthorizedAccessException e) {
 					TestService.Session.DebugObject.Debug (string.Format ("Unable to clean directory: {0}\n", folder) + e);
 				}

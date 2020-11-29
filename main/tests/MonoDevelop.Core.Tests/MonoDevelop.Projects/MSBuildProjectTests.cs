@@ -26,6 +26,7 @@
 using System;
 using NUnit.Framework;
 using UnitTests;
+using MonoDevelop.Core;
 using MonoDevelop.Core.Serialization;
 using MonoDevelop.Projects.MSBuild;
 using System.IO;
@@ -223,7 +224,7 @@ namespace MonoDevelop.Projects
 			Assert.AreEqual ("Foo.TestVal", it.Include);
 			Assert.AreEqual ("Debug", it.Metadata.GetValue ("Meta1"));
 
-			it = items [2];
+			it = items [2].Include == "file1.txt" ? items[2] : items[3];
 			Assert.AreEqual ("None", it.Name);
 			Assert.AreEqual ("*.txt", it.UnevaluatedInclude);
 			Assert.AreEqual ("file1.txt", it.Include);
@@ -231,7 +232,7 @@ namespace MonoDevelop.Projects
 			Assert.IsNotNull (it.SourceItem);
 			Assert.AreSame (it.SourceItem, p.ItemGroups.ToArray ()[1].Items.ToArray()[0]);
 
-			it = items [3];
+			it = items [3].Include == "file2.txt" ? items [3] : items [2];
 			Assert.AreEqual ("None", it.Name);
 			Assert.AreEqual ("*.txt", it.UnevaluatedInclude);
 			Assert.AreEqual ("file2.txt", it.Include);
@@ -260,7 +261,7 @@ namespace MonoDevelop.Projects
 
 			// [4] is an Update element, no real elements by itself.
 
-			it = items [6];
+			it = items [6].Include == "file1.txt" ? items[6] : items [7];
 			Assert.AreEqual ("None", it.Name);
 			Assert.AreEqual ("*.txt", it.UnevaluatedInclude);
 			Assert.AreEqual ("file1.txt", it.Include);
@@ -268,7 +269,7 @@ namespace MonoDevelop.Projects
 			Assert.IsNotNull (it.SourceItem);
 			Assert.AreSame (it.SourceItem, p.ItemGroups.ToArray ()[1].Items.ToArray()[5]);
 
-			it = items [7];
+			it = items [7].Include == "file2.txt" ? items [7] : items [6];
 			Assert.AreEqual ("None", it.Name);
 			Assert.AreEqual ("*.txt", it.UnevaluatedInclude);
 			Assert.AreEqual ("file2.txt", it.Include);
@@ -276,7 +277,7 @@ namespace MonoDevelop.Projects
 			Assert.IsNotNull (it.SourceItem);
 			Assert.AreSame (it.SourceItem, p.ItemGroups.ToArray ()[1].Items.ToArray()[5]);
 
-			it = items [8];
+			it = items [8].Include == "file1.txt" ? items [8] : items [9];
 			Assert.AreEqual ("Transformed", it.Name);
 			Assert.AreEqual ("@(None -> WithMetadataValue('Meta2', 'Debug'))", it.UnevaluatedInclude);
 			Assert.AreEqual ("file1.txt", it.Include);
@@ -285,7 +286,7 @@ namespace MonoDevelop.Projects
 			Assert.IsNotNull (it.SourceItem);
 			Assert.AreSame (it.SourceItem, p.ItemGroups.ToArray () [1].Items.ToArray () [6]);
 
-			it = items [9];
+			it = items [9].Include == "file2.txt" ? items [9] : items [8];
 			Assert.AreEqual ("Transformed", it.Name);
 			Assert.AreEqual ("@(None -> WithMetadataValue('Meta2', 'Debug'))", it.UnevaluatedInclude);
 			Assert.AreEqual ("file2.txt", it.Include);
@@ -294,7 +295,7 @@ namespace MonoDevelop.Projects
 			Assert.IsNotNull (it.SourceItem);
 			Assert.AreSame (it.SourceItem, p.ItemGroups.ToArray () [1].Items.ToArray () [6]);
 
-			it = items [10];
+			it = items [10].Include == "file1.txt" ? items [10] : items [11];
 			Assert.AreEqual ("Transformed", it.Name);
 			Assert.AreEqual ("@(None -> WithMetadataValue('Meta2', 'Debug'))", it.UnevaluatedInclude);
 			Assert.AreEqual ("file1.txt", it.Include);
@@ -303,7 +304,7 @@ namespace MonoDevelop.Projects
 			Assert.IsNotNull (it.SourceItem);
 			Assert.AreSame (it.SourceItem, p.ItemGroups.ToArray () [1].Items.ToArray () [6]);
 
-			it = items [11];
+			it = items [11].Include == "file2.txt" ? items [11] : items [10];
 			Assert.AreEqual ("Transformed", it.Name);
 			Assert.AreEqual ("@(None -> WithMetadataValue('Meta2', 'Debug'))", it.UnevaluatedInclude);
 			Assert.AreEqual ("file2.txt", it.Include);
@@ -493,6 +494,20 @@ namespace MonoDevelop.Projects
 			var specialFolder = Environment.GetFolderPath (Environment.SpecialFolder.LocalApplicationData);
 			Assert.AreEqual (specialFolder, p.EvaluatedProperties.GetValue ("EnumFolderPath"));
 
+			var path = p.EvaluatedProperties.GetValue ("Path");
+
+			Assert.AreEqual (
+				path.Split (Path.DirectorySeparatorChar).Length,
+				p.EvaluatedProperties.GetValue<int> ("EnumFlagsSplitStringLength")
+			);
+			Assert.AreEqual (
+				path.Split (new [] { Path.DirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries).Length,
+				p.EvaluatedProperties.GetValue<int> ("EnumFlagsSplitStringRemoveEmptyLength")
+			);
+
+			Assert.AreEqual ("1", p.EvaluatedProperties.GetValue ("CorrectOverloadIndexOf"));
+			Assert.AreEqual ("a.cs;b.cs", p.EvaluatedProperties.GetValue ("CorrectOverloadIndexOfTransform"));
+
 			var basePath = Path.GetDirectoryName (p.FileName);
 			var targets = Path.Combine (basePath, "false.targets");
 
@@ -554,6 +569,34 @@ namespace MonoDevelop.Projects
 			}, Is.EquivalentTo (p.ConditionedProperties.GetCombinedPropertyValues ("cond1", "cond2").ToArray ()));
 
 			p.Dispose ();
+		}
+
+		[Test]
+		public void InstrinsicProperties_IsOSPlatform_IsCaseInsensitive ()
+		{
+			if (!Platform.IsMac)
+				Assert.Ignore ();
+
+			using (var p = LoadAndEvaluate ("msbuild-tests", "osplatform.csproj")) {
+				Assert.IsTrue (p.EvaluatedProperties.GetValue<bool> ("IsMac"));
+				Assert.IsTrue (p.EvaluatedProperties.GetValue<bool> ("IsMac2"));
+				Assert.IsTrue (p.EvaluatedProperties.GetValue<bool> ("IsMac3"));
+				Assert.AreEqual ("MAC", p.EvaluatedProperties.GetValue ("DefineConstants"));
+			}
+		}
+
+		[Test]
+		public void ItemDefinitionGroup ()
+		{
+			using (var p = LoadAndEvaluate ("project-with-item-def-group", "item-definition-group.csproj")) {
+				var itemDefinitionGroup = p.ItemDefinitionGroups.Single ();
+				Assert.AreEqual (itemDefinitionGroup.Condition, " '$(DefineMyItem)' == 'true' ");
+				MSBuildItem item = itemDefinitionGroup.Items.Single ();
+				Assert.AreEqual ("MyItem", item.Name);
+				Assert.AreEqual ("PreserveNewest", item.Metadata.GetValue ("CopyToOutputDirectory"));
+				Assert.IsTrue (item.Metadata.GetValue<bool> ("BoolProperty"));
+				Assert.AreEqual ("OriginalValue", item.Metadata.GetValue ("OverriddenProperty"));
+			}
 		}
 
 		[Test]
@@ -1570,6 +1613,44 @@ namespace MonoDevelop.Projects
 		}
 
 		[Test]
+		public void AddNewPackageReference_ExistingItemGroupHasCondition_NewItemGroupCreated ()
+		{
+			string projectXml =
+				"<Project Sdk=\"Microsoft.NET.Sdk\">\r\n" +
+				"  <PropertyGroup>\r\n" +
+				"    <TargetFrameworks>netcoreapp1.0;net472</TargetFrameworks>\r\n" +
+				"  </PropertyGroup>\r\n" +
+				"  <ItemGroup Condition=\"'$(TargetFramework)' == 'net472'\">\r\n" +
+				"    <PackageReference Include=\"Newtonsoft.Json\" Version=\"10.0.3\" />\r\n" +
+				"  </ItemGroup>\r\n" +
+				"</Project>";
+
+			var p = new MSBuildProject ();
+			p.LoadXml (projectXml);
+			p.AddKnownItemAttribute ("PackageReference", "Version");
+
+			var item = p.AddNewItem ("PackageReference", "NUnit");
+			item.Metadata.SetValue ("Version", "2.6.4");
+
+			string xml = p.SaveToString ();
+
+			string expectedXml =
+				"<Project Sdk=\"Microsoft.NET.Sdk\">\r\n" +
+				"  <PropertyGroup>\r\n" +
+				"    <TargetFrameworks>netcoreapp1.0;net472</TargetFrameworks>\r\n" +
+				"  </PropertyGroup>\r\n" +
+				"  <ItemGroup Condition=\"'$(TargetFramework)' == 'net472'\">\r\n" +
+				"    <PackageReference Include=\"Newtonsoft.Json\" Version=\"10.0.3\" />\r\n" +
+				"  </ItemGroup>\r\n" +
+				"  <ItemGroup>\r\n" +
+				"    <PackageReference Include=\"NUnit\" Version=\"2.6.4\" />\r\n" +
+				"  </ItemGroup>\r\n" +
+				"</Project>";
+			Assert.AreEqual (expectedXml, xml);
+			p.Dispose ();
+		}
+
+		[Test]
 		public void ProjectHasNoMainPropertyGroup_AddRemoveProjectTypeGuid ()
 		{
 			string projectXml =
@@ -1667,6 +1748,50 @@ namespace MonoDevelop.Projects
 				p.Evaluate ();
 			} catch (Exception ex) {
 				Assert.That (ex.Message, Contains.Substring (importFileName));
+			}
+		}
+
+		[Test]
+		public void EvaluatedMSBuildCurrentProperties ()
+		{
+			if (!Platform.IsMac)
+				Assert.Ignore ();
+
+			string msbuildToolsVersion = "Current";
+			string visualStudioVersion = "16.0";
+			var runtime = Runtime.SystemAssemblyService.DefaultRuntime;
+			var msbuildBinPath = runtime.GetMSBuildBinPath ("Current");
+			if (msbuildBinPath == null) {
+				msbuildBinPath = runtime.GetMSBuildBinPath ("15.0");
+				msbuildToolsVersion = "15.0";
+				visualStudioVersion = "15.0";
+			}
+
+			using (var p = LoadAndEvaluate ("msbuild-current", "msbuild-current.csproj")) {
+				p.Evaluate ();
+
+				var pg = p.EvaluatedProperties;
+				Assert.AreEqual (visualStudioVersion, pg.GetValue ("TestVisualStudioVersion"));
+				Assert.AreEqual (msbuildToolsVersion, pg.GetValue ("TestMSBuildToolsVersion"));
+				Assert.AreEqual (msbuildBinPath, pg.GetPathValue ("TestMSBuildBinPath").ToString ());
+
+				if (msbuildToolsVersion == "Current") {
+					Assert.IsTrue (pg.GetValue<bool> ("TestMSBuildToolsVersionIsCurrent"));
+					Assert.IsFalse (pg.GetValue<bool> ("TestMSBuildToolsVersionIsLessThan16"));
+					Assert.IsTrue (pg.GetValue<bool> ("TestMSBuildToolsVersionIsGreaterThan15"));
+					Assert.IsTrue (pg.GetValue<bool> ("TestMSBuildToolsVersionIsGreaterThan15Switch"));
+					Assert.IsFalse (pg.GetValue<bool> ("TestMSBuildToolsVersionIsLessThan16Switch"));
+					Assert.IsFalse (pg.GetValue<bool> ("TestMSBuildToolsVersionIsLessOrEqual15"));
+					Assert.IsTrue (pg.GetValue<bool> ("TestMSBuildToolsVersionIsGreaterOrEqualTo16"));
+				} else {
+					Assert.IsFalse (pg.GetValue<bool> ("TestMSBuildToolsVersionIsCurrent"));
+					Assert.IsTrue (pg.GetValue<bool> ("TestMSBuildToolsVersionIsLessThan16"));
+					Assert.IsFalse (pg.GetValue<bool> ("TestMSBuildToolsVersionIsGreaterThan15"));
+					Assert.IsFalse (pg.GetValue<bool> ("TestMSBuildToolsVersionIsGreaterThan15Switch"));
+					Assert.IsTrue (pg.GetValue<bool> ("TestMSBuildToolsVersionIsLessThan16Switch"));
+					Assert.IsTrue (pg.GetValue<bool> ("TestMSBuildToolsVersionIsLessOrEqual15"));
+					Assert.IsFalse (pg.GetValue<bool> ("TestMSBuildToolsVersionIsGreaterOrEqualTo16"));
+				}
 			}
 		}
 	}

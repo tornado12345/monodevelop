@@ -1,4 +1,4 @@
-// 
+﻿// 
 // PolicyOptionsPanel.cs
 // 
 // Author:
@@ -72,7 +72,8 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 			CellRenderer renderer = new CellRendererText ();
 			policyCombo.PackStart (renderer, true);
 			policyCombo.AddAttribute (renderer, "text", 0);
-			
+			policyCombo.Accessible.SetTitleUIElement (label.Accessible);
+
 			label.MnemonicWidget = policyCombo;
 			policyCombo.RowSeparatorFunc = (TreeModel model, TreeIter iter) =>
 				((string) model.GetValue (iter, 0)) == "--";
@@ -94,7 +95,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 			                                      GettextCatalog.GetString ("Warning"),
 			                                      null);
 			warningMessage.PackStart (img, false, false, 0);
-			Label wl = new Label (GettextCatalog.GetString ("Changes done in this section will only be applied to new projects. " +
+			Label wl = new Label (GettextCatalog.GetString ("Changes made in this section will only be applied to new projects. " +
 				"Settings for existing projects can be modified in the project (or solution) options dialog."));
 			wl.Xalign = 0;
 			wl.Wrap = true;

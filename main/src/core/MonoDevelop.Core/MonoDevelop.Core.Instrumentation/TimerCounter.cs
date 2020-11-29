@@ -24,6 +24,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -31,14 +33,13 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Runtime.Serialization;
 
 namespace MonoDevelop.Core.Instrumentation
 {
 	[Serializable]
 	public class TimerCounter : Counter
 	{
-		[NonSerialized]
-		ITimeCounter lastTimer;
 		double minSeconds;
 		TimeSpan totalTime;
 		int totalCountWithTime;
@@ -48,6 +49,8 @@ namespace MonoDevelop.Core.Instrumentation
 		public TimerCounter (string name, CounterCategory category) : base (name, category)
 		{
 		}
+
+		public override CounterDisplayMode DisplayMode => CounterDisplayMode.Line;
 
 		public override string ToString ()
 		{
@@ -64,7 +67,7 @@ namespace MonoDevelop.Core.Instrumentation
 		}
 
 		public TimeSpan AverageTime {
-			get { return totalCountWithTime > 0 ? new TimeSpan (totalTime.Ticks / totalCountWithTime) : TimeSpan.FromTicks (0); }
+			get { return totalCountWithTime > 0 ? TimeSpan.FromTicks (totalTime.Ticks / totalCountWithTime) : TimeSpan.Zero; }
 		}
 
 		public TimeSpan MinTime {
@@ -91,90 +94,57 @@ namespace MonoDevelop.Core.Instrumentation
 			}
 		}
 
-		public override void Trace (string message)
-		{
-			if (Enabled) {
-				if (lastTimer != null)
-					lastTimer.Trace (message);
-				else {
-					lock (values) {
-						StoreValue (message, null, null);
-					}
-				}
-			} else if (LogMessages) {
-				if (lastTimer != null)
-					lastTimer.Trace (message);
-				else if (message != null)
-					InstrumentationService.LogMessage (message);
-			}
-		}
-
 		public ITimeTracker BeginTiming ()
 		{
-			return BeginTiming (null, (IDictionary<string, object>)null);
+			return BeginTiming (null, null);
 		}
 
 		public ITimeTracker BeginTiming (string message)
 		{
-			return BeginTiming (message, (IDictionary<string, object>)null);
+			return BeginTiming (message, null);
 		}
 
 		[Obsolete ("Use BeginTiming (string, IDictionary<string,object>) instead")]
-		public ITimeTracker BeginTiming (IDictionary<string, string> metadata)
+		public ITimeTracker BeginTiming (IDictionary<string, string>? metadata)
 		{
 			var converted = metadata.ToDictionary (k => k.Key, k => (object)(k.Value));
 			return BeginTiming (null, converted);
 		}
 
-		[Obsolete ("Use BeginTiming (string, IDictionary<string, object>) instead")]
-		public ITimeTracker BeginTiming (string message, IDictionary<string, string> metadata)
-		{
-			var converted = metadata.ToDictionary (k => k.Key, k => (object)(k.Value));
-			return BeginTiming (message, converted);
-		}
-
-		public ITimeTracker BeginTiming (string message, IDictionary<string, object> metadata)
+		public ITimeTracker BeginTiming (string? message, IDictionary<string, object>? metadata)
 		{
 			return BeginTiming (message, metadata != null ? new CounterMetadata (metadata) : null, CancellationToken.None);
 		}
 
-		internal ITimeTracker<T> BeginTiming<T> (string message, T metadata, CancellationToken cancellationToken) where T : CounterMetadata, new()
+		internal ITimeTracker<T> BeginTiming<T> (string? message, T? metadata, CancellationToken cancellationToken) where T : CounterMetadata, new()
 		{
-			ITimeTracker<T> timer;
 			if (!Enabled && !LogMessages) {
-				timer = new DummyTimerCounter<T> (metadata);
-			} else {
-				var c = new TimeCounter<T> (this, metadata, cancellationToken);
-				if (Enabled) {
-					lock (values) {
-						lastTimer = c;
-						timer = c;
-						count++;
-						totalCount++;
-						int i = StoreValue (message, lastTimer, metadata?.Properties);
-						lastTimer.TraceList.ValueIndex = i;
-					}
-				} else {
-					if (message != null)
-						InstrumentationService.LogMessage (message);
-					else
-						InstrumentationService.LogMessage ("START: " + Name);
-					lastTimer = c;
-					timer = c;
-				}
+				return new DummyTimerCounter<T> (metadata);
 			}
-			return timer;
-		}
 
-		public void EndTiming ()
-		{
-			if (lastTimer != null) {
-				lastTimer.End ();
-				lastTimer = null;
+			var c = new TimeCounter<T> (this, metadata, cancellationToken);
+
+			if (Enabled) {
+				lock (values) {
+					count++;
+					totalCount++;
+					int i = StoreValue (message, c, metadata?.Properties);
+
+					var traceList = ((ITimeCounter)c).TraceList;
+					if (traceList != null)
+						traceList.ValueIndex = i;
+				}
+			} else {
+				if (message != null)
+					InstrumentationService.LogMessage (message);
+				else
+					InstrumentationService.LogMessage ("START: " + Name);
 			}
+			return c;
 		}
 	}
 
+	[Serializable]
 	public class TimerCounter<T> : TimerCounter where T : CounterMetadata, new()
 	{
 		public TimerCounter (string name, CounterCategory category) : base (name, category)
@@ -224,37 +194,30 @@ namespace MonoDevelop.Core.Instrumentation
 
 	public class CounterMetadata
 	{
-		readonly IDictionary<string, object> properties;
+		internal protected IDictionary<string, object> Properties { get; }
 
-		internal protected IDictionary<string, object> Properties => properties;
-
-		public CounterMetadata ()
+		public CounterMetadata () : this(new Dictionary<string, object> ())
 		{
-			properties = new Dictionary<string, object> ();
 		}
 
 		public CounterMetadata (IDictionary<string, object> properties)
 		{
-			if (properties == null) {
-				this.properties = new Dictionary<string, object> ();
-			} else {
-				this.properties = properties;
-			}
+			Properties = properties ?? new Dictionary<string, object> ();
 		}
 
 		public CounterMetadata (CounterMetadata original)
 		{
-			if (original != null && original.properties != null) {
-				this.properties = new Dictionary<string, object> (original.properties);
+			if (original?.Properties != null) {
+				this.Properties = new Dictionary<string, object> (original.Properties);
 			} else {
-				this.properties = new Dictionary<string, object> ();
+				this.Properties = new Dictionary<string, object> ();
 			}
 		}
 
 		public void AddProperties (CounterMetadata original)
 		{
 			foreach (var kvp in original.Properties) {
-				properties [kvp.Key] = kvp.Value;
+				Properties [kvp.Key] = kvp.Value;
 			}
 		}
 
@@ -275,21 +238,33 @@ namespace MonoDevelop.Core.Instrumentation
 		public void SetSuccess () => Result = CounterResult.Success;
 		public void SetUserCancel () => Result = CounterResult.UserCancel;
 
-		protected void SetProperty (object value, [CallerMemberName]string name = null)
-			=> properties[name] = value;
-
-		protected T GetProperty<T> ([CallerMemberName]string name = null)
+		protected void SetProperty (object value, [CallerMemberName]string? name = null)
 		{
-			if (properties.TryGetValue (name, out var result)) {
+			if (name == null)
+				throw new ArgumentNullException (nameof (name));
+
+			Properties [name] = value;
+		}
+
+		// [return: MaybeNull]
+		protected T GetProperty<T> ([CallerMemberName]string? name = null)
+		{
+			if (name == null)
+				throw new ArgumentNullException (nameof (name));
+
+			if (Properties.TryGetValue (name, out var result)) {
 				return (T)Convert.ChangeType (result, typeof (T), CultureInfo.InvariantCulture);
 			}
 
 			return default (T);
 		}
 
-		protected bool ContainsProperty ([CallerMemberName]string propName = null)
+		protected bool ContainsProperty ([CallerMemberName]string? propName = null)
 		{
-			return properties.ContainsKey (propName);
+			if (propName == null)
+				throw new ArgumentNullException (nameof (propName));
+
+			return Properties.ContainsKey (propName);
 		}
 	}
 
@@ -300,13 +275,6 @@ namespace MonoDevelop.Core.Instrumentation
 		Failure,
 		UserCancel,
 		UserFault
-	}
-
-	public class IncorrectPropertyTypeException : Exception
-	{
-		public IncorrectPropertyTypeException (string message) : base (message)
-		{
-		}
 	}
 }
 

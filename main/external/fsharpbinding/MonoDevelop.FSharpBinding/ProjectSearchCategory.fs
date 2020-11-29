@@ -7,7 +7,7 @@ open MonoDevelop.Components.MainToolbar
 open MonoDevelop.Ide
 open MonoDevelop.Ide.Gui
 open MonoDevelop.Projects
-open Microsoft.FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler.SourceCodeServices
 open Symbols
 
 [<AutoOpen>]
@@ -179,7 +179,7 @@ type SymbolSearchResult(match', matchedString, rank, symbol:FSharpSymbolUse) =
     override x.Length = snd (offsetAndLength.Force())
 
 type ProjectSearchCategory() =
-    inherit SearchCategory(GettextCatalog.GetString ("Solution"), sortOrder = SearchCategory.FirstCategory)
+    inherit SearchCategory(GettextCatalog.GetString ("Solution"), sortOrder = SearchCategory.FirstCategoryOrder)
 
     //type, module, struct, interface, enum, delegate, union, record
     let typeTags = ["type"; "t"; "c"; "mod"; "s"; "i"; "e"; "d"; "u"; "r" ]

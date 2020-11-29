@@ -25,92 +25,133 @@
 // THE SOFTWARE.
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using MonoDevelop.Core.Serialization;
 using MonoDevelop.DotNetCore;
 using MonoDevelop.Projects;
-using Newtonsoft.Json.Linq;
 
 namespace MonoDevelop.AspNetCore
 {
 	public class AspNetCoreRunConfiguration : AssemblyRunConfiguration
 	{
-		public AspNetCoreRunConfiguration (string name)
-			: base (name)
-		{
-		}
-
-		public bool LaunchBrowser { get; set; } = true;
-
-		public string LaunchUrl { get; set; } = null;
-
-		public string ApplicationURL { get; set; } = "http://localhost:5000/";
+		public bool IsDefault => Name == "Default";
 
 		[ItemProperty (DefaultValue = null)]
 		public PipeTransportSettings PipeTransport { get; set; }
 
-		protected override void Initialize (Project project)
-		{
-			base.Initialize (project);
-			ExternalConsole = false;
-			// Pick up/import default values from "launchSettings.json"
-			var launchSettingsJsonPath = Path.Combine (project.BaseDirectory, "Properties", "launchSettings.json");
-			var launchSettingsJson = File.Exists (launchSettingsJsonPath) ? JObject.Parse (File.ReadAllText (launchSettingsJsonPath)) : null;
-			var settings = (launchSettingsJson?.GetValue ("profiles") as JObject)?.GetValue (project.Name) as JObject;
+		internal LaunchProfileData CurrentProfile { get; private set; }
 
-			LaunchBrowser = settings?.GetValue ("launchBrowser")?.Value<bool?> () ?? true;
-			LaunchUrl = settings?.GetValue ("launchUrl")?.Value<string> () ?? null;
-			foreach (var pair in (settings?.GetValue ("environmentVariables") as JObject)?.Properties () ?? Enumerable.Empty<JProperty> ()) {
-				if (!EnvironmentVariables.ContainsKey (pair.Name))
-					EnvironmentVariables.Add (pair.Name, pair.Value.Value<string> ());
-			}
-			ApplicationURL = GetApplicationUrl (settings, EnvironmentVariables);
+		[Obsolete ("Use MonoDevelop.AspNetCore.AspNetCoreRunConfiguration.CurrentProfile property")]
+		public bool LaunchBrowser { get; set; } = true;
+		[Obsolete ("Use MonoDevelop.AspNetCore.AspNetCoreRunConfiguration.CurrentProfile property")]
+		public string LaunchUrl { get; set; } = null;
+		[Obsolete ("Use MonoDevelop.AspNetCore.AspNetCoreRunConfiguration.CurrentProfile property")]
+		public string ApplicationURL { get; set; } = "http://localhost:5000/";
+
+		public bool IsDirty { get; set; } = true;
+
+		internal LaunchProfileProvider LaunchProfileProvider { get; set; }
+
+		internal event EventHandler SaveRequested;
+
+		internal AspNetCoreRunConfiguration (string name, LaunchProfileData profile)
+			: base (name)
+		{
+			CurrentProfile = profile;
+
+			InitializeLaunchSettings ();
 		}
 
-		static string GetApplicationUrl (JObject settings, IDictionary<string, string> environmentVariables)
+		public AspNetCoreRunConfiguration (string name)
+			: this (name, new LaunchProfileData ())
 		{
-			var applicationUrl = settings?.GetValue ("applicationUrl")?.Value<string> ();
-			if (applicationUrl != null)
-				return GetFirstUrl (applicationUrl);
+		}
+		
+		[Obsolete]
+		public AspNetCoreRunConfiguration (string name, DotNetProject project)
+			: this (name, new LaunchProfileData ())
+		{
+		}
 
-			if (environmentVariables.TryGetValue ("ASPNETCORE_URLS", out string applicationUrls)) {
-				applicationUrl = GetFirstUrl (applicationUrls);
-				if (applicationUrl != null)
-					return applicationUrl;
-			}
+		internal void InitializeLaunchSettings ()
+		{
+			if (CurrentProfile.OtherSettings == null)
+				CurrentProfile.OtherSettings = new Dictionary<string, object> (StringComparer.Ordinal);
+
+			if (CurrentProfile.EnvironmentVariables == null)
+				CurrentProfile.EnvironmentVariables = new Dictionary<string, string> (StringComparer.Ordinal);
+
+			LoadEnvVariables ();
+		}
+
+		public string GetApplicationUrl ()
+		{
+			var applicationUrl = CurrentProfile.TryGetApplicationUrl ();
+			if (applicationUrl != null)
+				return applicationUrl;
 
 			return "http://localhost:5000";
-		}
-
-		static string GetFirstUrl (string url)
-		{
-			if (string.IsNullOrEmpty (url) || !url.Contains (';'))
-				return url;
-
-			return url.Split (';').FirstOrDefault ();
 		}
 
 		protected override void Read (IPropertySet pset)
 		{
 			base.Read (pset);
 			ExternalConsole = pset.GetValue (nameof (ExternalConsole), false);
-			if (!pset.HasProperty (nameof (EnvironmentVariables)))
+
+			// read from run config if CurrentProfile.* is empty, for backward compatibility
+			if (!pset.HasProperty (nameof (EnvironmentVariables)) && EnvironmentVariables.Count == 0)
 				EnvironmentVariables.Add ("ASPNETCORE_ENVIRONMENT", "Development");
-			LaunchBrowser = pset.GetValue (nameof (LaunchBrowser), true);
-			ApplicationURL = pset.GetValue (nameof (ApplicationURL), "http://localhost:5000/");
-			LaunchUrl = pset.GetValue (nameof (LaunchUrl), null);
+#pragma warning disable CS0618 //disables warnings threw by obsolete methods used in nameof()
+			if (CurrentProfile.LaunchBrowser == null)
+				CurrentProfile.LaunchBrowser = pset.GetValue (nameof (LaunchBrowser), false);
+			if (string.IsNullOrEmpty (CurrentProfile.TryGetApplicationUrl ())) {
+
+				if (CurrentProfile.OtherSettings == null)
+					CurrentProfile.OtherSettings = new Dictionary<string, object> (StringComparer.Ordinal);
+
+				CurrentProfile.OtherSettings ["applicationUrl"] = pset.GetValue (nameof (ApplicationURL), "http://localhost:5000/"); 
+			}
+			if (string.IsNullOrEmpty (CurrentProfile.LaunchUrl))
+				CurrentProfile.LaunchUrl = pset.GetValue (nameof (LaunchUrl), null);
+#pragma warning restore CS0618
+		}
+
+		void LoadEnvVariables ()
+		{
+			EnvironmentVariables.Clear ();
+			foreach (var pair in CurrentProfile.EnvironmentVariables) {
+				EnvironmentVariables [pair.Key] = pair.Value;
+			}
 		}
 
 		protected override void Write (IPropertySet pset)
 		{
 			base.Write (pset);
+
 			pset.SetValue (nameof (ExternalConsole), ExternalConsole, false);
-			pset.SetValue (nameof (LaunchBrowser), LaunchBrowser, true);
-			pset.SetValue (nameof (LaunchUrl), string.IsNullOrWhiteSpace (LaunchUrl) ? null : LaunchUrl, null);
-			pset.SetValue (nameof (ApplicationURL), ApplicationURL, "http://localhost:5000/");
 			if (EnvironmentVariables.Count == 1 && EnvironmentVariables.ContainsKey ("ASPNETCORE_ENVIRONMENT") && EnvironmentVariables ["ASPNETCORE_ENVIRONMENT"] == "Development")
 				pset.RemoveProperty (nameof (EnvironmentVariables));
+
+			if (CurrentProfile == null) {
+				return;
+			}
+
+			CurrentProfile.EnvironmentVariables.Clear ();
+			foreach (var pair in EnvironmentVariables) {
+				CurrentProfile.EnvironmentVariables [pair.Key] = pair.Value;
+			}
+
+			OnSaveRequested ();
+
+#pragma warning disable CS0618
+			// persist values to Run Configuration for backward compatibility
+			pset.SetValue (nameof (LaunchBrowser), CurrentProfile.LaunchBrowser, true);
+			pset.SetValue (nameof (LaunchUrl), string.IsNullOrWhiteSpace (CurrentProfile.LaunchUrl) ? null : CurrentProfile.LaunchUrl, null);
+			var appUrl = CurrentProfile.TryGetApplicationUrl ();
+			if (!string.IsNullOrEmpty (appUrl))
+				pset.SetValue (nameof (ApplicationURL), appUrl, "http://localhost:5000/");
+#pragma warning restore CS0618
+
+			IsDirty = false;
 		}
 
 		protected override void OnCopyFrom (ProjectRunConfiguration config, bool isRename)
@@ -119,9 +160,17 @@ namespace MonoDevelop.AspNetCore
 
 			var other = (AspNetCoreRunConfiguration)config;
 
-			LaunchBrowser = other.LaunchBrowser;
-			LaunchUrl = other.LaunchUrl;
-			ApplicationURL = other.ApplicationURL;
+			CurrentProfile.LaunchBrowser = other.CurrentProfile.LaunchBrowser ?? true;
+			CurrentProfile.LaunchUrl = other.CurrentProfile.LaunchUrl;
+			var applicationUrl = other.CurrentProfile.TryGetApplicationUrl ();
+			if (!string.IsNullOrEmpty (applicationUrl)) {
+
+				if (CurrentProfile.OtherSettings == null)
+					CurrentProfile.OtherSettings = new Dictionary<string, object> (StringComparer.Ordinal);
+
+				CurrentProfile.OtherSettings ["applicationUrl"] = applicationUrl;
+			}
+
 			if (other.PipeTransport == null)
 				PipeTransport = null;
 			else
@@ -130,10 +179,10 @@ namespace MonoDevelop.AspNetCore
 
 		internal bool UsingHttps ()
 		{
-			if (ApplicationURL != null) {
-				if (ApplicationURL.StartsWith ("https://", StringComparison.OrdinalIgnoreCase)) {
-					return true;
-				}
+			var applicationUrl = CurrentProfile.TryGetApplicationUrl ();
+
+			if (!string.IsNullOrEmpty (applicationUrl)) {
+				return applicationUrl.IndexOf ("https://", StringComparison.OrdinalIgnoreCase) >= 0;
 			}
 
 			var environmentVariables = (IDictionary<string, string>)EnvironmentVariables;
@@ -145,6 +194,16 @@ namespace MonoDevelop.AspNetCore
 			}
 
 			return false;
+		}
+
+		public void OnSaveRequested () => SaveRequested?.Invoke (this, EventArgs.Empty);
+
+		internal void UpdateProfile (LaunchProfileData launchProfile)
+		{
+			CurrentProfile = launchProfile;
+			if (CurrentProfile.EnvironmentVariables == null)
+				CurrentProfile.EnvironmentVariables = new Dictionary<string, string> (StringComparer.Ordinal);
+			LoadEnvVariables ();
 		}
 	}
 }

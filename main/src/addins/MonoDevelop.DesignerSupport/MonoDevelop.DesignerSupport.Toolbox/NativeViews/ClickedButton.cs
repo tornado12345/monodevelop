@@ -33,9 +33,10 @@ using MonoDevelop.Components.Mac;
 
 namespace MonoDevelop.DesignerSupport.Toolbox.NativeViews
 {
-	class ClickedButton : NSButton, INativeChildView
+	class ClickedButton : NSButton
 	{
 		public event EventHandler Focused;
+		public event EventHandler<NSEventArgs> KeyDownPressed;
 
 		public override CGSize IntrinsicContentSize => Hidden ? CGSize.Empty : new CGSize (25, 25);
 
@@ -55,29 +56,18 @@ namespace MonoDevelop.DesignerSupport.Toolbox.NativeViews
 			return base.BecomeFirstResponder ();
 		}
 
-		#region INativeChildView
-
-		public void OnKeyPressed (object o, Gtk.KeyPressEventArgs ev)
-		{
-			if (ev.Event.State == Gdk.ModifierType.None && (ev.Event.Key == Gdk.Key.KP_Enter || ev.Event.Key == Gdk.Key.KP_Space)) {
-				PerformClick (this);
-			}
-		}
-
-		public void OnKeyReleased (object o, Gtk.KeyReleaseEventArgs ev)
-		{
-
-		}
-
 		public override void KeyDown (NSEvent theEvent)
 		{
-			base.KeyDown (theEvent);
 			if ((int)theEvent.ModifierFlags == (int)KeyModifierFlag.None && (theEvent.KeyCode == (int)KeyCodes.Enter || theEvent.KeyCode == (int)KeyCodes.Space)) {
 				PerformClick (this);
 			}
-		}
 
-		#endregion
+			var args = new NSEventArgs (theEvent);
+			KeyDownPressed?.Invoke (this, args);
+
+			if (!args.Handled)
+				base.KeyDown (theEvent);
+		}
 	}
 }
 #endif

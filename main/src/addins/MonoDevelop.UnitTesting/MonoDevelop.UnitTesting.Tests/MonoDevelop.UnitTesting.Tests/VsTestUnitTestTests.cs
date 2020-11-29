@@ -25,14 +25,16 @@
 // THE SOFTWARE.
 
 using Microsoft.VisualStudio.TestPlatform.ObjectModel;
+using MonoDevelop.UnitTesting.NUnit;
 using MonoDevelop.UnitTesting.VsTest;
 using NUnit.Framework;
 using System;
+using UnitTests;
 
 namespace MonoDevelop.UnitTesting.Tests
 {
 	[TestFixture]
-	class VsTestUnitTestTests
+	class VsTestUnitTestTests : TestBase
 	{
 		VsTestUnitTest CreateVsUnitTest (string fullyQualifiedName)
 		{
@@ -96,13 +98,165 @@ namespace MonoDevelop.UnitTesting.Tests
 			Assert.AreEqual ("Namespace.MyTest.Test1", test.TestSourceCodeDocumentId);
 		}
 
+		/// <summary>
+		/// VSTS Bug 901156: [Feedback] Weird nesting in "Unit Tests" explorer/window.
+		/// </summary>
+		[Test]
+		public void TestVSTS901156 ()
+		{
+			var parentNamespace = new VsTestNamespaceTestGroup (null, null, null, string.Empty);
+			var test1 = new MyVsTestUnitTest ("Namespace.childNamespace.TestClass.TestMethod1", "Namespace.childNamespace", "TestClass");
+			var test2 = new MyVsTestUnitTest ("Namespace.childNamespace.TestClass.TestMethod2", "Namespace.childNamespace", "TestClass");
+			parentNamespace.AddTest (test1);
+			parentNamespace.AddTest (test2);
+			var currentNamespace = (VsTestNamespaceTestGroup)parentNamespace.Tests [0];
+			var currentClass = (VsTestTestClass)currentNamespace.Tests [0];
+			Assert.AreEqual (currentNamespace.FixtureTypeNamespace, "Namespace.childNamespace");
+			Assert.AreEqual (currentNamespace.Tests.Count, 1);
+			Assert.AreEqual (currentClass.Tests.Count, 2);
+		}
+
 		class MyVsTestUnitTest : VsTestUnitTest
 		{
 			public MyVsTestUnitTest (string displayName, string fixtureTypeNamespace, string fixtureTypeName) : base(displayName)
 			{
 				FixtureTypeNamespace = fixtureTypeNamespace;
 				FixtureTypeName = fixtureTypeName;
+			}
 		}
 	}
+
+	[TestFixture]
+	class NUnitTestUnitTestTests : TestBase
+	{
+
+		/// <summary>
+		/// VSTS Bug 1042673: [Bug] Make the nesting for Mono NUnit test consistent with the vstests (mstest, nunit, xunit)
+		/// </summary>
+		[Test]
+		public void TestVSTS1042673 ()
+		{
+			var case1 = new NUnitTestSuite (null, DirectClassCase ());
+			var case2 = new NUnitTestSuite (null, NamespaceWithDot ());
+			var case3 = new NUnitTestSuite (null, NestedNamespace ());
+			var case4 = new NUnitTestSuite (null, NamespaceNoDot ());  
+
+			Assert.AreEqual(case1.Tests[0].Title, "TestClass");
+			Assert.AreEqual(case2.Tests[0].Title, "A.B");
+			Assert.AreEqual(case3.Tests[0].Title, "A.B.C");
+			Assert.AreEqual(case4.Tests[0].Title, "A");
+
+		}
+
+		NunitTestInfo DirectClassCase ()
+		{
+			NunitTestInfo classInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClass",
+				FixtureTypeNamespace = "",
+				Name = "TestClass"
+			};
+
+			NunitTestInfo methodInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClass",
+				FixtureTypeNamespace = "",
+				Name = "TestMethod"
+			};
+			classInfo.Tests [0] = methodInfo;
+
+			return classInfo;
+		}
+
+		NunitTestInfo NamespaceWithDot ()
+		{
+			NunitTestInfo namespaceInfo = new NunitTestInfo {
+				FixtureTypeName = "",
+				FixtureTypeNamespace = "",
+				Name = "A"
+			};
+			NunitTestInfo namespaceInfo2 = new NunitTestInfo {
+				FixtureTypeName = "",
+				FixtureTypeNamespace = "",
+				Name = "B"
+			};
+			namespaceInfo.Tests [0] = namespaceInfo2;
+
+			NunitTestInfo classInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClassAB",
+				FixtureTypeNamespace = "A.B",
+				Name = "TestClassAB"
+			};
+			namespaceInfo2.Tests [0] = classInfo;
+
+			NunitTestInfo methodInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClassAB",
+				FixtureTypeNamespace = "A.B",
+				Name = "TestMethodAB"
+			};
+			classInfo.Tests [0] = methodInfo;
+
+			return namespaceInfo;
+		}
+
+		NunitTestInfo NestedNamespace ()
+		{
+			NunitTestInfo namespaceInfo = new NunitTestInfo {
+				FixtureTypeName = "",
+				FixtureTypeNamespace = "",
+				Name = "A"
+			};
+			NunitTestInfo namespaceInfo2 = new NunitTestInfo {
+				FixtureTypeName = "",
+				FixtureTypeNamespace = "",
+				Name = "B"
+			};
+			namespaceInfo.Tests [0] = namespaceInfo2;
+			NunitTestInfo namespaceInfo3 = new NunitTestInfo {
+				FixtureTypeName = "",
+				FixtureTypeNamespace = "",
+				Name = "C"
+			};
+			namespaceInfo2.Tests [0] = namespaceInfo3;
+
+			NunitTestInfo classInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClassABC",
+				FixtureTypeNamespace = "A.B.C",
+				Name = "TestClassABC"
+			};
+			namespaceInfo3.Tests [0] = classInfo;
+
+			NunitTestInfo methodInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClassABC",
+				FixtureTypeNamespace = "A.B.C",
+				Name = "TestMethodABC"
+			};
+			classInfo.Tests [0] = methodInfo;
+
+			return namespaceInfo;
+		}
+
+		NunitTestInfo NamespaceNoDot ()
+		{
+			NunitTestInfo namespaceInfo = new NunitTestInfo {
+				FixtureTypeName = "",
+				FixtureTypeNamespace = "",
+				Name = "A"
+			};
+
+			NunitTestInfo classInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClassA",
+				FixtureTypeNamespace = "A",
+				Name = "TestClassA"
+			};
+			namespaceInfo.Tests [0] = classInfo;
+
+			NunitTestInfo methodInfo = new NunitTestInfo {
+				FixtureTypeName = "TestClassA",
+				FixtureTypeNamespace = "A",
+				Name = "TestMethodA"
+			};
+			classInfo.Tests [0] = methodInfo;
+
+			return namespaceInfo;
+		}
 	}
 }

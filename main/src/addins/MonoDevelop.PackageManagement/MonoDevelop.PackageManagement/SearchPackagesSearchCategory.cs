@@ -42,6 +42,7 @@ namespace MonoDevelop.PackageManagement
 		public SearchPackagesSearchCategory ()
 			: base (GettextCatalog.GetString("Search"))
 		{
+			this.sortOrder = SearchPackagesOrder;
 		}
 		public override Task GetResults (ISearchResultCallback searchResultCallback, SearchPopupSearchPattern pattern, CancellationToken token)
 		{
@@ -70,13 +71,13 @@ namespace MonoDevelop.PackageManagement
 
 			public override void Activate ()
 			{
-				var runner = new AddPackagesDialogRunner ();
-				runner.Run (pattern.UnparsedPattern);
+				var runner = new ManagePackagesDialogRunner ();
+				runner.Run (IdeApp.ProjectOperations.CurrentSelectedProject, pattern.UnparsedPattern);
 			}
 
 			public override string GetMarkupText (bool selected)
 			{
-				return GettextCatalog.GetString ("Search Packages...");
+				return GettextCatalog.GetString ("Search Packages…");
 			}
 		}
 

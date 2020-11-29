@@ -26,6 +26,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel;
 using MonoDevelop.Core.Execution;
 using MonoDevelop.Projects;
@@ -33,21 +35,23 @@ using MonoDevelop.UnitTesting;
 using MonoDevelop.Ide.TypeSystem;
 using Microsoft.CodeAnalysis;
 using System.Linq;
+using MonoDevelop.Ide;
 
 namespace MonoDevelop.UnitTesting.VsTest
 {
 	class VsTestUnitTest : UnitTest, IVsTestTestProvider
 	{
-		public Project Project { get; private set; }
+		public MonoDevelop.Projects.Project Project { get; private set; }
 		TestCase test;
 		IVsTestTestRunner testRunner;
 		string name;
 		SourceCodeLocation sourceCodeLocation;
+		CancellationTokenSource cts;
 
 		protected VsTestUnitTest(string displayName) : base (displayName)
 		{ }
 
-		public VsTestUnitTest (IVsTestTestRunner testRunner, TestCase test, Project project)
+		public VsTestUnitTest (IVsTestTestRunner testRunner, TestCase test, MonoDevelop.Projects.Project project)
 			: base (test.DisplayName)
 		{
 			this.Project = project;
@@ -61,10 +65,14 @@ namespace MonoDevelop.UnitTesting.VsTest
 		{
 			TestId = test.Id.ToString ();
 			TestSourceCodeDocumentId = test.FullyQualifiedName;
+			cts = new CancellationTokenSource ();
+			var token = cts.Token;
 			if (!string.IsNullOrEmpty (test.CodeFilePath))
 				sourceCodeLocation = new SourceCodeLocation (test.CodeFilePath, test.LineNumber, 0);
 			else {
-				TypeSystemService.GetCompilationAsync (Project).ContinueWith ((t) => {
+				IdeApp.TypeSystemService.GetCompilationAsync (Project, token).ContinueWith ((t) => {
+					if (token.IsCancellationRequested)
+						return;
 					var dotIndex = test.FullyQualifiedName.LastIndexOf (".", StringComparison.Ordinal);
 					var className = test.FullyQualifiedName.Remove (dotIndex);
 					var methodName = test.FullyQualifiedName.Substring (dotIndex + 1);
@@ -90,7 +98,7 @@ namespace MonoDevelop.UnitTesting.VsTest
 						return;
 					var line = source.GetLineSpan ();
 					sourceCodeLocation = new SourceCodeLocation (source.SourceTree.FilePath, line.StartLinePosition.Line, line.StartLinePosition.Character);
-				}).Ignore ();
+				}, token, TaskContinuationOptions.NotOnFaulted, TaskScheduler.Default).Ignore ();
 			}
 			int index = test.FullyQualifiedName.LastIndexOf ('.');
 			if (index > 0) {
@@ -153,6 +161,16 @@ namespace MonoDevelop.UnitTesting.VsTest
 		public IEnumerable<TestCase> GetTests ()
 		{
 			yield return test;
+		}
+
+		public override void Dispose ()
+		{
+			if (cts != null) {
+				cts.Cancel ();
+				cts.Dispose ();
+				cts = null;
+			}
+			base.Dispose ();
 		}
 	}
 }

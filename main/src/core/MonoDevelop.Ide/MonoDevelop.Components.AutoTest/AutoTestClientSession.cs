@@ -59,7 +59,13 @@ namespace MonoDevelop.Components.AutoTest
 				}
 			}
 		}
-				
+
+		public AutoTestToolbar AutoTestToolbar {
+			get {
+				return new AutoTestToolbar (session);
+			}
+		}
+
 		public int StartApplication (string file = null, string args = null, IDictionary<string, string> environment = null)
 		{
 			if (file == null) {
@@ -423,15 +429,35 @@ namespace MonoDevelop.Components.AutoTest
 			return session.CreateNewTimerContext (timerName).TotalTime;
 		}
 
+		public int GetTimerCount (string timerName)
+		{
+			return session.CreateNewTimerContext (timerName).Count;
+		}
+
+		public void WaitForCounterChange (string counterName, int timeout = 20000)
+		{
+			AutoTestSession.CounterContext context = session.CreateNewCounterContext (counterName);
+
+			session.WaitForCounterToChange (context, timeout);
+		}
+
+		public int WaitForCounterToExceed (string counterName, int count, int timeout = 20000)
+		{
+			AutoTestSession.CounterContext context = session.CreateNewCounterContext (counterName);
+
+			return session.WaitForCounterToExceed (context, count, timeout);
+		}
+
+		public int WaitForCounterToStabilize (string counterName, int timeout = 20000, int pollStep = 500)
+		{
+			AutoTestSession.CounterContext context = session.CreateNewCounterContext (counterName);
+
+			return session.WaitForCounterToStabilize (context, timeout, pollStep);
+		}
+
 		public T GetCounterMetadataValue<T> (string counterName, string propertyName)
 		{
-			var counter = session.GetCounterByIDOrName (counterName);
-			var metadata = counter.LastValue.Metadata;
-			if (metadata != null && metadata.TryGetValue (propertyName, out var property)) {
-				return (T)Convert.ChangeType (property, typeof (T));
-			}
-
-			return default (T);
+			return session.GetCounterMetadataValue<T> (counterName, propertyName);
 		}
 
 		public XmlDocument ResultsAsXml (AppResult[] results)

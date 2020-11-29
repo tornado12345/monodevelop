@@ -41,9 +41,9 @@ namespace MonoDevelop.Core
 		static FilePath localizedBrandingDir;
 		static XDocument brandingDocument;
 		static XDocument localizedBrandingDocument;
-		
-		static string applicationName;
-		static string applicationLongName;
+
+		static string applicationName = "MonoDevelop";
+		static string applicationLongName = "MonoDevelop";
 
 		public static readonly string SuiteName;
 		public static readonly string ProfileDirectoryName;
@@ -79,7 +79,7 @@ namespace MonoDevelop.Core
 				}
 			}
 		}
-
+		public static string DefaultKeybindingSchemeName { get; set; }
 		public static string PrivacyStatement { get; set; }
 		public static string PrivacyStatementUrl { get; set; }
 		public static string LicenseTermsUrl { get; set; }
@@ -114,6 +114,7 @@ namespace MonoDevelop.Core
 				}
 				ApplicationName = GetString ("ApplicationName");
 				ApplicationLongName = GetString ("ApplicationLongName") ?? ApplicationName;
+				DefaultKeybindingSchemeName = GetString ("DefaultKeybindingSchemeName") ?? ApplicationName;
 				SuiteName = GetString ("SuiteName");
 				ProfileDirectoryName = GetString ("ProfileDirectoryName");
 				StatusSteadyIconId = GetString ("StatusAreaSteadyIcon");

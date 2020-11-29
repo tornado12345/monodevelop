@@ -33,11 +33,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using Microsoft.CodeAnalysis;
-using MonoDevelop;
 using MonoDevelop.Core;
-using MonoDevelop.Core.Serialization;
-using MonoDevelop.Projects;
-using MonoDevelop.Projects.Extensions;
 using MonoDevelop.Projects.MSBuild;
 using MonoDevelop.Projects.Policies;
 
@@ -46,6 +42,7 @@ namespace MonoDevelop.Projects
 	public enum Subtype
 	{
 		Code,
+		Designer,
 		Directory
 	}
 
@@ -58,25 +55,37 @@ namespace MonoDevelop.Projects
 		{
 		}
 
-		public ProjectFile (string filename): this (filename, MonoDevelop.Projects.BuildAction.Compile)
+		public ProjectFile (string filename) : this (filename, MonoDevelop.Projects.BuildAction.Compile)
 		{
 		}
 
-		public ProjectFile (string filename, string buildAction)
+		public ProjectFile (string filename, string buildAction) : this (filename, buildAction, Subtype.Code)
+		{
+		}
+
+		public ProjectFile (string filename, string buildAction, Subtype subtype)
 		{
 			this.filename = FileService.GetFullPath (filename);
-			subtype = Subtype.Code;
+			this.subtype = subtype;
 			BuildAction = buildAction;
 		}
+
+		string cachedInclude;
 
 		public override string Include {
 			get {
 				if (Project != null) {
+					if (cachedInclude != null)
+						return cachedInclude;
+
 					string path = MSBuildProjectService.ToMSBuildPath (Project.ItemDirectory, FilePath);
 					if (path.Length > 0) {
 						//directory paths must end with '/'
 						if ((Subtype == Subtype.Directory) && path [path.Length - 1] != '\\')
 							path = path + "\\";
+						// Cache the include path to avoid recalculating MSBuildProjectService.ToMSBuildPath
+						// which can slow down saving SDK style projects that contain thousands of files.
+						cachedInclude = path;
 						return path;
 					}
 				}
@@ -167,29 +176,32 @@ namespace MonoDevelop.Projects
 			set {
 				Debug.Assert (!String.IsNullOrEmpty (value));
 
-				FilePath oldVirtualPath = ProjectVirtualPath;
 				FilePath oldPath = filename;
+				FilePath oldLink = Link;
 
 				filename = FileService.GetFullPath (value);
 
 				if (HasChildren) {
-					foreach (ProjectFile projectFile in DependentChildren)
-						projectFile.dependsOn = Path.GetFileName (FilePath);
+					foreach (ProjectFile projectFile in DependentChildren) {
+						if (!string.IsNullOrEmpty (projectFile.dependsOn))
+							projectFile.dependsOn = Path.GetFileName (FilePath);
+					}
 				}
 
 				// If the file is a link, rename the link too
 				if (IsLink && Link.FileName == oldPath.FileName)
 					link = Path.Combine (Path.GetDirectoryName (link), filename.FileName);
 
+				cachedInclude = null;
+
 				// If a file that belongs to a project is being renamed, update the value of UnevaluatedInclude
 				// since that is used when saving
 				if (Project != null)
 					UnevaluatedInclude = Include;
 
-				OnPathChanged (oldPath, filename, oldVirtualPath, ProjectVirtualPath);
+				OnPathChanged (oldPath, oldLink);
 
-				if (Project != null)
-					Project.NotifyFileRenamedInProject (new ProjectFileRenamedEventArgs (Project, this, oldPath));
+				Project?.NotifyFileRenamedInProject (new ProjectFileRenamedEventArgs (Project, this, oldPath));
 			}
 		}
 
@@ -208,8 +220,8 @@ namespace MonoDevelop.Projects
 		/// </summary>
 		internal string GetResourceId (ResourceNamePolicy policy)
 		{
-			if (string.IsNullOrEmpty (resourceId) && (Project is DotNetProject))
-				return ((DotNetProject)Project).GetDefaultResourceIdForPolicy (this, policy);
+			if (string.IsNullOrEmpty (resourceId) && (Project is DotNetProject dnp))
+				return dnp.GetDefaultResourceIdForPolicy (this, policy);
 			return resourceId;
 		}
 
@@ -226,17 +238,18 @@ namespace MonoDevelop.Projects
 		/// The file should be treated as effectively having this relative path within the project. If the file is
 		/// a link or outside the project root, this will not be the same as the physical file.
 		/// </summary>
-		public FilePath ProjectVirtualPath {
-			get {
-				if (!Link.IsNullOrEmpty)
-					return Link;
-				if (Project != null) {
-					var rel = Project.GetRelativeChildPath (FilePath);
-					if (!rel.ToString ().StartsWith ("..", StringComparison.Ordinal))
-						return rel;
-				}
-				return FilePath.FileName;
+		public FilePath ProjectVirtualPath => GetProjectVirtualPath (Link, FilePath, Project);
+
+		static FilePath GetProjectVirtualPath (FilePath link, FilePath filePath, Project project)
+		{
+			if (!link.IsNullOrEmpty)
+				return link;
+			if (project != null) {
+				var rel = project.GetRelativeChildPath (filePath);
+				if (!rel.ToString ().StartsWith ("..", StringComparison.Ordinal))
+					return rel;
 			}
+			return filePath.FileName;
 		}
 
 
@@ -326,7 +339,7 @@ namespace MonoDevelop.Projects
 					var oldLink = link;
 					link = value;
 
-					OnVirtualPathChanged (oldLink, link);
+					VirtualPathChanged?.Invoke (this, new ProjectFileVirtualPathChangedEventArgs (this, oldLink, link));
 					OnChanged ("Link");
 				}
 			}
@@ -441,12 +454,10 @@ namespace MonoDevelop.Projects
 						dependsOnFile.dependentChildren = new List<ProjectFile> ();
 					dependsOnFile.dependentChildren.Add (this);
 					return true;
-				} else {
-					return false;
 				}
-			} else {
-				return true;
 			}
+
+			return false;
 		}
 		#endregion
 
@@ -454,8 +465,8 @@ namespace MonoDevelop.Projects
 		public string ResourceId {
 			get {
 				// If the resource id is not set, return the project's default
-				if (BuildAction == MonoDevelop.Projects.BuildAction.EmbeddedResource && string.IsNullOrEmpty (resourceId) && Project is DotNetProject)
-					return ((DotNetProject)Project).GetDefaultResourceId (this);
+				if (BuildAction == MonoDevelop.Projects.BuildAction.EmbeddedResource && string.IsNullOrEmpty (resourceId) && Project is DotNetProject dnp)
+					return dnp.GetDefaultResourceId (this);
 
 				return resourceId;
 			}
@@ -469,12 +480,30 @@ namespace MonoDevelop.Projects
 			}
 		}
 
+		Project project;
+
 		protected override void OnProjectSet ()
 		{
 			base.OnProjectSet ();
+			if (project != null) {
+				project.Modified -= OnProjectModified;
+				project = null;
+			}
 			if (Project != null) {
 				base.Include = Include;
-				OnVirtualPathChanged (FilePath.Null, ProjectVirtualPath);
+				project = Project;
+				project.Modified += OnProjectModified;
+				VirtualPathChanged?.Invoke (this, new ProjectFileVirtualPathChangedEventArgs (this, FilePath.Null, ProjectVirtualPath));
+			}
+		}
+
+		void OnProjectModified (object sender, SolutionItemModifiedEventArgs e)
+		{
+			foreach (var eventInfo in e) {
+				if (eventInfo.Hint == "FileName") {
+					cachedInclude = null;
+					return;
+				}
 			}
 		}
 
@@ -496,43 +525,40 @@ namespace MonoDevelop.Projects
 			return pf;
 		}
 
-		public virtual void Dispose ()
+		public void Dispose () => OnDispose ();
+
+		protected virtual void OnDispose ()
 		{
+			if (project != null) {
+				project.Modified -= OnProjectModified;
+				project = null;
+			}
 		}
 
 		internal event EventHandler<ProjectFileVirtualPathChangedEventArgs> VirtualPathChanged;
 
-		void OnVirtualPathChanged (FilePath oldVirtualPath, FilePath newVirtualPath)
-		{
-			var handler = VirtualPathChanged;
-
-			if (handler != null)
-				handler (this, new ProjectFileVirtualPathChangedEventArgs (this, oldVirtualPath, newVirtualPath));
-		}
-
 		internal event EventHandler<ProjectFilePathChangedEventArgs> PathChanged;
 
-		void OnPathChanged (FilePath oldPath, FilePath newPath, FilePath oldVirtualPath, FilePath newVirtualPath)
+		void OnPathChanged (FilePath oldPath, FilePath oldLink)
 		{
-			var handler = PathChanged;
+			PathChanged?.Invoke (this, CreateEventArgs ());
 
-			if (handler != null)
-				handler (this, new ProjectFilePathChangedEventArgs (this, oldPath, newPath, oldVirtualPath, newVirtualPath));
+			ProjectFilePathChangedEventArgs CreateEventArgs ()
+			{
+				var oldVirtualPath = GetProjectVirtualPath (oldLink, oldPath, Project);
+				return new ProjectFilePathChangedEventArgs (this, oldPath, filename, oldVirtualPath, ProjectVirtualPath);
+			}
 		}
 
 		protected virtual void OnChanged (string property)
 		{
-			if (Project != null)
-				Project.NotifyFilePropertyChangedInProject (this, property);
+			Project?.NotifyFilePropertyChangedInProject (this, property);
 		}
 
-		public virtual SourceCodeKind SourceCodeKind {  
-			get {
-				if (filename.Extension == ".sketchcs" || filename.Extension == ".sketchvb")
-					return SourceCodeKind.Script;
-				return SourceCodeKind.Regular;
-			}
-		}
+		public virtual SourceCodeKind SourceCodeKind
+			=> filename.HasExtension (".csx") || filename.HasExtension (".vbx")
+				? SourceCodeKind.Script
+				: SourceCodeKind.Regular;
 	}
 
 	class ProjectFileVirtualPathChangedEventArgs : EventArgs
@@ -544,9 +570,9 @@ namespace MonoDevelop.Projects
 			NewVirtualPath = newPath;
 		}
 
-		public ProjectFile ProjectFile { get; private set; }
-		public FilePath OldVirtualPath { get; private set; }
-		public FilePath NewVirtualPath { get; private set; }
+		public ProjectFile ProjectFile { get; }
+		public FilePath OldVirtualPath { get; }
+		public FilePath NewVirtualPath { get; }
 	}
 
 	class ProjectFilePathChangedEventArgs : ProjectFileVirtualPathChangedEventArgs
@@ -557,7 +583,7 @@ namespace MonoDevelop.Projects
 			NewPath = newPath;
 		}
 
-		public FilePath OldPath { get; private set; }
-		public FilePath NewPath { get; private set; }
+		public FilePath OldPath { get; }
+		public FilePath NewPath { get; }
 	}
 }

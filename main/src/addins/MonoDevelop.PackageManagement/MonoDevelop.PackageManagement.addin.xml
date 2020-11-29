@@ -9,6 +9,9 @@
 		<Import assembly="NuGet.Commands.dll" />
 		<Import assembly="NuGet.LibraryModel.dll" />
 		<Import assembly="NuGet.Common.dll" />
+		<Import assembly="NuGet.Protocol.dll" />
+		<Import assembly="NuGet.Configuration.dll" />
+		<Import assembly="NuGet.ProjectModel.dll" />
 	</Runtime>
 
 	<Extension path = "/MonoDevelop/Ide/Commands">
@@ -18,6 +21,18 @@
 			_description = "Add NuGet packages to the project"
 			_label = "Add NuGet _Packages..."
 			defaultHandler = "MonoDevelop.PackageManagement.Commands.AddPackagesHandler" />
+		<Command
+			id="MonoDevelop.PackageManagement.Commands.ManageNuGetPackages"
+			_description="Manage packages for the solution"
+			_label="_Manage NuGet Packages..."
+			_displayName="Manage Packages (Solution)"
+			defaultHandler="MonoDevelop.PackageManagement.ManagePackagesHandler" />
+		<Command
+			id="MonoDevelop.PackageManagement.Commands.ManageNuGetPackagesInProject"
+			_description="Manage packages for the project"
+			_label="_Manage NuGet Packages..."
+			_displayName="Manage Packages"
+			defaultHandler="MonoDevelop.PackageManagement.ManagePackagesInProjectHandler" />
 		<Command
 			id = "MonoDevelop.PackageManagement.Commands.RestorePackages"
 			_description = "Restore all missing packages in the solution"
@@ -58,17 +73,11 @@
 			_label="Re_target"
 			_displayName="Retarget All Packages" />
 		</Category>
-		<Category id="Hidden" _name="Hidden">
-			<Command
-				id="MonoDevelop.PackageManagement.Commands.PackageReferenceNodeCommands.ShowPackageVersion"
-				_description="Current package version"
-				_label="Version" />
-		</Category>
 	</Extension>
 	
 	<Extension path="/MonoDevelop/Ide/MainMenu/Project">
 		<SeparatorItem insertafter="MonoDevelop.Ide.Commands.ProjectCommands.AddReference" />
-		<CommandItem id="MonoDevelop.PackageManagement.Commands.AddPackages" />
+		<CommandItem id="MonoDevelop.PackageManagement.Commands.ManageNuGetPackages" />
 		<CommandItem id="MonoDevelop.PackageManagement.Commands.UpdateAllPackagesInSolution" />
 		<CommandItem id="MonoDevelop.PackageManagement.Commands.RestorePackages" />
 		<SeparatorItem />
@@ -76,18 +85,36 @@
 	
 	<Extension path="/MonoDevelop/Ide/ContextMenu/ProjectPad">
 		<Condition id="ItemType" value="Solution">
+			<SeparatorItem
+				id="MonoDevelop.PackageManagement.ProjectPad.Separator"
+				insertafter="MonoDevelop.Ide.Commands.ProjectCommands.AddReference"
+				insertbefore="AddSectionEnd" />
+			<CommandItem
+				id="MonoDevelop.PackageManagement.Commands.ManageNuGetPackages"
+				insertafter="MonoDevelop.PackageManagement.ProjectPad.Separator"
+				insertbefore="AddSectionEnd" />
 			<CommandItem
 				id="MonoDevelop.PackageManagement.Commands.UpdateAllPackagesInSolution"
-				insertafter="MonoDevelop.PackageManagement.Commands.AddReference"
+				insertafter="MonoDevelop.PackageManagement.Commands.ManageNuGetPackages"
 				insertbefore="AddSectionEnd" />
 			<CommandItem
 				id="MonoDevelop.PackageManagement.Commands.RestorePackages"
 				insertafter="MonoDevelop.PackageManagement.Commands.UpdateAllPackagesInSolution"
 				insertbefore="AddSectionEnd" />
 		</Condition>
+		<Condition id="ItemType" value="DotNetProject">
+			<SeparatorItem
+				id="MonoDevelop.PackageManagement.ProjectPad.Separator"
+				insertafter="MonoDevelop.Ide.Commands.ProjectCommands.AddReference"
+				insertbefore="AddSectionEnd" />
+			<CommandItem
+				id="MonoDevelop.PackageManagement.Commands.ManageNuGetPackagesInProject"
+				insertafter="MonoDevelop.PackageManagement.ProjectPad.Separator"
+				insertbefore="AddSectionEnd" />
+		</Condition>
 		<Condition id="ItemType" value="MonoDevelop.PackageManagement.NodeBuilders.ProjectPackagesFolderNode">
 			<CommandItem
-				id="MonoDevelop.PackageManagement.Commands.AddPackages" _label = "Add NuGet _Packages..." />
+				id="MonoDevelop.PackageManagement.Commands.ManageNuGetPackagesInProject" />
 			<CommandItem
 				id="MonoDevelop.PackageManagement.Commands.PackagesFolderNodeCommands.ReinstallAllPackagesInProject" />
 			<CommandItem
@@ -101,7 +128,8 @@
 		<Condition id="ItemType" value="Project">
 			<CommandItem
 				id="MonoDevelop.PackageManagement.Commands.AddPackages"
-				insertafter="MonoDevelop.Ide.Commands.ProjectCommands.AddFiles"
+				_label = "NuGet _Packages..."				
+				insertafter="MonoDevelop.Ide.Commands.ProjectCommands.AddReference"
 				insertbefore="MonoDevelop.WebReferences.WebReferenceCommands.Add" />
 		</Condition>
 	</Extension>
@@ -112,8 +140,8 @@
 		<StockIcon stockid="md-prefs-package" resource="prefs-package-16.png" size="Menu" />
 		<StockIcon stockid="md-prefs-package-source" resource="prefs-package-source-16.png" size="Menu" />
 		<StockIcon stockid="md-package-dependency" resource="nuget-16.png" />
-		<StockIcon stockid="md-framework-dependency" resource="framework-16.png" />
 		<StockIcon stockid="md-nuget-warning" resource="nuget-warning-16.png" />
+		<StockIcon stockid="md-package-update" resource="package-update-16.png" />
 	</Extension>
 
 	<Extension path="/MonoDevelop/Ide/GlobalOptionsDialog">
@@ -145,7 +173,6 @@
 	</ExtensionPoint>
 
 	<Extension path="/MonoDevelop/PackageManagement/ContextMenu/ProjectPad/PackageReference">
-		<CommandItem id="MonoDevelop.PackageManagement.Commands.PackageReferenceNodeCommands.ShowPackageVersion" />
 		<CommandItem id="MonoDevelop.PackageManagement.Commands.PackageReferenceNodeCommands.ReinstallPackage" />
 		<CommandItem id="MonoDevelop.PackageManagement.Commands.PackageReferenceNodeCommands.UpdatePackage" />
 		<CommandItem id="MonoDevelop.Ide.Commands.EditCommands.Delete" />
@@ -165,6 +192,8 @@
 
 	<Extension path="/MonoDevelop/ProjectModel/ProjectModelExtensions">
 		<Class class="MonoDevelop.PackageManagement.PackageManagementMSBuildExtension" />
+		<Class class="MonoDevelop.PackageManagement.PackageManagementCanReferenceProjectExtension" />
+		<Class class="MonoDevelop.PackageManagement.PackageManagementSdkProjectExtension" />
 	</Extension>
 	<!--
 	<Extension path="/MonoDevelop/Refactoring/CodeDiagnosticProvider">

@@ -41,6 +41,7 @@ using MonoDevelop.Ide.Commands;
 using MonoDevelop.Ide.Gui.Content;
 using MonoDevelop.Ide.Tasks;
 using MonoDevelop.Components.Extensions;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.Ide.BuildOutputView
 {
@@ -62,6 +63,7 @@ namespace MonoDevelop.Ide.BuildOutputView
 		BuildOutputTreeCellView cellView;
 		MDSpinner loadingSpinner;
 
+		public FilePath FilePathLocation => filePathLocation;
 		public string ViewContentName { get; private set; }
 		public BuildOutput BuildOutput { get; private set; }
 		public PathEntry [] CurrentPath { get; set; }
@@ -328,8 +330,8 @@ namespace MonoDevelop.Ide.BuildOutputView
 
 				await BuildOutput.Save (outputFile);
 				ViewContentName = outputFile.FileName;
-				FileNameChanged?.Invoke (this, outputFile);
 				filePathLocation = outputFile;
+				FileNameChanged?.Invoke (this, outputFile);
 				IsDirty = false;
 			}
 		}
@@ -534,12 +536,12 @@ namespace MonoDevelop.Ide.BuildOutputView
 			if (!(treeView.DataSource is BuildOutputDataSource dataSource))
 				return;
 
-			using (Counters.SearchBuildLog.BeginTiming ()) {
+			using (var timer = Counters.SearchBuildLog.BeginTiming ()) {
 				// Cleanup previous search
 				if (currentSearch != null) {
 					currentSearch.Cancel ();
 					RefreshSearchMatches (dataSource, currentSearch);
-					Counters.SearchBuildLog.Trace ("Cleared previous search matches");
+					timer.Trace ("Cleared previous search matches");
 				}
 
 				currentSearch = new BuildOutputDataSearch (dataSource.RootNodes);
@@ -711,7 +713,7 @@ namespace MonoDevelop.Ide.BuildOutputView
 			window.MaxVisibleRows = 14;
 			if (path [index].Tag != null)
 				window.SelectItem (path [index].Tag);
-			return window;
+			return (Components.Window)window;
 		}
 
 		protected override void Dispose (bool disposing)

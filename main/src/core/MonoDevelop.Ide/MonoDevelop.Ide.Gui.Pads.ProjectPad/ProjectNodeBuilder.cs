@@ -40,6 +40,8 @@ using MonoDevelop.Ide.Gui.Components;
 using MonoDevelop.Ide.Gui.Dialogs;
 using System.Linq;
 using MonoDevelop.Ide.Tasks;
+using MonoDevelop.Ide.Projects.FileNesting;
+using System.Diagnostics;
 
 namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 {
@@ -64,6 +66,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			IdeApp.Workspace.ActiveConfigurationChanged += IdeAppWorkspaceActiveConfigurationChanged;
 			FileService.FileRemoved += OnSystemFileDeleted;
 			FileService.FileCreated += OnSystemFileCreated;
+			FileNestingService.NestingRulesChanged += OnFileNestingRulesChanged;
 		}
 
 		public override void Dispose ()
@@ -75,6 +78,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			IdeApp.Workspace.ActiveConfigurationChanged -= IdeAppWorkspaceActiveConfigurationChanged;
 			FileService.FileRemoved -= OnSystemFileDeleted;
 			FileService.FileCreated -= OnSystemFileCreated;
+			FileNestingService.NestingRulesChanged -= OnFileNestingRulesChanged;
 
 			base.Dispose ();
 		}
@@ -246,6 +250,22 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			}
 		}
 
+		void OnFileNestingRulesChanged (ProjectFile fileToUpdate, ProjectFile newParent)
+		{
+			Debug.Assert (fileToUpdate != null);
+
+			ITreeBuilder tb = Context.GetTreeBuilder (fileToUpdate);
+			if (tb != null) {
+				tb.MoveToParent ();
+				tb.UpdateAll ();
+			}
+
+			if (newParent != null) {
+				tb = Context.GetTreeBuilder (newParent);
+				tb?.UpdateAll ();
+			}
+		}
+
 		void AddFile (ProjectFile file, Project project)
 		{
 			if (!file.Visible || file.Flags.HasFlag (ProjectItemFlags.Hidden))
@@ -414,9 +434,8 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 					tb.Update ();
 			}
 		}
-		
 	}
-	
+
 	class ProjectNodeCommandHandler: FolderCommandHandler
 	{
 		public override string GetFolderPath (object dataObject)
@@ -457,7 +476,13 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			Project prj = CurrentNode.DataItem as Project;
 			IdeApp.ProjectOperations.RemoveSolutionItem (prj);
 		}
-		
+
+		[CommandUpdateHandler (EditCommands.Delete)]
+		public void UpdateRemoveItem (CommandInfo info)
+		{
+			info.Text = GettextCatalog.GetString ("Remove");
+		}
+
 		[CommandHandler (ProjectCommands.AddReference)]
 		public async void AddReferenceToProject ()
 		{
@@ -552,6 +577,11 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		public override void OnNodeDrop (object dataObject, DragOperation operation)
 		{
 			base.OnNodeDrop (dataObject, operation);
+		}
+
+		public override bool CanHandleDropFromChild (object [] dataObjects, DragOperation operation, DropPosition position)
+		{
+			return ProjectFolderCommandHandler.CanHandleDropFromChild (dataObjects, position);
 		}
 	}
 }

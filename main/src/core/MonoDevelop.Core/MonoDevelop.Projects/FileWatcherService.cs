@@ -31,6 +31,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.ObjectPool;
 using MonoDevelop.Core;
 using MonoDevelop.FSW;
 
@@ -38,35 +39,150 @@ namespace MonoDevelop.Projects
 {
 	public static class FileWatcherService
 	{
-		// We don't want more than 8 threads for FileSystemWatchers.
-		const int maxWatchers = 8;
+		// Keep previous behaviour with a maximum of 8 watchers for Linux, as it still uses one thread per watcher.
+		// Use more watchers for finer grained directory notifications for other platforms.
+		static readonly int maxWatchers = Platform.IsMac ? 32 : 8;
 
 		static readonly PathTree tree = new PathTree ();
 		static readonly Dictionary<FilePath, FileWatcherWrapper> watchers = new Dictionary<FilePath, FileWatcherWrapper> ();
 		static readonly Dictionary<object, HashSet<FilePath>> monitoredDirectories = new Dictionary<object, HashSet<FilePath>> ();
+		static readonly ReaderWriterLockSlim readerWriterLock = new ReaderWriterLockSlim (LockRecursionPolicy.NoRecursion);
 		static CancellationTokenSource cancellationTokenSource = new CancellationTokenSource ();
 
 		public static Task Add (WorkspaceItem item)
 		{
-			lock (watchers) {
-				item.RootDirectoriesChanged += OnRootDirectoriesChanged;
-				return WatchDirectories (item, item.GetRootDirectories ());
+			using (readerWriterLock.Write ()) {
+				return Watch_NoLock (item, registerEvent: true);
+			}
+		}
+
+		static Task Watch_NoLock (WorkspaceObject item, bool registerEvent)
+		{
+			Debug.Assert (readerWriterLock.IsWriteLockHeld);
+
+			return Watch_NoLock (ComputeItems (item, registerEvent));
+		}
+
+		static Task Watch_NoLock (List<(object, HashSet<FilePath>)> toWatch)
+		{
+			bool modified = false;
+			foreach (var (id, set) in toWatch) {
+				modified |= RegisterDirectoriesInTree_NoLock (id, set);
+			}
+
+			return modified ? UpdateWatchersAsync () : Task.CompletedTask;
+		}
+
+		internal static List<(object id, HashSet<FilePath> set)> ComputeItems (WorkspaceObject item, bool registerEvent)
+		{
+			var toAdd = new List<(object, HashSet<FilePath>)> ();
+
+			foreach (var toRegister in item.GetAllItems<WorkspaceObject> ()) {
+				if (registerEvent && toRegister is WorkspaceItem workspaceItem) {
+					workspaceItem.RootDirectoriesChanged += OnRootDirectoriesChanged;
+				}
+
+				toAdd.Add ((toRegister, GetPathsToWatch (toRegister)));
+			}
+
+			return toAdd;
+		}
+
+		internal static HashSet<FilePath> GetPathsToWatch (WorkspaceObject item)
+		{
+			HashSet<FilePath> set = null;
+			if (ShouldAddToSet (set, item.ItemDirectory)) {
+				set ??= new HashSet<FilePath> ();
+				set.Add (item.ItemDirectory);
+			}
+
+			if (item is IWorkspaceFileObject container) {
+				foreach (var file in container.GetItemFiles (true)) {
+					if (ShouldAddToSet (set, file)) {
+						set ??= new HashSet<FilePath> ();
+
+						var directory = file.ParentDirectory;
+						if (!directory.IsNullOrEmpty)
+							set.Add (file.ParentDirectory);
+					}
+				}
+			}
+
+			return set;
+
+			static bool ShouldAddToSet (HashSet<FilePath> set, FilePath path)
+			{
+				// Do a double lookup instead of iterating everything first, if we already added a project.
+				if (path.IsNullOrEmpty)
+					return false;
+
+				if (set != null) {
+					foreach (var directory in set) {
+						if (path.IsChildPathOf (directory))
+							return false;
+					}
+				}
+				return true;
 			}
 		}
 
 		public static Task Remove (WorkspaceItem item)
 		{
-			lock (watchers) {
-				item.RootDirectoriesChanged -= OnRootDirectoriesChanged;
-				return WatchDirectories (item, null);
+			using (readerWriterLock.Write ()) {
+				return Remove_NoLock (item);
 			}
 		}
 
-		static void OnRootDirectoriesChanged (object sender, EventArgs args)
+		static Task Remove_NoLock (WorkspaceObject item)
 		{
-			lock (watchers) {
-				var item = (WorkspaceItem)sender;
-				WatchDirectories (item, item.GetRootDirectories ()).Ignore ();
+			Debug.Assert (readerWriterLock.IsWriteLockHeld);
+
+			bool modified = false;
+			foreach (var child in item.GetAllItems<WorkspaceObject> ()) {
+				modified |= RegisterDirectoriesInTree_NoLock (child, null);
+
+				if (child is WorkspaceItem workspaceItem)
+					workspaceItem.RootDirectoriesChanged -= OnRootDirectoriesChanged;
+			}
+			return modified ? UpdateWatchersAsync () : Task.CompletedTask;
+		}
+
+		static void OnRootDirectoriesChanged (object sender, WorkspaceItem.RootDirectoriesChangedEventArgs args)
+		{
+			if (args.SourceItem is WorkspaceObject item) {
+				if (!args.IsRemove && !args.IsAdd) {
+					// Don't recompute the items if the watched paths hasn't changed.
+					var toWatch = ComputeItems (item, false);
+
+					bool isNop = true;
+					using (readerWriterLock.Read ()) {
+						foreach (var (id, set) in toWatch) {
+							if (!monitoredDirectories.TryGetValue (id, out var currentSet))
+								continue;
+
+							if (!currentSet.SetEquals (set)) {
+								isNop = false;
+								break;
+							}
+						}
+					}
+
+					if (isNop)
+						return;
+
+					using (readerWriterLock.Write ()) {
+						Watch_NoLock (toWatch).Ignore ();
+						return;
+					}
+				}
+
+				using (readerWriterLock.Write ()) {
+					if (args.IsRemove) {
+						Remove_NoLock (item).Ignore ();
+					} else {
+						Watch_NoLock (item, args.IsAdd).Ignore ();
+					}
+				}
 			}
 		}
 
@@ -78,38 +194,41 @@ namespace MonoDevelop.Projects
 
 			return Task.Run (() => UpdateWatchers (token));
 		}
-		static HashSet<FilePath> newWatchers = new HashSet<FilePath>();
+		static Dictionary<FilePath, PathTreeNode> newWatchers = new Dictionary<FilePath, PathTreeNode>();
 		static List<FilePath> toRemove = new List<FilePath> ();
 
-		static void UpdateWatchers (CancellationToken token)
+		static Task UpdateWatchers (CancellationToken token)
 		{
 			if (token.IsCancellationRequested)
-				return;
-			lock (watchers) {
+				return Task.CompletedTask;
+
+			var tasks = new List<Task> ();
+
+			using (readerWriterLock.Write ()) {
 				if (token.IsCancellationRequested)
-					return;
+					return Task.CompletedTask;
 				newWatchers.Clear ();
 				foreach (var node in tree.Normalize (maxWatchers)) {
 					if (token.IsCancellationRequested)
-						return;
+						return Task.CompletedTask;
 					var dir = node.GetPath ().ToString ();
 					if (Directory.Exists (dir))
-						newWatchers.Add (dir);
+						newWatchers.Add (dir, node);
 				}
 				if (newWatchers.Count == 0 && watchers.Count == 0) {
 					// Unchanged.
-					return;
+					return Task.CompletedTask;
 				}
 				toRemove.Clear ();
 				foreach (var kvp in watchers) {
 					var directory = kvp.Key;
-					if (!newWatchers.Contains (directory))
+					if (!newWatchers.ContainsKey (directory))
 						toRemove.Add (directory);
 				}
 
 				// After this point, the watcher update is real and a destructive operation, so do not use the token.
 				if (token.IsCancellationRequested)
-					return;
+					return Task.CompletedTask;
 
 				// First remove the watchers, so we don't spin too many threads.
 				foreach (var directory in toRemove) {
@@ -117,31 +236,36 @@ namespace MonoDevelop.Projects
 				}
 
 				// Add the new ones.
-				foreach (var path in newWatchers) {
-					// Don't modify a watcher that already exists.
-					if (watchers.ContainsKey (path)) {
+				foreach (var kvp in newWatchers) {
+					var path = kvp.Key;
+					// Don't modify a watcher that already exists, but ensure it is initialized
+					if (watchers.TryGetValue (path, out var existingWatcher)) {
+						tasks.Add (existingWatcher.EnableRaisingEventsAsync ());
 						continue;
 					}
-					var watcher = new FileWatcherWrapper (path);
+					var watcher = new FileWatcherWrapper (path, kvp.Value, readerWriterLock);
 					watchers.Add (path, watcher);
-					try {
-						watcher.EnableRaisingEvents = true;
- 					} catch (UnauthorizedAccessException e) {
-						LoggingService.LogWarning ("Access to " + path + " denied. Stopping file watcher.", e);
-						watcher.Dispose ();
-						watchers.Remove (path);
-					}
+					var task = watcher.EnableRaisingEventsAsync ().ContinueWith (t => {
+						if (t.IsFaulted && t.Exception?.InnerException is UnauthorizedAccessException e) {
+							LoggingService.LogWarning ("Access to " + path + " denied. Stopping file watcher.", e);
+							using (readerWriterLock.Write ()) {
+								watcher.Dispose ();
+								watchers.Remove (path);
+							}
+						}
+					}, TaskScheduler.Default);
+					tasks.Add (task);
 				}
-
 			}
+			return Task.WhenAll (tasks);
 		}
 
 		static void RemoveWatcher_NoLock (FilePath directory)
 		{
-			Debug.Assert (Monitor.IsEntered (watchers));
+			Debug.Assert (readerWriterLock.IsWriteLockHeld);
 
 			if (watchers.TryGetValue (directory, out FileWatcherWrapper watcher)) {
-				watcher.EnableRaisingEvents = false;
+				watcher.DisableRaisingEvents ();
 				watcher.Dispose ();
 				watchers.Remove (directory);
 			}
@@ -149,20 +273,27 @@ namespace MonoDevelop.Projects
 
 		public static Task WatchDirectories (object id, IEnumerable<FilePath> directories)
 		{
-			lock (watchers) {
-				HashSet<FilePath> set = null; 
-				if (directories != null)
-					set = new HashSet<FilePath> (directories.Where (x => !x.IsNullOrEmpty));
-
-				if (RegisterDirectoriesInTree_NoLock (id, set))
-					return UpdateWatchersAsync ();
-				return Task.CompletedTask;
+			using (readerWriterLock.Write ()) {
+				return WatchDirectories_NoLock (id, directories);
 			}
+		}
+
+		static Task WatchDirectories_NoLock (object id, IEnumerable<FilePath> directories)
+		{
+			Debug.Assert (readerWriterLock.IsWriteLockHeld);
+
+			HashSet<FilePath> set = null;
+			if (directories != null)
+				set = new HashSet<FilePath> (directories.Where (x => !x.IsNullOrEmpty));
+
+			if (RegisterDirectoriesInTree_NoLock (id, set))
+				return UpdateWatchersAsync ();
+			return Task.CompletedTask;
 		}
 
 		static bool RegisterDirectoriesInTree_NoLock (object id, HashSet<FilePath> set)
 		{
-			Debug.Assert (Monitor.IsEntered (watchers));
+			Debug.Assert (readerWriterLock.IsWriteLockHeld);
 
 			// Remove paths subscribed for this id.
 
@@ -178,9 +309,7 @@ namespace MonoDevelop.Projects
 					toRemove = oldDirectories;
 
 				foreach (var dir in toRemove) {
-					var node = tree.RemoveNode (dir, id);
-
-					bool wasRemoved = node != null && !node.IsLive;
+					var node = tree.RemoveNode (dir, id, out bool wasRemoved);
 					modified |= wasRemoved;
 				}
 			}
@@ -215,19 +344,51 @@ namespace MonoDevelop.Projects
 		/// </summary>
 		internal static Task Update ()
 		{
-			lock (watchers) {
+			using (readerWriterLock.Write ()) {
 				return UpdateWatchersAsync ();
 			}
 		}
+
+		internal static FileChangeTimings Timings { get; } = new FileChangeTimings ();
 	}
 
-	class FileWatcherWrapper : IDisposable
+	internal class FileChangeTimings
 	{
-		FileSystemWatcher watcher;
+		readonly ObjectPool<Stopwatch> watchPool = ObjectPool.Create<Stopwatch> ();
+		readonly long [] timings = new long [Enum.GetNames (typeof (FileService.EventDataKind)).Length];
 
-		public FileWatcherWrapper (FilePath path)
+		internal TimeSpan GetTimings (FileService.EventDataKind kind)
+			=> TimeSpan.FromTicks (timings [(int)kind]);
+
+		internal Stopwatch Get () => watchPool.Get ();
+
+		internal void Add (Stopwatch sw, FileService.EventDataKind kind)
+		{
+			Interlocked.Add (ref timings [(int)kind], sw.Elapsed.Ticks);
+			watchPool.Return (sw);
+		}
+	}
+
+	sealed class FileWatcherWrapper : IDisposable
+	{
+		readonly FileSystemWatcher watcher;
+		readonly PathTreeNode rootNode;
+		readonly ReaderWriterLockSlim readerWriterLock;
+		readonly object enableEventLock = new object ();
+		bool eventsEnabled;
+		Task enablingEventsTask;
+		bool disposed;
+
+		// Avoid clogging the threadpool by limiting the number of tasks that can run to enable events
+		static SemaphoreSlim semaphore = new SemaphoreSlim (10);
+
+		public FileWatcherWrapper (FilePath path, PathTreeNode rootNode, ReaderWriterLockSlim readerWriterLock)
 		{
 			Path = path;
+
+			this.rootNode = rootNode;
+			this.readerWriterLock = readerWriterLock;
+
 			watcher = new FileSystemWatcher (path) {
 				// Need LastWrite otherwise no file change events are generated by the native file watcher.
 				NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName,
@@ -245,27 +406,113 @@ namespace MonoDevelop.Projects
 		public FilePath Path { get; }
 
 		public bool EnableRaisingEvents {
-			get { return watcher.EnableRaisingEvents; }
-			set { watcher.EnableRaisingEvents = value; }
+			get { return eventsEnabled; }
+		}
+
+		public void DisableRaisingEvents ()
+		{
+			lock (enableEventLock) {
+				if (!disposed && eventsEnabled) {
+					eventsEnabled = false;
+					if (enablingEventsTask == null)
+						watcher.EnableRaisingEvents = false;
+				}
+			}
+		}
+
+		public Task EnableRaisingEventsAsync ()
+		{
+			lock (enableEventLock) {
+				if (disposed || (eventsEnabled && enablingEventsTask == null))
+					return Task.CompletedTask;
+				eventsEnabled = true;
+				if (enablingEventsTask == null) {
+					// Enabling events has a sync wait on a flush of the IO event queue, and that may take many
+					// seconds if there is a lot of IO. To avoid locking on this call, we enable the events
+					// on a background thread.
+					enablingEventsTask = semaphore.WaitAsync ().ContinueWith (EnableEvents, CancellationToken.None, TaskContinuationOptions.RunContinuationsAsynchronously, scheduler: TaskScheduler.Default);
+				}
+				return enablingEventsTask;
+			}
+		}
+
+		void EnableEvents (Task t)
+		{
+			lock (enableEventLock) {
+				if (disposed) {
+					// If Dispose was called while enablingEvents=true the watcher won't be disposed, so we need to dispose now.
+					semaphore.Release ();
+					watcher.Dispose ();
+					enablingEventsTask = null;
+					return;
+				}
+				// Maybe events were disabled after the task was queued
+				if (!eventsEnabled) {
+					semaphore.Release ();
+					watcher.EnableRaisingEvents = false;
+					enablingEventsTask = null;
+					return;
+				}
+			}
+
+			// Enable the events outside the lock to avoid blocking the dispose method
+			try {
+				watcher.EnableRaisingEvents = true;
+			} finally {
+				lock (enableEventLock) {
+					semaphore.Release ();
+					enablingEventsTask = null;
+					if (disposed) {
+						// If Dispose was called while enablingEvents=true the watcher won't be disposed, so we need to dispose now.
+						watcher.Dispose ();
+					}
+					else if (!eventsEnabled) {
+						// Events could be disabled while EnableRaisingEvents was running
+						watcher.EnableRaisingEvents = false;
+					}
+				}
+			}
 		}
 
 		public void Dispose ()
 		{
-			watcher.Changed -= OnFileChanged;
-			watcher.Created -= OnFileCreated;
-			watcher.Deleted -= OnFileDeleted;
-			watcher.Renamed -= OnFileRenamed;
-			watcher.Error -= OnFileWatcherError;
-			watcher.Dispose ();
+			lock (enableEventLock) {
+				disposed = true;
+				watcher.Changed -= OnFileChanged;
+				watcher.Created -= OnFileCreated;
+				watcher.Deleted -= OnFileDeleted;
+				watcher.Renamed -= OnFileRenamed;
+				watcher.Error -= OnFileWatcherError;
+
+				// If events are being enabled don't dispose now. The watcher will be disposed by EnableEvents.
+				if (enablingEventsTask == null)
+					watcher.Dispose ();
+			}
 		}
 
-		void OnFileChanged (object sender, FileSystemEventArgs e)
+		static void OnFileChanged (object sender, FileSystemEventArgs e)
 		{
 			FileService.NotifyFileChanged (e.FullPath);
 		}
 
 		void OnFileCreated (object sender, FileSystemEventArgs e)
 		{
+			using (readerWriterLock.Read ()) {
+				var sw = FileWatcherService.Timings.Get ();
+				sw.Restart ();
+				NotifyNode (rootNode, e.FullPath, (id, path) => {
+					try {
+						if (id is Project project) {
+							project.OnFileCreated (path);
+						}
+					} catch (Exception e) {
+						LoggingService.LogInternalError ("Exception in file watcher handler", e);
+					}
+				});
+				sw.Stop ();
+				FileWatcherService.Timings.Add (sw, FileService.EventDataKind.Created);
+			}
+
 			FileService.NotifyFileCreated (e.FullPath);
 
 			// The native file watcher sometimes generates a single Created event for a file when it is renamed
@@ -279,8 +526,24 @@ namespace MonoDevelop.Projects
 			// The native file watcher sometimes generates a Changed, Created and Deleted event in
 			// that order from a single native file event. So check the file has been deleted before raising
 			// a FileRemoved event.
-			if (!File.Exists (e.FullPath) && !Directory.Exists (e.FullPath))
+			if (!File.Exists (e.FullPath) && !Directory.Exists (e.FullPath)) {
+				using (readerWriterLock.Read ()) {
+					var sw = FileWatcherService.Timings.Get ();
+					sw.Restart ();
+					NotifyNode (rootNode, e.FullPath, (id, path) => {
+						try {
+							if (id is Project project)
+								project.OnFileDeleted (path);
+						} catch (Exception e) {
+							LoggingService.LogInternalError ("Exception in file watcher handler", e);
+						}
+					});
+					sw.Stop ();
+					FileWatcherService.Timings.Add (sw, FileService.EventDataKind.Removed);
+				}
+
 				FileService.NotifyFileRemoved (e.FullPath);
+			}
 		}
 
 		/// <summary>
@@ -292,6 +555,21 @@ namespace MonoDevelop.Projects
 		/// </summary>
 		void OnFileRenamed (object sender, RenamedEventArgs e)
 		{
+			using (readerWriterLock.Read ()) {
+				var sw = FileWatcherService.Timings.Get ();
+				sw.Restart ();
+				NotifyNode (rootNode, (e.OldFullPath, e.FullPath), (id, state) => {
+					try {
+						if (id is Project project)
+							project.OnFileRenamed (state.OldFullPath, state.FullPath);
+					} catch (Exception e) {
+						LoggingService.LogInternalError ("Exception in file watcher handler", e);
+					}
+				});
+				sw.Stop ();
+				FileWatcherService.Timings.Add (sw, FileService.EventDataKind.Renamed);
+			}
+
 			FileService.NotifyFileRenamedExternally (e.OldFullPath, e.FullPath);
 			// Some applications, such as TextEdit.app, will create a backup file
 			// and then rename that to the original file. This results in no file
@@ -307,13 +585,25 @@ namespace MonoDevelop.Projects
 			// the original file still exists.
 			if (File.Exists (e.OldFullPath))
 				FileService.NotifyFileChanged (e.OldFullPath);
-			else
+			// Handle odd file watcher events which look like a folder being renamed to a file.
+			else if (!Directory.Exists (e.OldFullPath))
 				FileService.NotifyFileRemoved (e.OldFullPath);
 		}
 
-		void OnFileWatcherError (object sender, ErrorEventArgs e)
+		static void OnFileWatcherError (object sender, ErrorEventArgs e)
 		{
 			LoggingService.LogError ("FileService.FileWatcher error", e.GetException ());
+		}
+
+		static void NotifyNode<T> (PathTreeNode node, T value, Action<object, T> handler)
+		{
+			foreach (var id in node.Ids) {
+				handler (id, value);
+			}
+
+			for (node = node.FirstChild; node != null; node = node.Next) {
+				NotifyNode (node, value, handler);
+			}
 		}
 	}
 }

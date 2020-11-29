@@ -1,4 +1,4 @@
-﻿﻿//
+﻿//
 // NewProjectDialogController.cs
 //
 // Author:
@@ -179,10 +179,9 @@ namespace MonoDevelop.Ide.Projects
 
 			dialog.ShowDialog ();
 
-			wizardProvider.Dispose ();
 			imageProvider.Dispose ();
 
-			return IsNewItemCreated;
+			return ProjectCreation != null && !(ProjectCreation.IsCompleted && !ProjectCreation.Result);
 		}
 
 		void GetVersionControlHandler ()
@@ -296,6 +295,7 @@ namespace MonoDevelop.Ide.Projects
 			wizardProvider.CanMoveToNextPageChanged += (sender, e) => {
 				dialog.CanMoveToNextPage = wizardProvider.CanMoveToNextPage;
 			};
+			wizardProvider.NextPageRequested += (sender, e) => dialog.MoveToNextPage ().Ignore ();
 		}
 
 		public IEnumerable<TemplateCategory> TemplateCategories {
@@ -338,7 +338,7 @@ namespace MonoDevelop.Ide.Projects
 				if (templatingService != null)
 					return templatingService;
 
-				return IdeApp.Services.TemplatingService;
+				return IdeServices.TemplatingService;
 			}
 			set { templatingService = value; }
 		}
@@ -613,11 +613,16 @@ namespace MonoDevelop.Ide.Projects
 
 		public async Task Create ()
 		{
+			Runtime.AssertMainThread ();
+			OnProjectCreating ();
+			projectCreated = new TaskCompletionSource<bool> ();
+
 			if (wizardProvider.HasWizard)
 				wizardProvider.BeforeProjectIsCreated ();
 
 			if (!await CreateProject ()) {
-				ProjectCreationFailed?.Invoke (this, EventArgs.Empty);
+				projectCreated.SetResult (false);
+				OnProjectCreationFailed ();
 				return;
 			}
 
@@ -668,53 +673,86 @@ namespace MonoDevelop.Ide.Projects
 				if (File.Exists (solutionFileName)) {
 					if (!MessageService.Confirm (GettextCatalog.GetString ("File {0} already exists. Overwrite?", solutionFileName), AlertButton.OverwriteFile)) {
 						ParentFolder = null;//Reset process of creating solution
+						projectCreated.SetResult (false);
 						return;
 					}
 					File.Delete (solutionFileName);
 				}
 			}
 
-			if (ParentFolder != null)
-				await IdeApp.ProjectOperations.SaveAsync (ParentFolder.ParentSolution);
-			else
-				await IdeApp.ProjectOperations.SaveAsync (processedTemplate.WorkspaceItems);
-
-			CreateVersionControlItems ();
-
-			if (OpenSolution) {
-				DisposeExistingNewItems ();
-				TemplateWizard wizard = wizardProvider.CurrentWizard;
-				if (await OpenCreatedSolution (processedTemplate)) {
-					var sol = IdeApp.Workspace.GetAllSolutions ().FirstOrDefault ();
-					if (sol != null) {
-						if (wizard != null)
-							wizard.ItemsCreated (new [] { sol });
-						InstallProjectTemplatePackages (sol);
-					}
-				}
-			}
-			else {
-				// The item is not a solution being opened, so it is going to be added to
-				// an existing item. In this case, it must not be disposed by the dialog.
-				RunTemplateActions (processedTemplate);
-				if (wizardProvider.HasWizard)
-					wizardProvider.CurrentWizard.ItemsCreated (processedTemplate.WorkspaceItems);
-				if (ParentFolder != null)
-					InstallProjectTemplatePackages (ParentFolder.ParentSolution);
-			}
-
-			IsNewItemCreated = true;
-			UpdateDefaultSettings ();
-
-			var tcs = new TaskCompletionSource<bool> ();
-			Gtk.Application.Invoke ((sender, args) => {
-				ProjectCreated?.Invoke (this, EventArgs.Empty);
-				tcs.SetResult (true);
-			});
-			await tcs.Task;
-
 			dialog.CloseDialog ();
+
+			try {
+				if (ParentFolder != null)
+					await IdeApp.ProjectOperations.SaveAsync (ParentFolder.ParentSolution);
+				else
+					await IdeApp.ProjectOperations.SaveAsync (processedTemplate.WorkspaceItems);
+
+				CreateVersionControlItems ();
+
+				if (OpenSolution) {
+					DisposeExistingNewItems ();
+					TemplateWizard wizard = wizardProvider.CurrentWizard;
+					if (await OpenCreatedSolution (processedTemplate)) {
+						var sol = IdeApp.Workspace.GetAllSolutions ().FirstOrDefault ();
+						if (sol != null) {
+							if (wizard != null)
+								wizard.ItemsCreated (new [] { sol });
+							InstallProjectTemplatePackages (sol);
+						}
+					}
+				} else {
+					// The item is not a solution being opened, so it is going to be added to
+					// an existing item. In this case, it must not be disposed by the dialog.
+					RunTemplateActions (processedTemplate);
+					if (wizardProvider.HasWizard)
+						wizardProvider.CurrentWizard.ItemsCreated (processedTemplate.WorkspaceItems);
+					if (ParentFolder != null)
+						InstallProjectTemplatePackages (ParentFolder.ParentSolution);
+				}
+
+				wizardProvider.Dispose ();
+				IsNewItemCreated = true;
+				UpdateDefaultSettings ();
+
+				projectCreated.SetResult (true);
+				OnProjectCreated ();
+			} catch (Exception ex) {
+				projectCreated.SetException (ex);
+				throw;
+			}
 		}
+
+		void OnProjectCreating ()
+		{
+			if (IdeServices.DesktopService.AccessibilityInUse) {
+				var announcement = GettextCatalog.GetString ("Creating project {0}", SelectedTemplate.Name);
+				IdeServices.DesktopService.MakeAccessibilityAnnouncement (announcement);
+			}
+		}
+
+		void OnProjectCreationFailed ()
+		{
+			ProjectCreationFailed?.Invoke (this, EventArgs.Empty);
+
+			if (IdeServices.DesktopService.AccessibilityInUse) {
+				var announcement = GettextCatalog.GetString ("{0} failed to create", SelectedTemplate.Name);
+				IdeServices.DesktopService.MakeAccessibilityAnnouncement (announcement);
+			}
+		}
+
+		void OnProjectCreated ()
+		{
+			ProjectCreated?.Invoke (this, EventArgs.Empty);
+
+			if (IdeServices.DesktopService.AccessibilityInUse) {
+				var announcement = GettextCatalog.GetString ("{0} successfully created", SelectedTemplate.Name);
+				IdeServices.DesktopService.MakeAccessibilityAnnouncement (announcement);
+			}
+		}
+
+		public Task<bool> ProjectCreation => projectCreated?.Task;
+		TaskCompletionSource<bool> projectCreated;
 
 		public WizardPage CurrentWizardPage {
 			get {

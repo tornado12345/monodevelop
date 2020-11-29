@@ -27,15 +27,11 @@
 //
 
 using System;
-using System.Collections;
-using System.IO;
 using System.Linq;
 using MonoDevelop.Core;
-using MonoDevelop.Core.Serialization;
 using MonoDevelop.Core.Assemblies;
 using MonoDevelop.Core.StringParsing;
 using System.Collections.Generic;
-using MonoDevelop.Projects.MSBuild;
 
 namespace MonoDevelop.Projects
 {
@@ -50,7 +46,11 @@ namespace MonoDevelop.Projects
 	{
 		string assembly;
 		string sourcePath;
+
 		DotNetCompilerParameters compilationParameters;
+
+		public bool? AppendTargetFrameworkToOutputPath { get; set; }
+		public string TargetFrameworkShortName { get; internal set; } = string.Empty;
 
 		public DotNetProjectConfiguration (string id): base (id)
 		{
@@ -60,13 +60,16 @@ namespace MonoDevelop.Projects
 		{
 			base.Read (pset);
 
+			//we are assuming that if AppendTargetFrameworkToOutputPath has a value is .NET Core / .NET Standard proj.
+			AppendTargetFrameworkToOutputPath = pset.GetValue<bool?> ("AppendTargetFrameworkToOutputPath", defaultValue: null);
+			TargetFrameworkShortName = pset.GetValue ("TargetFramework");
 			assembly = pset.GetValue ("AssemblyName");
-			signAssembly = pset.GetValue<bool> ("SignAssembly");
-			delaySign = pset.GetValue<bool> ("DelaySign");
+			SignAssembly = pset.GetValue<bool> ("SignAssembly");
+			DelaySign = pset.GetValue<bool> ("DelaySign");
 			PublicSign = pset.GetValue<bool> (nameof(PublicSign));
-			assemblyKeyFile = pset.GetPathValue ("AssemblyOriginatorKeyFile", FilePath.Empty);
-			if (string.IsNullOrEmpty (assemblyKeyFile))
-				assemblyKeyFile = pset.GetPathValue ("AssemblyKeyFile", FilePath.Empty);
+			AssemblyKeyFile = pset.GetPathValue ("AssemblyOriginatorKeyFile", FilePath.Empty);
+			if (string.IsNullOrEmpty (AssemblyKeyFile))
+				AssemblyKeyFile = pset.GetPathValue ("AssemblyKeyFile", FilePath.Empty);
 			if (compilationParameters != null)
 				compilationParameters.Read (pset);
 		}
@@ -75,38 +78,30 @@ namespace MonoDevelop.Projects
 		{
 			base.Write (pset);
 			pset.SetValue ("AssemblyName", assembly, mergeToMainGroup: true);
-			pset.SetValue ("SignAssembly", signAssembly, defaultValue:false, mergeToMainGroup: true);
-			pset.SetValue ("DelaySign", delaySign, defaultValue:false, mergeToMainGroup:true);
+			pset.SetValue ("SignAssembly", SignAssembly, defaultValue:false, mergeToMainGroup: true);
+			pset.SetValue ("DelaySign", DelaySign, defaultValue:false, mergeToMainGroup:true);
 			pset.SetValue (nameof(PublicSign), PublicSign, defaultValue: false, mergeToMainGroup: true);
-			pset.SetValue ("AssemblyOriginatorKeyFile", assemblyKeyFile, defaultValue:FilePath.Empty, mergeToMainGroup:true);
+			pset.SetValue ("AssemblyOriginatorKeyFile", AssemblyKeyFile, defaultValue:FilePath.Empty, mergeToMainGroup:true);
 			if (compilationParameters != null)
 				compilationParameters.Write (pset);
+
+			if (AppendTargetFrameworkToOutputPath ?? true) {
+				pset.RemoveProperty (nameof (AppendTargetFrameworkToOutputPath));
+			} else {
+				pset.SetValue (nameof (AppendTargetFrameworkToOutputPath), false);
+			}
 		}
 
-		private bool signAssembly = false;
-		public bool SignAssembly {
-			get { return signAssembly; }
-			set { signAssembly = value; }
-		}
-		
-		private bool delaySign = false;
-		public bool DelaySign {
-			get { return delaySign; }
-			set { delaySign = value; }
-		}
-
+		public bool SignAssembly { get; set; } = false;
+		public bool DelaySign { get; set; } = false;
 		public bool PublicSign { get; set; }
 
 		internal string OldAssemblyKeyFile {
-			set { assemblyKeyFile = value; }
+			set { AssemblyKeyFile = value; }
 		}
 
-		private FilePath assemblyKeyFile = FilePath.Empty;
-		public FilePath AssemblyKeyFile {
-			get { return assemblyKeyFile; }
-			set { assemblyKeyFile = value; }
-		}
-		
+		public FilePath AssemblyKeyFile { get; set; } = FilePath.Empty;
+
 		public virtual string OutputAssembly {
 			get { return assembly; }
 			set { assembly = value; }
@@ -114,11 +109,10 @@ namespace MonoDevelop.Projects
 		
 		public virtual CompileTarget CompileTarget {
 			get {
-				DotNetProject prj = ParentItem as DotNetProject;
-				if (prj != null)
+				if (ParentItem is DotNetProject prj)
 					return prj.CompileTarget;
-				else
-					return CompileTarget.Library;
+
+				return CompileTarget.Library;
 			}
 		}
 
@@ -137,23 +131,29 @@ namespace MonoDevelop.Projects
 				?? matches.FirstOrDefault (c => c.Platform == "");
 		}
 
+		TargetFramework targetFramework;
+
 		public TargetFramework TargetFramework {
 			get {
-				DotNetProject prj = ParentItem as DotNetProject;
-				if (prj != null)
+				if (targetFramework != null)
+					return targetFramework;
+
+				if (ParentItem is DotNetProject prj)
 					return prj.TargetFramework;
-				else
-					return Services.ProjectService.DefaultTargetFramework;
+
+				return Services.ProjectService.DefaultTargetFramework;
+			}
+			internal set {
+				targetFramework = value;
 			}
 		}
 		
 		public TargetRuntime TargetRuntime {
 			get {
-				DotNetProject prj = ParentItem as DotNetProject;
-				if (prj != null)
+				if (ParentItem is DotNetProject prj)
 					return prj.TargetRuntime;
-				else
-					return Runtime.SystemAssemblyService.DefaultRuntime;
+
+				return Runtime.SystemAssemblyService.DefaultRuntime;
 			}
 		}
 		
@@ -176,6 +176,8 @@ namespace MonoDevelop.Projects
 		
 		public FilePath CompiledOutputName {
 			get {
+				if (OutputAssembly == null)
+					return FilePath.Empty;
 				FilePath fullPath = OutputDirectory.Combine (OutputAssembly);
 				if (OutputAssembly.EndsWith (".dll") || OutputAssembly.EndsWith (".exe"))
 					return fullPath;
@@ -187,8 +189,10 @@ namespace MonoDevelop.Projects
 		protected override void OnCopyFrom (ItemConfiguration configuration, bool isRename)
 		{
 			base.OnCopyFrom (configuration, isRename);
-			DotNetProjectConfiguration conf = (DotNetProjectConfiguration) configuration;
-			
+			var conf = (DotNetProjectConfiguration) configuration;
+
+			AppendTargetFrameworkToOutputPath = conf.AppendTargetFrameworkToOutputPath;
+			TargetFrameworkShortName = conf.TargetFrameworkShortName ?? "unknown";
 			assembly = conf.assembly;
 			sourcePath = conf.sourcePath;
 			bool notifyParentItem = ParentItem != null;
@@ -197,20 +201,73 @@ namespace MonoDevelop.Projects
 			CompilationParameters = conf.compilationParameters != null ? conf.compilationParameters.Clone () : null;
 			if (notifyParentItem)
 				ParentItem?.NotifyModified ("CompilerParameters");
-			signAssembly = conf.signAssembly;
-			delaySign = conf.delaySign;
-			assemblyKeyFile = conf.assemblyKeyFile;
+			SignAssembly = conf.SignAssembly;
+			DelaySign = conf.DelaySign;
+			AssemblyKeyFile = conf.AssemblyKeyFile;
 		}
-		
-		public new DotNetProject ParentItem {
-			get { return (DotNetProject) base.ParentItem; }
-		}
+
+		public new DotNetProject ParentItem => (DotNetProject)base.ParentItem;
 
 		public virtual IEnumerable<string> GetDefineSymbols ()
 		{
 			if (CompilationParameters != null)
 				return CompilationParameters.GetDefineSymbols ();
 			return new string[0];
+		}
+
+		public override ConfigurationSelector Selector {
+			get {
+				string framework = GetMultiTargetFrameworkShortName ();
+				if (string.IsNullOrEmpty (framework))
+					return base.Selector;
+
+				string id = Name;
+				if (!string.IsNullOrEmpty (Platform))
+					id += "|" + Platform;
+
+				var selector = new ItemConfigurationSelector (id);
+				return new DotNetProjectFrameworkConfigurationSelector (selector, framework);
+			}
+		}
+
+		internal DotNetProjectConfiguration GetConfiguration (string framework)
+		{
+			if (ParentItem == null)
+				return null;
+			return ParentItem.GetConfiguration (Name, Platform, framework) as DotNetProjectConfiguration;
+		}
+
+		/// <summary>
+		/// Returns short name for TargetFramework only if the project is a multi-target framework project.
+		/// </summary>
+		internal string GetMultiTargetFrameworkShortName ()
+		{
+			if (IsMultiTarget)
+				return TargetFrameworkShortName;
+			return null;
+		}
+
+		/// <summary>
+		/// Do not want to change the Id for single framework since this is displayed in the UI. Only when getting
+		/// project information such as References for a specific framework do we want to change the Id since it is
+		/// used for caching.
+		/// </summary>
+		internal bool IsMultiTarget { get; set; }
+
+		internal protected override string GetId ()
+		{
+			bool hasPlatform = !string.IsNullOrEmpty (Platform);
+
+			bool hasFramework = IsMultiTarget && !string.IsNullOrEmpty (TargetFrameworkShortName);
+
+			if (hasPlatform && hasFramework)
+				return Name + "|" + Platform + "|" + TargetFrameworkShortName;
+			else if (hasPlatform)
+				return Name + "|" + Platform;
+			else if (hasFramework)
+				return Name + "||" + TargetFrameworkShortName;
+			else
+				return Name;
 		}
 	}
 	

@@ -53,7 +53,7 @@ namespace Mono.MHex
 		
 		public IHexEditorOptions Options {
 			get;
-			set;
+			private set;
 		}
 		
 		IconMargin iconMargin;
@@ -140,11 +140,9 @@ namespace Mono.MHex
 				Repaint ();
 			};
 			HexEditorData.SelectionChanged += HexEditorDataSelectionChanged;
-			HexEditorData.Replaced += delegate(object sender, ReplaceEventArgs e) {
-				if (e.Count > 0) {
-					PurgeLayoutCaches ();
-					Repaint ();
-				}
+			HexEditorData.Changed += delegate {
+				PurgeLayoutCaches ();
+				Repaint ();
 			};
 			style = new HexEditorStyle ();
 			
@@ -171,15 +169,24 @@ namespace Mono.MHex
 			Options.Changed += OptionsChanged;
 		}
 
+
 		protected override void Dispose (bool disposing)
 		{
-			Options.Changed -= OptionsChanged;
-			if (caretTimer != null) { 
-				caretTimer.Elapsed -= UpdateCaret;
-				caretTimer.Dispose ();
-				caretTimer = null;
+			try {
+				base.Dispose (disposing);
+
+				if (disposing) {
+					if (Options != null)
+						Options.Changed -= OptionsChanged;
+					if (caretTimer != null) {
+						caretTimer.Elapsed -= UpdateCaret;
+						caretTimer.Dispose ();
+						caretTimer = null;
+					}
+				}
+			} catch (Exception e) {
+				LoggingService.LogInternalError ("Error while disposing hex editor", e);
 			}
-			base.Dispose (disposing);
 		}
 		
 		public void PurgeLayoutCaches ()

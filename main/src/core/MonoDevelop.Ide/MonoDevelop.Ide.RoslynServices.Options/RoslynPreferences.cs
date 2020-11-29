@@ -32,6 +32,7 @@ using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.Editor.Options;
 using Microsoft.CodeAnalysis.Editor.Shared.Options;
 using Microsoft.CodeAnalysis.Editor.Implementation.TodoComments;
+using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Options;
 using Microsoft.CodeAnalysis.Shared.Options;
 using MonoDevelop.Core;
@@ -45,8 +46,17 @@ namespace MonoDevelop.Ide.RoslynServices.Options
 		public bool FullSolutionAnalysisRuntimeEnabled { get; internal set; } = true;
 		public event EventHandler FullSolutionAnalysisRuntimeEnabledChanged;
 
-		internal PerLanguagePreferences CSharp => languageConfigs [LanguageNames.CSharp];
-		public PerLanguagePreferences For (string languageName) => languageConfigs [languageName];
+		internal PerLanguagePreferences CSharp { get; }
+
+		public PerLanguagePreferences For (string languageName)
+		{
+			lock (languageConfigs) {
+				if (!languageConfigs.TryGetValue (languageName, out var value)) {
+					languageConfigs [languageName] = value = new PerLanguagePreferences(languageName, this);
+				}
+				return value;
+			}
+		}
 
 		// Preferences migrated from the IDE to roslyn keys are held here.
 		internal const string globalKey = "MonoDevelop.RoslynPreferences";
@@ -57,6 +67,7 @@ namespace MonoDevelop.Ide.RoslynServices.Options
 		{
 			foreach (var language in RoslynService.AllLanguages)
 				languageConfigs.Add (language, new PerLanguagePreferences (language, this));
+			CSharp = languageConfigs [LanguageNames.CSharp];
 		}
 
 		public class PerLanguagePreferences
@@ -71,8 +82,13 @@ namespace MonoDevelop.Ide.RoslynServices.Options
 			public readonly ConfigurationProperty<bool> FormatOnPaste;
 			public readonly ConfigurationProperty<bool> PlaceSystemNamespaceFirst;
 			public readonly ConfigurationProperty<bool> SeparateImportDirectiveGroups;
+			public readonly ConfigurationProperty<bool> ShowCompletionItemFilters;
+			public readonly ConfigurationProperty<bool?> ShowItemsFromUnimportedNamespaces;
 			public readonly ConfigurationProperty<bool> SuggestForTypesInNuGetPackages;
 			public readonly ConfigurationProperty<bool> SolutionCrawlerClosedFileDiagnostic;
+			public readonly ConfigurationProperty<bool?> TriggerOnDeletion;
+			readonly Lazy<ConfigurationProperty<bool>> triggerOnTypingLetters;
+			public ConfigurationProperty<bool> TriggerOnTypingLetters => triggerOnTypingLetters.Value;
 
 			internal PerLanguagePreferences (string language, RoslynPreferences preferences)
 			{
@@ -85,7 +101,7 @@ namespace MonoDevelop.Ide.RoslynServices.Options
 				);
 
 				AutoFormattingOnReturn = preferences.Wrap<bool> (
-					new OptionKey (FeatureOnOffOptions.AutoFormattingOnReturn, language),
+					new OptionKey (FormattingOptions.AutoFormattingOnReturn, language),
 					language + ".AutoFormattingOnReturn"
 				);
 
@@ -113,6 +129,17 @@ namespace MonoDevelop.Ide.RoslynServices.Options
 					language + ".SeparateImportDirectiveGroups"
 				);
 
+				ShowCompletionItemFilters = preferences.Wrap<bool> (
+					new OptionKey (CompletionOptions.ShowCompletionItemFilters, language),
+					language + ".ShowCompletionItemFilters"
+				);
+
+				ShowItemsFromUnimportedNamespaces = preferences.Wrap<bool?> (
+					new OptionKey (CompletionOptions.ShowItemsFromUnimportedNamespaces, language),
+					IdeApp.Preferences.AddImportedItemsToCompletionList.Value,
+					language + ".ShowItemsFromUnimportedNamespaces"
+				);
+
 				SuggestForTypesInNuGetPackages = preferences.Wrap (
 					new OptionKey (Microsoft.CodeAnalysis.SymbolSearch.SymbolSearchOptions.SuggestForTypesInNuGetPackages, language),
 					true
@@ -121,6 +148,17 @@ namespace MonoDevelop.Ide.RoslynServices.Options
 				SolutionCrawlerClosedFileDiagnostic = new ClosedFileDiagnosticProperty (preferences.Wrap<bool?> (
 					new OptionKey (ServiceFeatureOnOffOptions.ClosedFileDiagnostic, language)
 				), language, roslynPreferences);
+
+				TriggerOnDeletion = preferences.Wrap<bool?> (
+					new OptionKey (CompletionOptions.TriggerOnDeletion, language),
+					language + ".TriggerOnDeletion"
+				);
+
+				triggerOnTypingLetters = new Lazy<ConfigurationProperty<bool>> (() => preferences.Wrap<bool> (
+					new OptionKey (CompletionOptions.TriggerOnTypingLetters, language),
+					MonoDevelop.Ide.Editor.DefaultSourceEditorOptions.Instance.EnableAutoCodeCompletion,
+					language + ".TriggerOnTypingLetters"
+				));
 			}
 
 			class ClosedFileDiagnosticProperty : ConfigurationProperty<bool>

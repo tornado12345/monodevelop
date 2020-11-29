@@ -15,6 +15,7 @@ namespace MonoDevelop.Core.Execution
 		readonly object lockObj = new object ();
 		ProcessAsyncOperation operation;
 		IDisposable customCancelToken;
+		IDisposable completionRegistration;
 		readonly TaskCompletionSource<int> taskCompletionSource = new TaskCompletionSource<int> ();
 		
 		public ProcessWrapper ()
@@ -35,17 +36,19 @@ namespace MonoDevelop.Core.Execution
 			base.Start ();
 
 			var cs = new CancellationTokenSource ();
-			cs.Token.Register (() => taskCompletionSource.TrySetResult (operation.ExitCode));
-			cs.Token.Register (Cancel);
+			completionRegistration = cs.Token.Register (() => {
+				taskCompletionSource.TrySetResult (operation.ExitCode);
+				Cancel ();
+			});
 
 			// We need these wrappers, as the alternatives are not good enough.
 			// OutputDataReceived does not persist newlines.
 			if (OutputStreamChanged != null) {
-				Task.Run (CaptureOutput, cs.Token);
+				Task.Run (CaptureOutput, cs.Token).Ignore ();
 			}
 
 			if (ErrorStreamChanged != null) {
-				Task.Run (CaptureError, cs.Token);
+				Task.Run (CaptureError, cs.Token).Ignore ();
 			}
 
 			operation = new ProcessAsyncOperation (Task, cs) {
@@ -134,6 +137,8 @@ namespace MonoDevelop.Core.Execution
 			} catch {
 				// Ignore
 			}
+			completionRegistration?.Dispose ();
+			completionRegistration = null;
 		}
 		
 		public event ProcessEventHandler OutputStreamChanged;

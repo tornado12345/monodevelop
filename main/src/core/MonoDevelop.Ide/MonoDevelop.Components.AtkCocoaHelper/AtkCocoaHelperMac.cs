@@ -38,6 +38,7 @@ using Gdk;
 using ObjCRuntime;
 using MetalPerformanceShaders;
 using MonoDevelop.Components.Mac;
+using LoggingService = MonoDevelop.Core.LoggingService;
 
 namespace MonoDevelop.Components.AtkCocoaHelper
 {
@@ -213,12 +214,22 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 
 		public static void SetValue (this Atk.Object o, string stringValue)
 		{
+			SetValue (o, (NSObject) new NSString (stringValue));
+		}
+
+		public static void SetValue (this Atk.Object o, object value)
+		{
+			SetValue (o, NSObject.FromObject (value));
+		}
+
+		static void SetValue (this Atk.Object o, NSObject value)
+		{
 			var nsa = GetNSAccessibilityElement (o);
 			if (nsa == null) {
 				return;
 			}
 
-			nsa.AccessibilityValue = new NSString (stringValue);
+			nsa.AccessibilityValue = value;
 		}
 
 		public static void SetUrl (this Atk.Object o, string url)
@@ -258,6 +269,11 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 			}
 
 			nsa.AccessibilitySubrole = subrole;
+		}
+
+		public static void SetSubRole (this Atk.Object o, AtkCocoa.SubRoles subrole)
+		{
+			o.SetSubRole (subrole.ToString ());
 		}
 
 		public static void SetTitleUIElement (this Atk.Object o, Atk.Object title)
@@ -312,6 +328,8 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 
 		static readonly IntPtr selSetAccessibilityServesAsTitleForUIElements_Handle = Selector.GetHandle ("setAccessibilityServesAsTitleForUIElements:");
 		static readonly IntPtr selAccessibilityServesAsTitleForUIElements_Handle = Selector.GetHandle ("accessibilityServesAsTitleForUIElements:");
+		static readonly Selector selAccessibilityServesAsTitleForUIElements = new Selector ("accessibilityServesAsTitleForUIElements:");
+
 		public static void SetTitleFor (this Atk.Object o, params Atk.Object [] objects)
 		{
 			var nsa = GetNSAccessibilityElement (o);
@@ -358,6 +376,12 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 				return;
 			}
 
+			// bug #940756 suggests that some elements do not respond to this selector
+			// so check before sending so it doesn't throw an ObjC exception
+			if (!((NSObject)titleNsa).RespondsToSelector (selAccessibilityServesAsTitleForUIElements)) {
+				return;
+			}
+
 			IntPtr ptr = Messaging.IntPtr_objc_msgSend (titleNsa.Handle, selAccessibilityServesAsTitleForUIElements_Handle);
 			using (var array = Runtime.GetNSObject<NSArray> (ptr))
 			using (var copy = array != null ? (NSMutableArray)array.MutableCopy () : new NSMutableArray (1)) {
@@ -372,6 +396,12 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 			var nsa = GetNSAccessibilityElement (o);
 
 			if (nsa == null || titleNsa == null) {
+				return;
+			}
+
+			// bug #940756 suggests that some elements do not respond to this selector
+			// so check before sending so it doesn't throw an ObjC exception
+			if (!((NSObject)titleNsa).RespondsToSelector (selAccessibilityServesAsTitleForUIElements)) {
 				return;
 			}
 
@@ -624,9 +654,31 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 			return new AccessibilityElementProxy (new RealAccessibilityElementButtonProxy ());
 		}
 
-		public static AccessibilityElementProxy TextElementProxy ()
+		public static AccessibilityElementProxy TextElementProxy (Func<string> contents,
+																  Func<int> numberOfCharacters,
+																  Func<int> insertionPointLineNumber,
+																  Func<AtkCocoa.Range, Rectangle> frameForRange,
+																  Func<int, int> lineForIndex,
+																  Func<int, AtkCocoa.Range> rangeForLine,
+																  Func<AtkCocoa.Range, string> stringForRange,
+																  Func<int, AtkCocoa.Range> rangeForIndex,
+																  Func<int, AtkCocoa.Range> styleRangeForIndex,
+																  Func<Point, AtkCocoa.Range> rangeForPosition,
+																  Func<AtkCocoa.Range> visibleCharacterRange)
 		{
-			return new AccessibilityElementProxy (new RealAccessibilityElementNavigableStaticTextProxy ());
+			return new AccessibilityElementProxy (new RealAccessibilityElementNavigableStaticTextProxy () {
+				Contents = contents ?? throw new ArgumentNullException (nameof (contents)),
+				NumberOfCharacters = numberOfCharacters ?? throw new ArgumentNullException (nameof (numberOfCharacters)),
+				InsertionPointLineNumber = insertionPointLineNumber ?? throw new ArgumentNullException (nameof (insertionPointLineNumber)),
+				GetFrameForRange = frameForRange ?? throw new ArgumentNullException (nameof (frameForRange)),
+				GetLineForIndex = lineForIndex ?? throw new ArgumentNullException (nameof (lineForIndex)),
+				GetRangeForLine = rangeForLine ?? throw new ArgumentNullException (nameof (rangeForLine)),
+				GetStringForRange = stringForRange ?? throw new ArgumentNullException (nameof (stringForRange)),
+				GetRangeForIndex = rangeForIndex ?? throw new ArgumentNullException (nameof (rangeForIndex)),
+				GetStyleRangeForIndex = styleRangeForIndex ?? throw new ArgumentNullException (nameof (styleRangeForIndex)),
+				GetRangeForPosition = rangeForPosition ?? throw new ArgumentNullException (nameof (rangeForPosition)),
+				GetVisibleCharacterRange = visibleCharacterRange ?? throw new ArgumentNullException (nameof (visibleCharacterRange))
+			});
 		}
 
 		public string Identifier {
@@ -957,6 +1009,26 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 				}
 
 				p.AccessibilityIndex = value;
+			}
+		}
+
+		public bool Focused {
+			get {
+				var p = realProxyElement;
+				if (p == null) {
+					throw new Exception ("Not a proxy element");
+				}
+
+				return p.AccessibilityFocused;
+			}
+
+			set {
+				var p = realProxyElement;
+				if (p == null) {
+					throw new Exception ("Not a proxy element");
+				}
+
+				p.AccessibilityFocused = value;
 			}
 		}
 	}
@@ -1522,20 +1594,35 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 
 		public override nint AccessibilityInsertionPointLineNumber {
 			get {
-				return InsertionPointLineNumber ();
+				try {
+					return InsertionPointLineNumber ();
+				} catch (Exception e) {
+					LoggingService.LogInternalError (e);
+					return -1;
+				}
 			}
 		}
 
 		public override nint AccessibilityNumberOfCharacters {
 			get {
-				return NumberOfCharacters ();
+				try {
+					return NumberOfCharacters ();
+				} catch (Exception e) {
+					LoggingService.LogInternalError (e);
+					return -1;
+				}
 			}
 		}
 
 		public override NSRange AccessibilityVisibleCharacterRange {
 			get {
-				var realRange = GetVisibleCharacterRange ();
-				return new NSRange (realRange.Location, realRange.Length);
+				try {
+					var realRange = GetVisibleCharacterRange ();
+					return new NSRange (realRange.Location, realRange.Length);
+				} catch (Exception e) {
+					LoggingService.LogInternalError (e);
+					return default;
+				}
 			}
 		}
 
@@ -1561,7 +1648,13 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 			}
 
 			var realRange = new AtkCocoa.Range { Location = (int)range.Location, Length = (int)range.Length };
-			var frame = GetFrameForRange (realRange);
+			Rectangle frame;
+			try {
+				frame = GetFrameForRange (realRange);
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+				return CGRect.Empty;
+			}
 
 			int parentX, parentY;
 
@@ -1582,43 +1675,73 @@ namespace MonoDevelop.Components.AtkCocoaHelper
 		[Export ("accessibilityLineForIndex:")]
 		nint AccessibilityLineForIndex (nint index)
 		{
-			return GetLineForIndex ((int)index);
+			try {
+				return GetLineForIndex ((int)index);
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+				return -1;
+			}
 		}
 
 		[Export ("accessibilityRangeForLine:")]
 		NSRange AccessibilityRangeForLine (nint line)
 		{
-			var range = GetRangeForLine ((int)line + 1);
-			return new NSRange (range.Location, range.Length);
+			try {
+				var range = GetRangeForLine ((int)line + 1);
+				return new NSRange (range.Location, range.Length);
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+				return default;
+			}
 		}
 
 		[Export ("accessibilityStringForRange:")]
 		string AccessibilityStringForRange (NSRange range)
 		{
-			var realRange = new AtkCocoa.Range { Location = (int)range.Location, Length = (int)range.Length };
-			return GetStringForRange (realRange);
+			try {
+				var realRange = new AtkCocoa.Range { Location = (int)range.Location, Length = (int)range.Length };
+				return GetStringForRange (realRange);
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+				return null;
+			}
 		}
 
 		[Export ("accessibilityRangeForIndex:")]
 		NSRange AccessibilityRangeForIndex (nint index)
 		{
-			var realRange = GetRangeForIndex ((int)index);
-			return new NSRange (realRange.Location, realRange.Length);
+			try {
+				var realRange = GetRangeForIndex ((int)index);
+				return new NSRange (realRange.Location, realRange.Length);
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+				return default;
+			}
 		}
 
 		[Export ("accessibilityStyleRangeForIndex:")]
 		NSRange AccessibililtyStyleRangeForIndex (nint index)
 		{
-			var realRange = GetStyleRangeForIndex ((int)index);
-			return new NSRange (realRange.Location, realRange.Length);
+			try {
+				var realRange = GetStyleRangeForIndex ((int)index);
+				return new NSRange (realRange.Location, realRange.Length);
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+				return default;
+			}
 		}
 
 		[Export ("accessibilityRangeForPosition:")]
 		NSRange AccessibilityRangeForPosition (CGPoint position)
 		{
-			var point = new Point ((int)position.X, (int)position.Y);
-			var realRange = GetRangeForPosition (point);
-			return new NSRange (realRange.Location, realRange.Length);
+			try {
+				var point = new Point ((int)position.X, (int)position.Y);
+				var realRange = GetRangeForPosition (point);
+				return new NSRange (realRange.Location, realRange.Length);
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+				return default;
+			}
 		}
 	}
 }

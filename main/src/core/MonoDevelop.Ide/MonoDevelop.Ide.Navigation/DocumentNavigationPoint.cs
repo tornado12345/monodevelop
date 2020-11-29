@@ -31,6 +31,7 @@ using System;
 using System.Threading.Tasks;
 using MonoDevelop.Core;
 using MonoDevelop.Ide.Gui;
+using MonoDevelop.Projects;
 
 namespace MonoDevelop.Ide.Navigation
 {
@@ -47,8 +48,11 @@ namespace MonoDevelop.Ide.Navigation
 		FilePath fileName;
 		string project;
 		
+		bool isDocument;
+
 		public DocumentNavigationPoint (Document doc)
 		{
+			isDocument = true;
 			SetDocument (doc);
 		}
 
@@ -80,7 +84,7 @@ namespace MonoDevelop.Ide.Navigation
 		{
 			OnDocumentClosing ();
 			fileName = doc.FileName;
-			project = doc.HasProject ? doc.Project.ItemId : null;
+			project = doc.Owner is SolutionItem item ? item.ItemId : null;
 			if (fileName == FilePath.Null) {
 				// If the document is not a file, dispose the navigation point because the document can't be reopened
 				Dispose ();
@@ -112,7 +116,14 @@ namespace MonoDevelop.Ide.Navigation
 					break;
 				}
 			}
-			return await IdeApp.Workbench.OpenDocument (new FileOpenInformation (fileName, p, true));
+
+			//in case the document was reopened we want to set again
+			var document = await IdeApp.Workbench.OpenDocument (new FileOpenInformation (fileName, p, true));
+			if (isDocument) {
+				SetDocument (document);
+			}
+
+			return document;
 		}
 		
 		public override string DisplayName {

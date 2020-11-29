@@ -26,73 +26,66 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using MonoDevelop.Core;
-using System.Collections.Generic;
-using MonoDevelop.Core.Instrumentation;
-using MonoDevelop.Projects;
-using MonoDevelop.Ide.Gui;
-using MonoDevelop.Ide;
-using ICSharpCode.NRefactory.TypeSystem;
-using MonoDevelop.Ide.TypeSystem;
-using MonoDevelop.Core.Text;
-using Gtk;
 using System.Linq;
+using System.Collections.Generic;
+using MonoDevelop.Core;
+using MonoDevelop.Core.Text;
 using MonoDevelop.Components.Commands;
+using MonoDevelop.Ide;
 
 namespace MonoDevelop.Components.MainToolbar
 {
 	class CommandSearchCategory : SearchCategory
 	{
-		static readonly List<Tuple<Command, string>> allCommands;
+		static readonly Mono.Addins.RuntimeAddin currentRuntimeAddin;
+		static readonly string hiddenCategory = GettextCatalog.GetString ("Hidden");
+
+		static IEnumerable<Command> GetAllCommands ()
+		{
+			Runtime.AssertMainThread ();
+
+			foreach (var cmd in IdeApp.CommandService.GetCommands ()) {
+				if ((cmd as ActionCommand)?.CommandArray != true && cmd.Category != hiddenCategory) 
+					yield return cmd;
+			}
+		}
+
 
 		static CommandSearchCategory ()
 		{
-			var hiddenCategory = GettextCatalog.GetString ("Hidden");
-			allCommands = IdeApp.CommandService.GetCommands ()
-			                    .Where (cmd => (cmd as ActionCommand)?.CommandArray != true && cmd.Category != hiddenCategory)
-			                    .Select(cmd => Tuple.Create (cmd, cmd.DisplayName))
-			                    .ToList();
+			// The AddinManager is not thread safe, so we need to make sure we're
+			// calling from the main thread.
+			Runtime.AssertMainThread ();
+			currentRuntimeAddin = Mono.Addins.AddinManager.CurrentAddin;
 		}
 
 		public CommandSearchCategory () : base (GettextCatalog.GetString("Commands"))
 		{
+			sortOrder = CommandCategoryOrder;
 		}
 
-		string[] validTags = new [] { "cmd", "command", "c" };
-
-		public override string [] Tags {
-			get {
-				return validTags;
-			}
-		}
-
-		public override bool IsValidTag (string tag)
-		{
-			return validTags.Any (t => t == tag);
-		}
+		public override string [] Tags { get; } = { "cmd", "command", "c" };
+		public override bool IsValidTag (string tag) => Array.IndexOf (Tags, tag) >= 0;
 
 		public override Task GetResults (ISearchResultCallback searchResultCallback, SearchPopupSearchPattern pattern, CancellationToken token)
 		{
-			return Task.Run (delegate {
-				try {
-					if (pattern.HasLineNumber)
-						return;
-					CommandTargetRoute route = new CommandTargetRoute (MainToolbar.LastCommandTarget);
-					var matcher = StringMatcher.GetMatcher (pattern.Pattern, false);
+			if (pattern.HasLineNumber)
+				return Task.CompletedTask;
+			var route = new CommandTargetRoute (IdeApp.CommandService.LastCommandTarget);
+			var matcher = StringMatcher.GetMatcher (pattern.Pattern, false);
+			return Runtime.RunInMainThread (() => {
+				foreach (var cmd in GetAllCommands ()) {
+					if (token.IsCancellationRequested)
+						break;
+					var matchString = cmd.DisplayName;
 
-					foreach (var cmdTuple in allCommands) {
-						if (token.IsCancellationRequested)
-							break;
-						var cmd = cmdTuple.Item1;
-						var matchString = cmdTuple.Item2;
-						int rank;
-
-						if (matcher.CalcMatchRank (matchString, out rank))
-							searchResultCallback.ReportResult (new CommandResult (cmd, null, route, pattern.Pattern, matchString, rank));
+					if (matcher.CalcMatchRank (matchString, out var rank)) {
+						if ((cmd as ActionCommand)?.RuntimeAddin == currentRuntimeAddin)
+							rank += 1; // we prefer commands comming from the addin
+						searchResultCallback.ReportResult (new CommandResult (cmd, null, route, pattern.Pattern, matchString, rank));
 					}
-				} catch (OperationCanceledException) {
 				}
-			}, token);
+			});
 		}
 	}
 }

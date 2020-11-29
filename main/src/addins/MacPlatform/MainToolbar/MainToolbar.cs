@@ -70,11 +70,11 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 
 		void AttachToolbarEvents (SearchBar bar)
 		{
-			bar.Changed += (o, e) => {
-				SearchEntryChanged?.Invoke (o, e);
+			bar.PerformCommand += (o, e) => {
+				PerformCommand?.Invoke (o, e);
 			};
 			bar.KeyPressed += (o, e) => {
-				SearchEntryKeyPressed?.Invoke (o, e);
+				SearchEntryChanged?.Invoke (o, e);
 			};
 			bar.LostFocus += (o, e) => {
 				SearchEntryLostFocus?.Invoke (o, e);
@@ -103,7 +103,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 
 		void Focus(Gtk.DirectionType direction)
 		{
-			awesomeBar.Window.MakeFirstResponder (direction == Gtk.DirectionType.TabForward ? (NSView)awesomeBar.RunButton : (NSView)awesomeBar.SearchBar);
+			awesomeBar.Window?.MakeFirstResponder (direction == Gtk.DirectionType.TabForward ? (NSView)awesomeBar.RunButton : (NSView)awesomeBar.SearchBar);
 		}
 
 		Action<Gtk.DirectionType> exitAction;
@@ -209,6 +209,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 		public event EventHandler RunButtonClicked;
 		public event EventHandler SearchEntryChanged;
 		public event EventHandler<Xwt.KeyEventArgs> SearchEntryKeyPressed;
+		public event EventHandler<SearchEntryCommandArgs> PerformCommand;
 		public event EventHandler SearchEntryLostFocus;
 
 		#pragma warning disable 0067
@@ -235,7 +236,6 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				};
 				buttonBars.Add (bar);
 			}
-
 			awesomeBar.ButtonBarContainer.ButtonBars = buttonBars;
 		}
 
@@ -360,14 +360,20 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 					entryWidget.Dispose ();
 					entryWidget = entry.gtkWidget = GtkMacInterop.NSViewToGtkWidget (entry);
 
-					var nsWindows = NSApplication.SharedApplication.Windows;
-					var fullscreenToolbarNsWindow = nsWindows.FirstOrDefault (nswin =>
-						nswin.IsVisible && nswin.Description.StartsWith ("<NSToolbarFullScreenWindow", StringComparison.Ordinal));
+					var fullscreenToolbarNsWindow = searchEntry.Window;
+					if (fullscreenToolbarNsWindow == null) { // fallback to old query code and log an internal error
+						LoggingService.LogInternalError ("Getting the main fullscreen IDE window failed, this should never happen", new InvalidOperationException ());
+						#pragma warning disable CS0618
+						//TODO: reenable warning and use SharedApplication.DangerousWindows once XamMac dependency is bumped to 5.10+
+						var nsWindows = NSApplication.SharedApplication.Windows;
+						#pragma warning restore CS0618
+						fullscreenToolbarNsWindow = nsWindows.FirstOrDefault (nswin =>
+							nswin.IsVisible && nswin.Description.StartsWith ("<NSToolbarFullScreenWindow", StringComparison.Ordinal));
+					}
 
 					CGPoint gdkOrigin = ScreenMonitor.GdkPointForNSScreen (searchEntry.Window.Screen);
-
-					entryWidget.Allocation = new Gdk.Rectangle (0, (int)(gdkOrigin.Y + fullscreenToolbarNsWindow.Frame.Height - 20),
-						(int)(gdkOrigin.X + fullscreenToolbarNsWindow.Frame.Width - 16), 0);
+					entryWidget.Allocation = new Gdk.Rectangle ((int)fullscreenToolbarNsWindow.Frame.X, (int)(gdkOrigin.Y + fullscreenToolbarNsWindow.Frame.Height - 20),
+						(int)(fullscreenToolbarNsWindow.Frame.Width - 16), 0);
 				}
 				return entryWidget;
 			}

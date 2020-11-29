@@ -24,23 +24,25 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#nullable enable
+
 using System;
 
 namespace MonoDevelop.Core.Instrumentation
 {
 	public class MemoryProbe
 	{
-		Counter c;
+		readonly Counter c;
 		
 		public MemoryProbe (Counter c)
 		{
 			this.c = c;
-			c++;
+			c.Inc ();
 		}
 		
 		~MemoryProbe ()
 		{
-			c--;
+			c.Dec ();
 		}
 	}
 }

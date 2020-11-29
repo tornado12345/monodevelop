@@ -87,16 +87,18 @@ namespace MonoDevelop.PackageManagement
 			var now = DateTime.UtcNow;
 			Action<SourceCacheContext> cacheContextModifier = c => c.MaxAge = now;
 			bool forceRestore = false;
+			bool isRestoreOriginalAction = true;
 
 			var restoreSummaries = await DependencyGraphRestoreUtility.RestoreAsync (
 				solutionManager,
+				spec,
 				context,
 				new RestoreCommandProvidersCache (),
 				cacheContextModifier,
 				sourceRepositories,
 				Guid.NewGuid (),
 				forceRestore,
-				spec,
+				isRestoreOriginalAction,
 				context.Logger,
 				cancellationToken);
 
@@ -247,6 +249,10 @@ namespace MonoDevelop.PackageManagement
 			var dotNetCoreNuGetProject = project as DotNetCoreNuGetProject;
 			if (dotNetCoreNuGetProject?.ProjectRequiresReloadAfterRestore () == true)
 				return dotNetCoreNuGetProject.DotNetProject;
+
+			var packageReferenceNuGetProject = project as PackageReferenceNuGetProject;
+			if (packageReferenceNuGetProject?.ProjectRequiresReloadAfterRestore () == true)
+				return packageReferenceNuGetProject.DotNetProject;
 
 			return null;
 		}

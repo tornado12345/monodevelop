@@ -37,9 +37,9 @@ namespace MonoDevelop.Core.Assemblies
 	/// Unique identifier for a target framework.
 	/// </summary>
 	[Serializable]
-	public class TargetFrameworkMoniker : IEquatable<TargetFrameworkMoniker>
+	public class TargetFrameworkMoniker : IEquatable<TargetFrameworkMoniker>, IComparable<TargetFrameworkMoniker>
 	{
-		string identifier, version, profile;
+		string identifier, version, profile, shortName;
 		
 		TargetFrameworkMoniker ()
 		{
@@ -86,6 +86,17 @@ namespace MonoDevelop.Core.Assemblies
 		/// Optional. A named subset of a particular framework version, e.g. "Client".
 		/// </summary>
 		public string Profile { get { return profile; } }
+
+		/// <summary>
+		/// Short name (e.g. net471, netcoreapp2.0)
+		/// </summary>
+		public string ShortName {
+			get {
+				if (shortName == null)
+					shortName = GetShortFrameworkName (this);
+				return shortName;
+			}
+		}
 
 		public static TargetFrameworkMoniker Parse (string value)
 		{
@@ -222,7 +233,65 @@ namespace MonoDevelop.Core.Assemblies
 				return ((object)b) != null;
 			return !a.Equals (b);
 		}
-		
+
+		static string GetShortFrameworkName (TargetFrameworkMoniker framework)
+		{
+			if (IsNetFramework (framework))
+				return GetShortNetFrameworkName (framework);
+
+			string identifier = GetShortFrameworkIdentifier (framework);
+			return identifier + framework.Version;
+		}
+
+		static string GetShortFrameworkIdentifier (TargetFrameworkMoniker framework)
+		{
+			if (string.IsNullOrEmpty (framework.Identifier))
+				return string.Empty;
+
+			string shortFrameworkIdentifier = framework.Identifier;
+
+			if (shortFrameworkIdentifier [0] == '.')
+				shortFrameworkIdentifier = shortFrameworkIdentifier.Substring (1);
+
+			return shortFrameworkIdentifier.ToLower ();
+		}
+
+		static string GetShortNetFrameworkName (TargetFrameworkMoniker framework)
+		{
+			return "net" + framework.Version.Replace (".", string.Empty);
+		}
+
+		static bool IsNetFramework (TargetFrameworkMoniker framework)
+		{
+			return framework.Identifier == ".NETFramework";
+		}
+
+		public int CompareTo (TargetFrameworkMoniker other)
+		{
+			int result = string.Compare (Identifier, other.Identifier, StringComparison.OrdinalIgnoreCase);
+			if (result != 0)
+				return result;
+
+			if (System.Version.TryParse (version, out Version v1) && System.Version.TryParse (other.Version, out Version v2)) {
+				result = v1.CompareTo (v2);
+				if (result != 0)
+					return result;
+			} else {
+				result = string.Compare (Version, other.Version, StringComparison.OrdinalIgnoreCase);
+				if (result != 0)
+					return result;
+			}
+
+			return string.Compare (profile ?? string.Empty, other.Profile ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+		}
+
+		internal TargetFrameworkMoniker WithShortName (string name)
+		{
+			return new TargetFrameworkMoniker (identifier, version, profile) {
+				shortName = name
+			};
+		}
+
 		public static TargetFrameworkMoniker Default {
 			get { return NET_1_1; }
 		}
@@ -269,6 +338,10 @@ namespace MonoDevelop.Core.Assemblies
 
 		public static TargetFrameworkMoniker NET_4_7_1 {
 			get { return new TargetFrameworkMoniker ("4.7.1"); }
+		}
+
+		public static TargetFrameworkMoniker NET_4_7_2 {
+			get { return new TargetFrameworkMoniker ("4.7.2"); }
 		}
 
 		public static TargetFrameworkMoniker PORTABLE_4_0 {

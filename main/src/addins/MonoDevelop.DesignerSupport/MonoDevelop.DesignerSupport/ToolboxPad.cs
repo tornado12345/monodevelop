@@ -33,6 +33,7 @@ using MonoDevelop.Ide.Gui;
 using MonoDevelop.Components;
 using Xwt;
 using Gtk;
+using MonoDevelop.DesignerSupport.Toolbox;
 #if MAC
 using MonoDevelop.Components.Mac;
 #endif
@@ -41,6 +42,7 @@ namespace MonoDevelop.DesignerSupport
 {
 	public class ToolboxPad : PadContent
 	{
+		public const string ToolBoxDragDropFormat = "MonoDevelopToolBox";
 		Gtk.Widget widget;
 
 #if MAC
@@ -53,24 +55,22 @@ namespace MonoDevelop.DesignerSupport
 #if MAC
 			this.window = window;
 			toolbox = new Toolbox.MacToolbox (DesignerSupport.Service.ToolboxService, window);
-			widget = GtkMacInterop.NSViewToGtkWidget (toolbox);
-			widget.CanFocus = true;
-			widget.Sensitive = true;
-			widget.KeyPressEvent += toolbox.OnKeyPressed;
-			widget.KeyReleaseEvent += toolbox.KeyReleased;
+			widget = new GtkNSViewHost (toolbox);
 
+			widget.DragDataGet += Widget_DragDataGet;
 			widget.DragBegin += Widget_DragBegin;
 			widget.DragEnd += Widget_DragEnd;
-			widget.Focused += Widget_Focused;
 
 			this.window.PadContentShown += Container_PadContentShown;
 			this.window.PadContentHidden += Container_PadContentHidden;
 
-			toolbox.ContentFocused += Toolbox_ContentFocused;
 			toolbox.DragSourceSet += Toolbox_DragSourceSet;
 			toolbox.DragBegin += Toolbox_DragBegin;
-
+		
 			widget.ShowAll ();
+
+			toolbox.Refresh ();
+
 #else
 			widget = new Toolbox.Toolbox (DesignerSupport.Service.ToolboxService, window);
 #endif
@@ -78,17 +78,17 @@ namespace MonoDevelop.DesignerSupport
 
 #if MAC
 
-		void Container_PadContentShown (object sender, EventArgs args) => toolbox.Hidden = false;
+		void Container_PadContentShown (object sender, EventArgs args)
+		{
+			//sanity check
+			isDragging = false;
+			toolbox.Hidden = false;
+		}
 		void Container_PadContentHidden (object sender, EventArgs args) => toolbox.Hidden = true;
 
 		private void Widget_DragEnd (object o, DragEndArgs args)
 		{
 			isDragging = false;
-		}
-
-		void Widget_Focused (object sender, EventArgs args)
-		{
-			toolbox.FocusSelectedView();
 		}
 
 		void Widget_DragBegin (object sender, DragBeginArgs args)
@@ -101,15 +101,16 @@ namespace MonoDevelop.DesignerSupport
 
 		void Toolbox_DragSourceSet (object sender, Gtk.TargetEntry [] e)
 		{
-			targets = new Gtk.TargetList ();
+			targets = CreateDefaultTargeList ();
 			targets.AddTable (e);
 		}
 
-		void Toolbox_ContentFocused (object sender, EventArgs args)
+		void Widget_DragDataGet (object o, DragDataGetArgs args)
 		{
-			if (!widget.HasFocus) {
-				widget.HasFocus = true;
-				toolbox.FocusSelectedView ();
+			if (toolbox.SelectedNode is IDragDataToolboxNode node) {
+				foreach (var format in node.Formats) {
+					args.SelectionData.Set (Gdk.Atom.Intern (format, false), 8, node.GetData (format));
+				}
 			}
 		}
 
@@ -121,7 +122,11 @@ namespace MonoDevelop.DesignerSupport
 				DesignerSupport.Service.ToolboxService.SelectItem (selectedNode);
 
 				Gtk.Drag.SourceUnset (widget);
-
+				if (selectedNode is IDragDataToolboxNode node) {
+					foreach (var format in node.Formats) {
+						targets.Add (format, 0, 0);
+					}
+				}
 				// Gtk.Application.CurrentEvent and other copied gdk_events seem to have a problem
 				// when used as they use gdk_event_copy which seems to crash on de-allocating the private slice.
 				IntPtr currentEvent = GtkWorkarounds.GetCurrentEventHandle ();
@@ -132,7 +137,11 @@ namespace MonoDevelop.DesignerSupport
 			}
 		}
 
-		Gtk.TargetList targets = new Gtk.TargetList ();
+		Gtk.TargetList targets = CreateDefaultTargeList ();
+
+		private static TargetList CreateDefaultTargeList () =>
+			new Gtk.TargetList (new TargetEntry [] { new TargetEntry (ToolBoxDragDropFormat, TargetFlags.OtherWidget, 0) });
+
 		bool isDragging;
 
 		public override void Dispose ()
@@ -144,17 +153,14 @@ namespace MonoDevelop.DesignerSupport
 			}
 
 			if (widget != null) {
+				widget.DragDataGet -= Widget_DragDataGet;
 				widget.DragBegin -= Widget_DragBegin;
 				widget.DragEnd -= Widget_DragEnd;
-				widget.Focused -= Widget_Focused;
-				widget.KeyPressEvent -= toolbox.OnKeyPressed;
-				widget.KeyReleaseEvent -= toolbox.KeyReleased;
 				widget.Destroy ();
 				widget.Dispose ();
 				widget = null;
 			}
 			if (toolbox != null) {
-				toolbox.ContentFocused -= Toolbox_ContentFocused;
 				toolbox.DragBegin -= Toolbox_DragBegin;
 				toolbox.DragSourceSet -= Toolbox_DragSourceSet;
 				toolbox.Dispose ();

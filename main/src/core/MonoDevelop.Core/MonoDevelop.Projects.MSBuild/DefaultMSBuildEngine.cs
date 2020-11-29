@@ -61,6 +61,7 @@ namespace MonoDevelop.Projects.MSBuild
 			public MSBuildProject Project;
 			public List<MSBuildItemEvaluated> EvaluatedItemsIgnoringCondition = new List<MSBuildItemEvaluated> ();
 			public List<MSBuildItemEvaluated> EvaluatedItems = new List<MSBuildItemEvaluated> ();
+			public List<MSBuildItemEvaluated> EvaluatedItemDefinitions = new List<MSBuildItemEvaluated> ();
 			public Dictionary<string,PropertyInfo> Properties = new Dictionary<string, PropertyInfo> (StringComparer.OrdinalIgnoreCase);
 			public Dictionary<MSBuildImport,string> Imports = new Dictionary<MSBuildImport, string> ();
 			public Dictionary<string,string> GlobalProperties = new Dictionary<string, string> (StringComparer.OrdinalIgnoreCase);
@@ -97,6 +98,7 @@ namespace MonoDevelop.Projects.MSBuild
 			public Regex DirectoryExcludeRegex;
 			public Regex RemoveRegex;
 			public bool Condition;
+			public string [] IncludeSplit;
 
 			public List<GlobInfo> Updates;
 			public Regex UpdateRegex;
@@ -211,6 +213,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 			pi.EvaluatedItemsIgnoringCondition.Clear ();
 			pi.EvaluatedItems.Clear ();
+			pi.EvaluatedItemDefinitions.Clear ();
 			pi.Properties.Clear ();
 			pi.Imports.Clear ();
 			pi.Targets.Clear ();
@@ -313,6 +316,8 @@ namespace MonoDevelop.Projects.MSBuild
 						Evaluate (pi, context, (MSBuildItemGroup)ob);
 					else if (ob is MSBuildTarget)
 						Evaluate (pi, context, (MSBuildTarget)ob);
+					else if (ob is MSBuildItemDefinitionGroup)
+						Evaluate (pi, context, (MSBuildItemDefinitionGroup)ob);
 				} else {
 					if (ob is MSBuildPropertyGroup)
 						Evaluate (pi, context, (MSBuildPropertyGroup)ob);
@@ -328,8 +333,9 @@ namespace MonoDevelop.Projects.MSBuild
 
 		void Evaluate (ProjectInfo project, MSBuildEvaluationContext context, MSBuildPropertyGroup group)
 		{
-			if (!string.IsNullOrEmpty (group.Condition) && !SafeParseAndEvaluate (project, context, group.Condition, true))
+			if (!SafeParseAndEvaluate (project, context, group.Condition, true)) {
 				return;
+			}
 
 			foreach (var prop in group.GetProperties ())
 				Evaluate (project, context, prop);
@@ -337,14 +343,11 @@ namespace MonoDevelop.Projects.MSBuild
 
 		void Evaluate (ProjectInfo project, MSBuildEvaluationContext context, MSBuildItemGroup items)
 		{
-			bool conditionIsTrue = true;
-
-			if (!string.IsNullOrEmpty (items.Condition))
-				conditionIsTrue = SafeParseAndEvaluate (project, context, items.Condition);
+			bool conditionIsTrue = SafeParseAndEvaluate (project, context, items.Condition);
 
 			foreach (var item in items.Items) {
 
-				var trueCond = conditionIsTrue && (string.IsNullOrEmpty (item.Condition) || SafeParseAndEvaluate (project, context, item.Condition));
+				var trueCond = conditionIsTrue && SafeParseAndEvaluate (project, context, item.Condition);
 
 				if (!string.IsNullOrEmpty (item.Update)) {
 					var update = context.EvaluateString (item.Update);
@@ -417,7 +420,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 					if (globInclude.Updates == null)
 						globInclude.Updates = new List<GlobInfo> ();
-					globInclude.Updates.Add (new GlobInfo { Include = update, Item = item, UpdateRegex = updateRegex });
+					globInclude.Updates.Add (new GlobInfo { Include = update, IncludeSplit = SplitWildcardFilePath (update), Item = item, UpdateRegex = updateRegex });
 				}
 				project = project.Parent;
 			} while (project != null);
@@ -467,7 +470,7 @@ namespace MonoDevelop.Projects.MSBuild
 			var rootProject = project.GetRootMSBuildProject ();
 
 			foreach (var p in item.Metadata.GetProperties ()) {
-				if (string.IsNullOrEmpty (p.Condition) || SafeParseAndEvaluate (project, context, p.Condition, true)) {
+				if (SafeParseAndEvaluate (project, context, p.Condition, true)) {
 					string evaluatedValue = context.EvaluateString (p.Value);
 					string unevaluatedValue = p.Value;
 
@@ -514,7 +517,10 @@ namespace MonoDevelop.Projects.MSBuild
 		{
 			var exclude = ExcludeToRegex (remove);
 			do {
-				foreach (var globInclude in project.GlobIncludes.Where (g => g.Item.Name == item.Name)) {
+				foreach (var globInclude in project.GlobIncludes) {
+					if (globInclude.Item.Name != item.Name)
+						continue;
+
 					if (globInclude.RemoveRegex != null)
 						exclude = globInclude.RemoveRegex + "|" + exclude;
 					globInclude.RemoveRegex = new Regex (exclude);
@@ -556,7 +562,7 @@ namespace MonoDevelop.Projects.MSBuild
 					}
 				}
 			} else if (IsWildcardInclude (include)) {
-				project.GlobIncludes.Add (new GlobInfo { Item = item, Include = include, ExcludeRegex = excludeRegex, DirectoryExcludeRegex = directoryExcludeRegex, Condition = trueCond });
+				project.GlobIncludes.Add (new GlobInfo { Item = item, Include = include, IncludeSplit = SplitWildcardFilePath (include), ExcludeRegex = excludeRegex, DirectoryExcludeRegex = directoryExcludeRegex, Condition = trueCond });
 				foreach (var eit in ExpandWildcardFilePath (project, context, item, include, directoryExcludeRegex)) {
 					if (excludeRegex != null && excludeRegex.IsMatch (eit.Include))
 						continue;
@@ -638,7 +644,7 @@ namespace MonoDevelop.Projects.MSBuild
 						}
 						// Now override metadata from the new item definition
 						foreach (var c in item.Metadata.GetProperties ()) {
-							if (string.IsNullOrEmpty (c.Condition) || SafeParseAndEvaluate (project, context, c.Condition, true))
+							if (SafeParseAndEvaluate (project, context, c.Condition, true))
 								md [c.Name] = new MSBuildPropertyEvaluated (project.Project, c.Name, c.Value, context.EvaluateString (c.Value));
 						}
 						((MSBuildPropertyGroupEvaluated)newItem.Metadata).SetProperties (md);
@@ -835,7 +841,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 		void Evaluate (ProjectInfo project, MSBuildEvaluationContext context, MSBuildImportGroup imports, bool evalItems)
 		{
-			if (!string.IsNullOrEmpty (imports.Condition) && !SafeParseAndEvaluate (project, context, imports.Condition, true))
+			if (!SafeParseAndEvaluate (project, context, imports.Condition, true))
 				return;
 
 			foreach (var item in imports.Imports)
@@ -844,7 +850,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 		static bool IsWildcardInclude (string include)
 		{
-			return include.IndexOf ('*') != -1;
+			return include.IndexOfAny (wildcards) != -1;
 		}
 
 		IEnumerable<MSBuildItemEvaluated> ExpandWildcardFilePath (ProjectInfo pinfo, MSBuildEvaluationContext context, MSBuildItem sourceItem, string path, Regex directoryExcludeRegex)
@@ -856,17 +862,15 @@ namespace MonoDevelop.Projects.MSBuild
 				return CreateEvaluatedItem (context, pinfo, project, sourceItem, include, file, recursiveDir);
 			};
 			MSBuildProject rootProject = pinfo.GetRootMSBuildProject ();
-			return ExpandWildcardFilePath (rootProject, rootProject.BaseDirectory, FilePath.Null, false, subpath, 0, func, directoryExcludeRegex);
+			return ExpandWildcardFilePath (rootProject, rootProject.BaseDirectory, FilePath.Null, false, subpath, func, directoryExcludeRegex);
 		}
 
 		static IEnumerable<string> GetIncludesForWildcardFilePath (MSBuildProject project, string path, Regex directoryExcludeRegex = null)
 		{
 			var subpath = SplitWildcardFilePath (path);
-		
-			WildcardExpansionFunc<string> func = delegate (string file, string include, string recursiveDir) {
-				return include;
-			};
-			return ExpandWildcardFilePath (project, project.BaseDirectory, FilePath.Null, false, subpath, 0, func, directoryExcludeRegex);
+
+			WildcardExpansionFunc<string> func = (file, include, recursiveDir) => include;
+			return ExpandWildcardFilePath (project, project.BaseDirectory, FilePath.Null, false, subpath, func, directoryExcludeRegex);
 		}
 
 		static string[] SplitWildcardFilePath (string path)
@@ -879,20 +883,21 @@ namespace MonoDevelop.Projects.MSBuild
 
 		delegate T WildcardExpansionFunc<T> (string filePath, string include, string recursiveDir);
 
-		static IEnumerable<T> ExpandWildcardFilePath<T> (MSBuildProject project, FilePath basePath, FilePath baseRecursiveDir, bool recursive, string [] filePath, int index, WildcardExpansionFunc<T> func, Regex directoryExcludeRegex)
+		static IEnumerable<T> ExpandWildcardFilePath<T> (MSBuildProject project, FilePath basePath, FilePath baseRecursiveDir, bool recursive, in ReadOnlySpan<string> filePathInput, WildcardExpansionFunc<T> func, Regex directoryExcludeRegex)
 		{
 			var res = Enumerable.Empty<T> ();
 
-			if (index >= filePath.Length)
+			if (filePathInput.Length == 0)
 				return res;
 
-			var path = filePath [index];
+			var path = filePathInput [0];
+			var filePath = filePathInput.Slice (1);
 
 			if (path == "..")
-				return ExpandWildcardFilePath (project, basePath.ParentDirectory, baseRecursiveDir, recursive, filePath, index + 1, func, directoryExcludeRegex);
+				return ExpandWildcardFilePath (project, basePath.ParentDirectory, baseRecursiveDir, recursive, filePath, func, directoryExcludeRegex);
 
 			if (path == ".")
-				return ExpandWildcardFilePath (project, basePath, baseRecursiveDir, recursive, filePath, index + 1, func, directoryExcludeRegex);
+				return ExpandWildcardFilePath (project, basePath, baseRecursiveDir, recursive, filePath, func, directoryExcludeRegex);
 
 			if (directoryExcludeRegex != null && directoryExcludeRegex.IsMatch (basePath.ToString ().Replace ('/', '\\')))
 				return res;
@@ -902,17 +907,17 @@ namespace MonoDevelop.Projects.MSBuild
 
 			if (path == "**") {
 				// if this is the last component of the path, there isn't any file specifier, so there is no possible match
-				if (index + 1 >= filePath.Length)
+				if (filePath.Length == 0)
 					return res;
 
 				// If baseRecursiveDir has already been set, don't overwrite it.
 				if (baseRecursiveDir.IsNullOrEmpty)
 					baseRecursiveDir = basePath;
 
-				return ExpandWildcardFilePath (project, basePath, baseRecursiveDir, true, filePath, index + 1, func, directoryExcludeRegex);
+				return ExpandWildcardFilePath (project, basePath, baseRecursiveDir, true, filePath, func, directoryExcludeRegex);
 			}
 
-			if (index == filePath.Length - 1) {
+			if (filePath.Length == 0) {
 				// Last path component. It has to be a file specifier.
 				string baseDir = basePath.ToRelative (project.BaseDirectory).ToString ().Replace ('/', '\\');
 				if (baseDir == ".")
@@ -920,7 +925,7 @@ namespace MonoDevelop.Projects.MSBuild
 				else if (!baseDir.EndsWith ("\\", StringComparison.Ordinal))
 					baseDir += '\\';
 				var recursiveDir = baseRecursiveDir.IsNullOrEmpty ? FilePath.Null : basePath.ToRelative (baseRecursiveDir);
-				res = res.Concat (Directory.EnumerateFiles (basePath, path).Select (f => func (f, baseDir + Path.GetFileName (f), recursiveDir)));
+				res = FastConcat (res, Directory.GetFiles (basePath, path).Select (f => func (f, baseDir + Path.GetFileName (f), recursiveDir)));
 			} else {
 				// Directory specifier
 				// Look for matching directories.
@@ -929,18 +934,21 @@ namespace MonoDevelop.Projects.MSBuild
 
 				if (path.IndexOfAny (wildcards) != -1) {
 					foreach (var dir in Directory.EnumerateDirectories (basePath, path))
-						res = res.Concat (ExpandWildcardFilePath (project, dir, baseRecursiveDir, false, filePath, index + 1, func, directoryExcludeRegex));
+						res = FastConcat (res, ExpandWildcardFilePath (project, dir, baseRecursiveDir, false, filePath, func, directoryExcludeRegex));
 				} else
-					res = res.Concat (ExpandWildcardFilePath (project, basePath.Combine (path), baseRecursiveDir, false, filePath, index + 1, func, directoryExcludeRegex));
+					res = FastConcat (res, ExpandWildcardFilePath (project, basePath.Combine (path), baseRecursiveDir, false, filePath, func, directoryExcludeRegex));
 			}
 
 			if (recursive) {
 				// Recursive search. Try to match the remaining subpath in all subdirectories.
 				foreach (var dir in Directory.EnumerateDirectories (basePath))
-					res = res.Concat (ExpandWildcardFilePath (project, dir, baseRecursiveDir, true, filePath, index, func, directoryExcludeRegex));
+					res = FastConcat (res, ExpandWildcardFilePath (project, dir, baseRecursiveDir, true, filePathInput, func, directoryExcludeRegex));
 			}
 
 			return res;
+
+			static IEnumerable<T> FastConcat (IEnumerable<T> first, IEnumerable<T> maybeEmpty)
+				=> maybeEmpty == Enumerable.Empty<T> () ? first : first.Concat (maybeEmpty);
 		}
 
 		static string ExcludeToRegex (string exclude, bool excludeDirectoriesOnly = false)
@@ -1001,7 +1009,7 @@ namespace MonoDevelop.Projects.MSBuild
 				try {
 					context.SetItemContext (include, evaluatedFile, recursiveDir);
 					foreach (var c in sourceItem.Metadata.GetProperties ()) {
-						if (string.IsNullOrEmpty (c.Condition) || SafeParseAndEvaluate (pinfo, context, c.Condition, true))
+						if (SafeParseAndEvaluate (pinfo, context, c.Condition, true))
 							md [c.Name] = new MSBuildPropertyEvaluated (project, c.Name, c.Value, context.EvaluateString (c.Value)) { Condition = c.Condition };
 					}
 				} finally {
@@ -1014,23 +1022,20 @@ namespace MonoDevelop.Projects.MSBuild
 			return it;
 		}
 
-		static char[] wildcards = { '*', '%' };
+		static char[] wildcards = { '*', '?' };
 
 		void Evaluate (ProjectInfo project, MSBuildEvaluationContext context, MSBuildProperty prop)
 		{
-			if (string.IsNullOrEmpty (prop.Condition) || SafeParseAndEvaluate (project, context, prop.Condition, true)) {
-				bool needsItemEvaluation;
-				var val = context.Evaluate (prop.UnevaluatedValue, out needsItemEvaluation);
-				if (needsItemEvaluation)
-					context.SetPropertyNeedsTransformEvaluation (prop.Name);
-				StoreProperty (project, prop.Name, prop.UnevaluatedValue, val);
-				context.SetPropertyValue (prop.Name, val);
+			if (!SafeParseAndEvaluate (project, context, prop.Condition, true)) {
+				return;
 			}
-		}
 
-		MSBuildItemEvaluated Evaluate (ProjectInfo project, MSBuildEvaluationContext context, MSBuildItem item)
-		{
-			return CreateEvaluatedItem (context, project, project.Project, item, context.EvaluateString (item.Include));
+			bool needsItemEvaluation;
+			var val = context.Evaluate (prop.UnevaluatedValue, out needsItemEvaluation);
+			if (needsItemEvaluation)
+				context.SetPropertyNeedsTransformEvaluation (prop.Name);
+			StoreProperty (project, prop.Name, prop.UnevaluatedValue, val);
+			context.SetPropertyValue (prop.Name, val);
 		}
 
 		IReadOnlyList<ProjectInfo> GetImportedProjects (ProjectInfo project, MSBuildImport import)
@@ -1075,6 +1080,9 @@ namespace MonoDevelop.Projects.MSBuild
 					foreach (var it in p.EvaluatedItemsIgnoringCondition) {
 						it.IsImported = true;
 						project.EvaluatedItemsIgnoringCondition.Add (it);
+					}
+					foreach (var it in p.EvaluatedItemDefinitions) {
+						project.EvaluatedItemDefinitions.Add (it);
 					}
 					foreach (var t in p.Targets) {
 						t.IsImported = true;
@@ -1159,7 +1167,7 @@ namespace MonoDevelop.Projects.MSBuild
 			} else
 				basePath = project.Project.BaseDirectory;
 
-			if (!string.IsNullOrEmpty (import.Condition) && !SafeParseAndEvaluate (project, context, import.Condition, true, basePath)) {
+			if (!SafeParseAndEvaluate (project, context, import.Condition, true, basePath)) {
 				// Condition evaluates to false. Keep searching because maybe another value for the path property makes
 				// the condition evaluate to true.
 				keepSearching = true;
@@ -1170,7 +1178,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 			var fileName = Path.GetFileName (path);
 
-			if (fileName.IndexOfAny (new [] { '*', '?' }) == -1) {
+			if (fileName.IndexOfAny (wildcards) == -1) {
 				// Not a wildcard. Keep searching if the file doesn't exist.
 				var result = File.Exists (path) ? new [] { path } : null;
 				keepSearching = result == null;
@@ -1249,11 +1257,24 @@ namespace MonoDevelop.Projects.MSBuild
 				project.Targets.Add (newTarget);
 		}
 
+		void Evaluate (ProjectInfo project, MSBuildEvaluationContext context, MSBuildItemDefinitionGroup items)
+		{
+			bool conditionIsTrue = SafeParseAndEvaluate (project, context, items.Condition);
+
+			foreach (var item in items.Items) {
+				var trueCond = conditionIsTrue && SafeParseAndEvaluate (project, context, item.Condition);
+				if (trueCond) {
+					var it = CreateEvaluatedItem (context, project, project.Project, item, string.Empty);
+					project.EvaluatedItemDefinitions.Add (it);
+				}
+			}
+		}
+
 		ImmutableDictionary<string, ConditionExpression> conditionCache = ImmutableDictionary<string, ConditionExpression>.Empty;
 		bool SafeParseAndEvaluate (ProjectInfo project, MSBuildEvaluationContext context, string condition, bool collectConditionedProperties = false, string customEvalBasePath = null)
 		{
 			try {
-				if (String.IsNullOrEmpty (condition))
+				if (string.IsNullOrEmpty (condition))
 					return true;
 
 				context.CustomFullDirectoryName = customEvalBasePath;
@@ -1412,18 +1433,20 @@ namespace MonoDevelop.Projects.MSBuild
 		{
 			var pi = (ProjectInfo)projectInstance;
 			string filePath = MSBuildProjectService.FromMSBuildPath (pi.Project.BaseDirectory, include);
-			foreach (var g in pi.GlobIncludes.Where (g => g.Condition)) {
-				if (IsIncludedInGlob (g.Include, pi.Project.BaseDirectory, filePath)) {
-					if (g.ExcludeRegex != null) {
-						if (g.ExcludeRegex.IsMatch (include))
-							continue;
-					}
-					if (g.RemoveRegex != null) {
-						if (g.RemoveRegex.IsMatch (include))
-							continue;
-					}
-					yield return g.Item;
+			foreach (var g in pi.GlobIncludes) {
+				if (!g.Condition)
+					continue;
+
+				if (g.ExcludeRegex != null) {
+					if (g.ExcludeRegex.IsMatch (include))
+						continue;
 				}
+				if (g.RemoveRegex != null) {
+					if (g.RemoveRegex.IsMatch (include))
+						continue;
+				}
+				if (IsIncludedInGlob (pi.Project.BaseDirectory, filePath, false, g.IncludeSplit))
+					yield return g.Item;
 			}
 		}
 
@@ -1439,41 +1462,38 @@ namespace MonoDevelop.Projects.MSBuild
 			}
 		}
 
-		bool IsIncludedInGlob (string globInclude, string basePath, FilePath file)
+		bool IsIncludedInGlob (FilePath basePath, FilePath file, bool recursive, in ReadOnlySpan<string> filePath)
 		{
-			var subpath = SplitWildcardFilePath (globInclude);
-			return IsIncludedInGlob (basePath, file, false, subpath, 0);
-		}
-
-		bool IsIncludedInGlob (FilePath basePath, FilePath file, bool recursive, string [] filePath, int index)
-		{
-			if (index >= filePath.Length)
+			if (filePath.Length <= 0)
 				return false;
 
-			var path = filePath [index];
+			var path = filePath [0];
 
 			if (path == "..")
-				return IsIncludedInGlob (basePath.ParentDirectory, file, recursive, filePath, index + 1);
+				return IsIncludedInGlob (basePath.ParentDirectory, file, recursive, filePath.Slice (1));
 
 			if (path == ".")
-				return IsIncludedInGlob (basePath, file, recursive, filePath, index + 1);
+				return IsIncludedInGlob (basePath, file, recursive, filePath.Slice (1));
 
 			if (!Directory.Exists (basePath))
 				return false;
 
 			if (path == "**") {
 				// if this is the last component of the path, there isn't any file specifier, so there is no possible match
-				if (index + 1 >= filePath.Length)
+				if (filePath.Length <= 1)
 					return false;
-				return IsIncludedInGlob (basePath, file, true, filePath, index + 1);
+				return IsIncludedInGlob (basePath, file, true, filePath.Slice (1));
 			}
 
-			if (index == filePath.Length - 1) {
+			if (filePath.Length == 1) {
 				// Last path component. It has to be a file specifier.
 				if (!file.IsChildPathOf (basePath))
 					return false;
-				if (Directory.EnumerateFiles (basePath, path).Any (f => f == file))
-					return true;
+
+				foreach (var f in Directory.EnumerateFiles (basePath, path)) {
+					if (f == file)
+						return true;
+				}
 			} else {
 				// Directory specifier
 				// Look for matching directories.
@@ -1482,21 +1502,26 @@ namespace MonoDevelop.Projects.MSBuild
 
 				if (path.IndexOfAny (wildcards) != -1) {
 					foreach (var dir in Directory.EnumerateDirectories (basePath, path)) {
-						if (IsIncludedInGlob (dir, file, false, filePath, index + 1))
+						if (IsIncludedInGlob (dir, file, false, filePath.Slice (1)))
 							return true;
 					}
-				} else if (IsIncludedInGlob (basePath.Combine (path), file, false, filePath, index + 1))
+				} else if (IsIncludedInGlob (basePath.Combine (path), file, false, filePath.Slice (1)))
 					return true;
 			}
 
 			if (recursive) {
 				// Recursive search. Try to match the remaining subpath in all subdirectories.
 				foreach (var dir in Directory.EnumerateDirectories (basePath))
-					if (IsIncludedInGlob (dir, file, true, filePath, index))
+					if (IsIncludedInGlob (dir, file, true, filePath))
 						return true;
 			}
 
 			return false;
+		}
+
+		internal override IEnumerable<object> GetEvaluatedItemDefinitions (object projectInstance)
+		{
+			return ((ProjectInfo)projectInstance).EvaluatedItemDefinitions;
 		}
 
 		#endregion

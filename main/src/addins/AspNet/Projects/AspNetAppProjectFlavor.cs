@@ -1,4 +1,4 @@
-//
+﻿//
 // AspNetAppProject.cs: ASP.NET "Web Application" project type
 //
 // Authors:
@@ -126,7 +126,7 @@ namespace MonoDevelop.AspNet.Projects
 
 		protected override ProjectFeatures OnGetSupportedFeatures ()
 		{
-			return (base.OnGetSupportedFeatures () | ProjectFeatures.Execute) & ~ProjectFeatures.RunConfigurations;
+			return (base.OnGetSupportedFeatures () | ProjectFeatures.Execute) & ~(ProjectFeatures.RunConfigurations | ProjectFeatures.UserSpecificRunConfigurations);
 		}
 
 		protected override Task<BuildResult> OnBuild (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext)
@@ -692,6 +692,7 @@ namespace MonoDevelop.AspNet.Projects
 				this.name = displayName;
 				this.id = id;
 				this.DesktopApp = app;
+				Image = Ide.Gui.Stock.Browser;
 			}
 
 			public override string Name {
@@ -707,14 +708,14 @@ namespace MonoDevelop.AspNet.Projects
 
 		protected override IEnumerable<ExecutionTarget> OnGetExecutionTargets (ConfigurationSelector configuration)
 		{
-			var apps = new List<ExecutionTarget> ();
-			foreach (var browser in MonoDevelop.Ide.DesktopService.GetApplications ("test.html")) {
+			var result = new ExecutionTargetGroup (GettextCatalog.GetString ("Browser"), "MonoDevelop.AspNet.BrowserExecutionTargets");
+			foreach (var browser in MonoDevelop.Ide.IdeServices.DesktopService.GetApplications ("https://localhost", DesktopApplicationRole.Viewer)) {
 				if (browser.IsDefault)
-					apps.Insert (0, new BrowserExecutionTarget (browser.Id,browser.DisplayName,browser));
+					result.Insert (0, new BrowserExecutionTarget (browser.Id,browser.DisplayName,browser));
 				else
-					apps.Add (new BrowserExecutionTarget (browser.Id,browser.DisplayName,browser));
+					result.Add (new BrowserExecutionTarget (browser.Id,browser.DisplayName,browser));
 			}
-			return apps;
+			yield return result;
 		}
 	}
 }

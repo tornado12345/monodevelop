@@ -98,12 +98,30 @@ namespace MonoDevelop.Projects
 		/// <typeparam name="T">Task return type</typeparam>
 		public Task<T> BindTask<T> (Func<CancellationToken, Task<T>> f)
 		{
-			var t = f (disposeCancellation.Token);
-			lock (activeTasks)
-				activeTasks.Add (t);
+			var taskCompletionSource = new TaskCompletionSource<bool> ();
+			lock (activeTasks) {
+				// Need to register a task before the Func is called otherwise the Dispose could be called whilst the
+				// Func's Task is being run and before the Func's task is registered.
+				if (disposeCancellation.IsCancellationRequested)
+					return Task.FromCanceled<T> (disposeCancellation.Token);
+				activeTasks.Add (taskCompletionSource.Task);
+			}
+			Task<T> t;
+			try {
+				t = f (disposeCancellation.Token);
+			} catch (Exception ex) {
+				// Do not prevent Project.OnDispose being called by leaving the task on the activeTasks list.
+				lock (activeTasks) {
+					taskCompletionSource.SetResult (true);
+					activeTasks.Remove (taskCompletionSource.Task);
+				}
+				return Task.FromException<T> (ex);
+			}
 			t.ContinueWith (tr => {
-				lock (activeTasks)
-					activeTasks.Remove (t);
+				lock (activeTasks) {
+					taskCompletionSource.SetResult (true);
+					activeTasks.Remove (taskCompletionSource.Task);
+				}
 			});
 			return t;
 		}
@@ -117,14 +135,48 @@ namespace MonoDevelop.Projects
 		/// to be tracked. The provided CancellationToken will be signalled when the object is disposed.</param>
 		public Task BindTask (Func<CancellationToken, Task> f)
 		{
-			var t = f (disposeCancellation.Token);
-			lock (activeTasks)
-				activeTasks.Add (t);
+			var taskCompletionSource = new TaskCompletionSource<bool> ();
+			lock (activeTasks) {
+				// Need to register a task before the Func is called otherwise the Dispose could be called whilst the
+				// Func's Task is being run and before the Func's task is registered.
+				if (disposeCancellation.IsCancellationRequested)
+					return Task.FromCanceled (disposeCancellation.Token);
+				activeTasks.Add (taskCompletionSource.Task);
+			}
+			Task t;
+			try {
+				t = f (disposeCancellation.Token);
+			} catch (Exception ex) {
+				// Do not prevent Project.OnDispose being called by leaving the task on the activeTasks list.
+				lock (activeTasks) {
+					taskCompletionSource.SetResult (true);
+					activeTasks.Remove (taskCompletionSource.Task);
+				}
+				return Task.FromException (ex);
+			}
 			t.ContinueWith (tr => {
-				lock (activeTasks)
-					activeTasks.Remove (t);
+				lock (activeTasks) {
+					taskCompletionSource.SetResult (true);
+					activeTasks.Remove (taskCompletionSource.Task);
+				}
 			});
 			return t;
+		}
+
+		/// <summary>
+		/// Gathers all the tasks for this WorkspaceObject and all children that need to finish before
+		/// this object can be disposed.
+		/// </summary>
+		internal void GetAllActiveTasksForDispose (List<Task> tasks)
+		{
+			lock (activeTasks) {
+				disposeCancellation.Cancel ();
+				tasks.AddRange (activeTasks);
+			}
+
+			foreach (var child in GetChildren ()) {
+				child.GetAllActiveTasksForDispose (tasks);
+			}
 		}
 
 		/// <summary>
@@ -210,14 +262,10 @@ namespace MonoDevelop.Projects
 
 			Disposed = true;
 
-			disposeCancellation.Cancel ();
+			var allTasks = new List<Task> ();
+			GetAllActiveTasksForDispose (allTasks);
 
-			Task[] allTasks;
-
-			lock (activeTasks)
-				allTasks = activeTasks.ToArray ();
-
-			if (allTasks.Length > 0)
+			if (allTasks.Count > 0)
 				Task.WhenAll (allTasks).ContinueWith (t => OnDispose (), TaskScheduler.FromCurrentSynchronizationContext ());
 			else
 				OnDispose ();

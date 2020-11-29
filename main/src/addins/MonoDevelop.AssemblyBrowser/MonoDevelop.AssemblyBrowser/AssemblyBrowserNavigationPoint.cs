@@ -23,6 +23,8 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+#nullable enable
+
 using System;
 using System.Linq;
 using MonoDevelop.Core;
@@ -36,42 +38,33 @@ namespace MonoDevelop.AssemblyBrowser
 {
 	class AssemblyBrowserNavigationPoint : DocumentNavigationPoint
 	{
-		ImmutableList<AssemblyLoader> definitions;
-		string idString;
+		List<string> definitions = new List<string> ();
+		string? idString;
 
-		public AssemblyBrowserNavigationPoint (ImmutableList<AssemblyLoader> definitions, AssemblyLoader assembly, string idString) : base (assembly?.FileName)
+		public AssemblyBrowserNavigationPoint (ImmutableList<AssemblyLoader> definitions, AssemblyLoader assembly, string? idString) : base (assembly?.FileName)
 		{
-			this.definitions = definitions;
+			foreach (var def in definitions) {
+				if (def != null)
+					this.definitions.Add (def.FileName);
+			}
 			this.idString = idString;
 		}
 
 		protected override async Task<Document> DoShow ()
 		{
-			Document result = null;
-			foreach (var view in Ide.IdeApp.Workbench.Documents) {
-				if (view.GetContent<AssemblyBrowserViewContent> () != null) {
-					view.Window.SelectWindow ();
-					result = view;
-					break;
-				}
-			}
+			var result = await Ide.IdeApp.Workbench.OpenDocument (AssemblyBrowserDescriptor.Instance);
 
-			if (result == null) {
-				var binding = DisplayBindingService.GetBindings<AssemblyBrowserDisplayBinding> ().FirstOrDefault ();
-				var assemblyBrowserView = binding != null ? binding.GetViewContent () : new AssemblyBrowserViewContent ();
-				assemblyBrowserView.FillWidget ();
-				result = Ide.IdeApp.Workbench.OpenDocument (assemblyBrowserView, true);
-			}
 			if (idString != null) {
 				var view = result.GetContent<AssemblyBrowserViewContent> ();
 				view.Widget.suspendNavigation = true;
-				view.EnsureDefinitionsLoaded (definitions);
+				foreach (var def in definitions) {
+					view.Widget.AddReferenceByFileName (def);
+				}
 				view.Open (idString, expandNode: false);
 			} else if (FileName != null) {
 				var view = result.GetContent<AssemblyBrowserViewContent> ();
 				view.Widget.suspendNavigation = true;
-				view.EnsureDefinitionsLoaded (definitions);
-				await view.Load (FileName);
+				view.Load (FileName);
 			}
 			return result;
 		}
@@ -98,7 +91,7 @@ namespace MonoDevelop.AssemblyBrowser
 				if (!string.IsNullOrEmpty (idString)) {
 					if (!string.IsNullOrEmpty (FileName))
 						return String.Format ("{0} : {1}", base.DisplayName, idString);
-					return idString;
+					return idString ?? "";
 				}
 				return base.DisplayName;
 			}

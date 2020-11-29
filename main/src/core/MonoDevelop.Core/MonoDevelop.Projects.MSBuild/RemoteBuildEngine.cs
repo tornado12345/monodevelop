@@ -42,7 +42,7 @@ namespace MonoDevelop.Projects.MSBuild
 	{
 		RemoteProcessConnection connection;
 		bool alive = true;
-		static int count;
+		static long count;
 		int busy;
 		int buildSessionLoggerId;
 		CancellationTokenSource disposalCancelSource;
@@ -171,7 +171,8 @@ namespace MonoDevelop.Projects.MSBuild
 			try {
 				await connection.SendMessage (new UnloadProjectRequest { ProjectId = projectId }).ConfigureAwait (false);
 			} catch (Exception ex) {
-				LoggingService.LogError ("Project unloading failed", ex);
+				if (alive)
+					LoggingService.LogError ("Project unloading failed", ex);
 				if (!await CheckDisconnected ())
 					throw;
 			}

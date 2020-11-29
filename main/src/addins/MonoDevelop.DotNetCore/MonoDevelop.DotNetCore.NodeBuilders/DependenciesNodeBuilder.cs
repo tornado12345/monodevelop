@@ -25,6 +25,8 @@
 // THE SOFTWARE.
 
 using System;
+using System.Collections;
+using MonoDevelop.DotNetCore.Commands;
 using MonoDevelop.Ide.Gui.Components;
 
 namespace MonoDevelop.DotNetCore.NodeBuilders
@@ -38,6 +40,10 @@ namespace MonoDevelop.DotNetCore.NodeBuilders
 		public override string GetNodeName (ITreeNavigator thisNode, object dataObject)
 		{
 			return DependenciesNode.NodeName;
+		}
+
+		public override Type CommandHandlerType {
+			get { return typeof (DependenciesNodeCommandHandler); }
 		}
 
 		public override void BuildNode (ITreeBuilder treeBuilder, object dataObject, NodeInfo nodeInfo)
@@ -62,22 +68,57 @@ namespace MonoDevelop.DotNetCore.NodeBuilders
 		public override void BuildChildNodes (ITreeBuilder treeBuilder, object dataObject)
 		{
 			var node = (DependenciesNode)dataObject;
-			node.PackageDependencyCache.Refresh ();
+			AddChildren (treeBuilder, node.GetChildNodes ());
+		}
 
-			var packagesNode = new PackageDependenciesNode (node);
-			if (packagesNode.HasChildNodes ())
-				treeBuilder.AddChild (packagesNode);
+		protected virtual void AddChildren (ITreeBuilder treeBuilder, IEnumerable dataObjects)
+		{
+			treeBuilder.AddChildren (dataObjects);
+		}
 
-			var sdkNode = new SdkDependenciesNode (node);
-			treeBuilder.AddChild (sdkNode);
+		public override void OnNodeAdded (object dataObject)
+		{
+			var dependenciesNode = (DependenciesNode)dataObject;
+			dependenciesNode.PackageDependencyCache.PackageDependenciesChanged += OnPackageDependenciesChanged;
+			dependenciesNode.FrameworkReferencesCache.FrameworkReferencesChanged += OnFrameworkReferencesChanged;
+		}
 
-			var assembliesNode = new AssemblyDependenciesNode (node.Project);
-			if (assembliesNode.HasChildNodes ())
-				treeBuilder.AddChild (assembliesNode);
+		public override void OnNodeRemoved (object dataObject)
+		{
+			var dependenciesNode = (DependenciesNode)dataObject;
+			dependenciesNode.PackageDependencyCache.PackageDependenciesChanged -= OnPackageDependenciesChanged;
+			dependenciesNode.FrameworkReferencesCache.FrameworkReferencesChanged -= OnFrameworkReferencesChanged;
+		}
 
-			var projectsNode = new ProjectDependenciesNode (node.Project);
-			if (projectsNode.HasChildNodes ())
-				treeBuilder.AddChild (projectsNode);
+		void OnPackageDependenciesChanged (object sender, EventArgs e)
+		{
+			var cache = (PackageDependencyNodeCache)sender;
+			ITreeBuilder builder = Context.GetTreeBuilder (cache.Project);
+			if (builder == null)
+				return;
+
+			if (builder.MoveToChild (DependenciesNode.NodeName, typeof (DependenciesNode))) {
+				builder.UpdateAll ();
+			}
+		}
+
+		void OnFrameworkReferencesChanged (object sender, EventArgs e)
+		{
+			var cache = (FrameworkReferenceNodeCache)sender;
+			ITreeBuilder builder = Context.GetTreeBuilder (cache.Project);
+			if (builder == null)
+				return;
+
+			if (!builder.MoveToChild (DependenciesNode.NodeName, typeof (DependenciesNode))) {
+				builder.UpdateAll ();
+				return;
+			}
+
+			if (builder.MoveToChild (FrameworkReferencesNode.NodeName, typeof (FrameworkReferencesNode))) {
+				builder.UpdateAll ();
+			} else {
+				builder.UpdateAll ();
+			}
 		}
 	}
 }

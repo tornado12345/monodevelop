@@ -17,82 +17,38 @@
     <Reference Include="System.Core" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Security" />
-    <Reference Include="Microsoft.Web.XmlTransform">
-      <HintPath>..\..\..\packages\Microsoft.Web.Xdt.2.1.2\lib\net40\Microsoft.Web.XmlTransform.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Versioning">
-      <HintPath>..\..\..\packages\NuGet.Versioning.4.8.0\lib\net46\NuGet.Versioning.dll</HintPath>
-    </Reference>
     <Reference Include="Microsoft.CSharp" />
-    <Reference Include="NuGet.LibraryModel">
-      <HintPath>..\..\..\packages\NuGet.LibraryModel.4.8.0\lib\net46\NuGet.LibraryModel.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Frameworks">
-      <HintPath>..\..\..\packages\NuGet.Frameworks.4.8.0\lib\net46\NuGet.Frameworks.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Packaging.Core">
-      <HintPath>..\..\..\packages\NuGet.Packaging.Core.4.8.0\lib\net46\NuGet.Packaging.Core.dll</HintPath>
-    </Reference>
     <Reference Include="System.Xml.Linq" />
-    <Reference Include="System.IO.Compression">
-      <HintPath>..\..\..\packages\System.IO.Compression.4.3.0\lib\net46\System.IO.Compression.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="NuGet.Packaging">
-      <HintPath>..\..\..\packages\NuGet.Packaging.4.8.0\lib\net46\NuGet.Packaging.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Configuration">
-      <HintPath>..\..\..\packages\NuGet.Configuration.4.8.0\lib\net46\NuGet.Configuration.dll</HintPath>
-    </Reference>
     <Reference Include="System.Net.Http" />
     <Reference Include="System.IdentityModel" />
     <Reference Include="System.Net.Http.WebRequest" />
     <Reference Include="System.ServiceModel" />
-    <Reference Include="NuGet.DependencyResolver.Core">
-      <HintPath>..\..\..\packages\NuGet.DependencyResolver.Core.4.8.0\lib\net46\NuGet.DependencyResolver.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.ProjectModel">
-      <HintPath>..\..\..\packages\NuGet.ProjectModel.4.8.0\lib\net46\NuGet.ProjectModel.dll</HintPath>
-    </Reference>
     <Reference Include="System.ComponentModel.Composition" />
-    <Reference Include="NuGet.Commands">
-      <HintPath>..\..\..\packages\NuGet.Commands.4.8.0\lib\net46\NuGet.Commands.dll</HintPath>
-    </Reference>
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="WindowsBase" />
-    <Reference Include="NuGet.Resolver">
-      <HintPath>..\..\..\packages\NuGet.Resolver.4.8.0\lib\net46\NuGet.Resolver.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.PackageManagement">
-      <HintPath>..\..\..\packages\NuGet.PackageManagement.4.8.0\lib\net46\NuGet.PackageManagement.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Common">
-      <HintPath>..\..\..\packages\NuGet.Common.4.8.0\lib\net46\NuGet.Common.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Protocol">
-      <HintPath>..\..\..\packages\NuGet.Protocol.4.8.0\lib\net46\NuGet.Protocol.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Indexing">
-      <HintPath>..\..\..\packages\NuGet.Indexing.4.8.0\lib\net46\NuGet.Indexing.dll</HintPath>
-    </Reference>
-    <Reference Include="NuGet.Credentials">
-      <HintPath>..\..\..\packages\NuGet.Credentials.4.8.0\lib\net46\NuGet.Credentials.dll</HintPath>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>..\..\..\packages\Newtonsoft.Json.10.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="System.Collections.Immutable">
-      <HintPath>..\..\..\build\bin\System.Collections.Immutable.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="System.ValueTuple">
-      <HintPath>..\..\..\packages\System.ValueTuple.4.4.0\lib\net47\System.ValueTuple.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Lucene.Net">
-      <HintPath>..\..\..\packages\Lucene.Net.3.0.3\lib\NET40\Lucene.Net.dll</HintPath>
-    </Reference>
+    <PackageReference Include="NuGet.PackageManagement" Version="$(NuGetVersionNuGet)" PrivateAssets="runtime" />
+    <PackageReference Include="NuGet.Indexing" Version="$(NuGetVersionNuGet)" PrivateAssets="runtime" />
+    <!-- Ensure .NET 4.7.2's System.Net.Http is used not the one from this NuGet package -->
+    <PackageReference Include="System.Net.Http" Version="4.3.3" ExcludeAssets="all" />
+    <!-- Ensure .NET 4.7.2's System.IO.Compression is used not the one from this NuGet package -->
+    <PackageReference Include="System.IO.Compression" Version="4.3.0" ExcludeAssets="all" />
+    <IncludeCopyLocal Include="Lucene.Net.dll" />
+    <IncludeCopyLocal Include="Microsoft.Web.XmlTransform.dll" />
+    <IncludeCopyLocal Include="NuGet.Commands.dll" />
+    <IncludeCopyLocal Include="NuGet.Common.dll" />
+    <IncludeCopyLocal Include="NuGet.Configuration.dll" />
+    <IncludeCopyLocal Include="NuGet.Credentials.dll" />
+    <IncludeCopyLocal Include="NuGet.DependencyResolver.Core.dll" />
+    <IncludeCopyLocal Include="NuGet.Frameworks.dll" />
+    <IncludeCopyLocal Include="NuGet.Indexing.dll" />
+    <IncludeCopyLocal Include="NuGet.LibraryModel.dll" />
+    <IncludeCopyLocal Include="NuGet.PackageManagement.dll" />
+    <IncludeCopyLocal Include="NuGet.Packaging.dll" />
+    <IncludeCopyLocal Include="NuGet.Packaging.Core.dll" />
+    <IncludeCopyLocal Include="NuGet.ProjectModel.dll" />
+    <IncludeCopyLocal Include="NuGet.Protocol.dll" />
+    <IncludeCopyLocal Include="NuGet.Resolver.dll" />
+    <IncludeCopyLocal Include="NuGet.Versioning.dll" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.cs" />
@@ -146,10 +102,6 @@
     <Compile Include="MonoDevelop.PackageManagement.Gui\PackageManagementOptionsPanel.cs" />
     <Compile Include="MonoDevelop.PackageManagement.Gui\PackageManagementOptionsWidget.cs" />
     <Compile Include="MonoDevelop.PackageManagement.Commands\AddPackagesHandler.cs" />
-    <Compile Include="MonoDevelop.PackageManagement.Gui\AddPackagesDialog.cs" />
-    <Compile Include="MonoDevelop.PackageManagement.Gui\AddPackagesDialog.UI.cs">
-      <DependentUpon>AddPackagesDialog.cs</DependentUpon>
-    </Compile>
     <Compile Include="MonoDevelop.PackageManagement\PackageRepositoryNodeExtensions.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ProjectTemplateNuGetPackageInstaller.cs" />
     <Compile Include="MonoDevelop.PackageManagement\PackageManagementEventsMonitor.cs" />
@@ -171,9 +123,7 @@
     <Compile Include="MonoDevelop.PackageManagement\ProgressMonitorStatusMessageFactory.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ProgressMonitorStatusMessage.cs" />
     <Compile Include="AddinInfo.cs" />
-    <Compile Include="MonoDevelop.PackageManagement.Gui\PackageCellView.cs" />
     <Compile Include="MonoDevelop.PackageManagement\SearchPackagesSearchCategory.cs" />
-    <Compile Include="MonoDevelop.PackageManagement.Gui\AddPackagesDialogRunner.cs" />
     <Compile Include="MonoDevelop.PackageManagement.Commands\ProjectPackagesFolderNodeCommandHandler.cs" />
     <Compile Include="MonoDevelop.PackageManagement.NodeBuilders\ProjectReferenceNodeBuilderExtension.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ProjectReferenceExtensions.cs" />
@@ -186,7 +136,6 @@
       <DependentUpon>AddPackageSourceDialog.cs</DependentUpon>
     </Compile>
     <Compile Include="MonoDevelop.PackageManagement.Gui\DialogExtensions.cs" />
-    <Compile Include="MonoDevelop.PackageManagement.Gui\PackageCellViewEventArgs.cs" />
     <Compile Include="MonoDevelop.PackageManagement.Gui\Styles.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ImageLoader.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ImageLoadedEventArgs.cs" />
@@ -197,7 +146,6 @@
     <Compile Include="MonoDevelop.PackageManagement\ImageCache.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ProgressMonitorExtensions.cs" />
     <Compile Include="MonoDevelop.PackageManagement\PackageListViewTextFormatter.cs" />
-    <Compile Include="MonoDevelop.PackageManagement.Gui\PackageCellViewCheckBox.cs" />
     <Compile Include="MonoDevelop.PackageManagement\PackageManagementProgressMonitor.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ISolution.cs" />
     <Compile Include="MonoDevelop.PackageManagement\IProject.cs" />
@@ -241,13 +189,11 @@
     <Compile Include="MonoDevelop.PackageManagement\PackageManagementSolutionProjectService.cs" />
     <Compile Include="MonoDevelop.PackageManagement\NuGetPackageNewImportsHandler.cs" />
     <Compile Include="MonoDevelop.PackageManagement\INuGetPackageNewImportsHandler.cs" />
-    <Compile Include="MonoDevelop.PackageManagement\AllPackagesViewModel.cs" />
     <Compile Include="MonoDevelop.PackageManagement\SourceRepositoryProvider.cs" />
     <Compile Include="NuGet.PackageManagement.UI\SearchResult.cs" />
     <Compile Include="NuGet.PackageManagement.UI\PackageItemListViewModel.cs" />
     <Compile Include="NuGet.PackageManagement.UI\PackageStatus.cs" />
     <Compile Include="NuGet.PackageManagement.UI\DisplayVersion.cs" />
-    <Compile Include="MonoDevelop.PackageManagement\PackageSearchResultViewModel.cs" />
     <Compile Include="MonoDevelop.PackageManagement\SourceRepositoryViewModel.cs" />
     <Compile Include="MonoDevelop.PackageManagement\InstallNuGetPackageAction.cs" />
     <Compile Include="MonoDevelop.PackageManagement\MonoDevelopSolutionManager.cs" />
@@ -314,8 +260,6 @@
     <Compile Include="NuGet.PackageManagement.UI\IPackageMetadataProvider.cs" />
     <Compile Include="NuGet.PackageManagement.UI\DetailControlModel.cs" />
     <Compile Include="NuGet.PackageManagement.UI\PackageDetailControlModel.cs" />
-    <Compile Include="MonoDevelop.PackageManagement\RecentNuGetPackagesRepository.cs" />
-    <Compile Include="MonoDevelop.PackageManagement\PackageSearchResultViewModelComparer.cs" />
     <Compile Include="MonoDevelop.PackageManagement\MonoDevelopPackageSourceProvider.cs" />
     <Compile Include="MonoDevelop.PackageManagement\SettingsLoader.cs" />
     <Compile Include="MonoDevelop.PackageManagement\INuGetPackageManager.cs" />
@@ -370,7 +314,6 @@
     <Compile Include="MonoDevelop.PackageManagement\ItemTemplateNuGetPackageInstaller.cs" />
     <Compile Include="Gui\MonoDevelop.PackageManagement.PackageManagementOptionsWidget.cs" />
     <Compile Include="Gui\MonoDevelop.PackageManagement.PackageSourcesWidget.cs" />
-    <Compile Include="MonoDevelop.PackageManagement\RepositoryProviderFactoryExtensions.cs" />
     <Compile Include="MonoDevelop.PackageManagement\MonoDevelopHttpHandlerResourceV3Provider.cs" />
     <Compile Include="MonoDevelop.PackageManagement\MonoDevelopServerWarningLogHandler.cs" />
     <Compile Include="MonoDevelop.PackageManagement\NuGetHttpSourceAuthenticationHandler.cs" />
@@ -383,65 +326,151 @@
     <Compile Include="MonoDevelop.PackageManagement\MonoDevelopDependencyGraphRestoreUtility.cs" />
     <Compile Include="MonoDevelop.PackageManagement\DependencyGraphContextExtensions.cs" />
     <Compile Include="MonoDevelop.PackageManagement\ExceptionExtensions.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\DependencyGraphSpecExtensions.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\PackageSpecExtensions.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ConditionalPackageReferenceHandler.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\IPropertySetExtensions.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\PackageManagementSdkProjectExtension.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\SdkProjectReloadMonitor.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\SdkProjectBuilderMaintainer.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\SdkProjectFileRenamedHandler.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Commands\ManagePackagesHandler.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Commands\ManagePackagesInProjectHandler.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Gui\ManagePackagesDialog.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Gui\ManagePackagesDialog.UI.cs">
+      <DependentUpon>ManagePackagesDialog.cs</DependentUpon>
+    </Compile>
+    <Compile Include="MonoDevelop.PackageManagement.Gui\ManagePackagesDialogRunner.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Gui\SelectProjectsDialog.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Gui\SelectProjectsDialog.UI.cs">
+      <DependentUpon>SelectProjectsDialog.cs</DependentUpon>
+    </Compile>
+    <Compile Include="MonoDevelop.PackageManagement.Gui\ManagePackagesCellView.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Gui\ManagePackagesCellViewEventArgs.cs" />
+    <Compile Include="MonoDevelop.PackageManagement.Gui\AccessibleSpacerCellView.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ManagedPackagesSearchResultViewModelComparer.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ManagePackagesPage.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ManagePackagesProjectInfo.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ManagePackagesSearchResultViewModel.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ManagePackagesViewModel.cs" />
+    <Compile Include="NuGet.PackageManagement.UI\ConsolidatePackageFeed.cs" />
+    <Compile Include="NuGet.PackageManagement.UI\InstalledPackageFeed.cs" />
+    <Compile Include="NuGet.PackageManagement.UI\PackageCollection.cs" />
+    <Compile Include="NuGet.PackageManagement.UI\PackageFeedEnumerator.cs" />
+    <Compile Include="NuGet.PackageManagement.UI\PackageSearchMetadataCache.cs" />
+    <Compile Include="NuGet.PackageManagement.UI\PlainPackageFeedBase.cs" />
+    <Compile Include="NuGet.PackageManagement.UI\UpdatePackageFeed.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\SelectedProjectViewModel.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\SelectProjectsViewModel.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\RecentManagedNuGetPackagesRepository.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ManageProjectViewModel.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\PackageManagementCanReferenceProjectExtension.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\UpdateMultipleNuGetPackagesAction.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\ProjectReferenceMaintainerCollection.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\MonoDevelopPluginFactory.cs" />
+    <Compile Include="MonoDevelop.PackageManagement\MonoDevelopNuGetResourceProviderFactory.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="MonoDevelop.PackageManagement.addin.xml" />
-    <EmbeddedResource Include="icons\package-source-32.png" />
-    <EmbeddedResource Include="icons\package-source-32%402x.png" />
-    <EmbeddedResource Include="icons\package-source-32~dark.png" />
-    <EmbeddedResource Include="icons\package-source-32~dark%402x.png" />
-    <EmbeddedResource Include="icons\package-source-32~sel.png" />
-    <EmbeddedResource Include="icons\package-source-32~sel%402x.png" />
-    <EmbeddedResource Include="icons\package-source-32~dark~sel.png" />
-    <EmbeddedResource Include="icons\package-source-32~dark~sel%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-16.png" />
-    <EmbeddedResource Include="icons\prefs-package-16%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-16~dark.png" />
-    <EmbeddedResource Include="icons\prefs-package-16~dark%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-16~sel.png" />
-    <EmbeddedResource Include="icons\prefs-package-16~sel%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-16~dark~sel.png" />
-    <EmbeddedResource Include="icons\prefs-package-16~dark~sel%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16~dark.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16~dark%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16~sel.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16~sel%402x.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16~dark~sel.png" />
-    <EmbeddedResource Include="icons\prefs-package-source-16~dark~sel%402x.png" />
-    <EmbeddedResource Include="icons\framework-16.png" />
-    <EmbeddedResource Include="icons\framework-16%402x.png" />
-    <EmbeddedResource Include="icons\framework-16~dark.png" />
-    <EmbeddedResource Include="icons\framework-16~dark%402x.png" />
-    <EmbeddedResource Include="icons\framework-16~dark~sel.png" />
-    <EmbeddedResource Include="icons\framework-16~dark~sel%402x.png" />
-    <EmbeddedResource Include="icons\framework-16~sel.png" />
-    <EmbeddedResource Include="icons\framework-16~sel%402x.png" />
+
     <EmbeddedResource Include="icons\nuget-16.png" />
     <EmbeddedResource Include="icons\nuget-16%402x.png" />
+    <EmbeddedResource Include="icons\nuget-16~contrast.png" />
+    <EmbeddedResource Include="icons\nuget-16~contrast%402x.png" />
+    <EmbeddedResource Include="icons\nuget-16~contrast~dark.png" />
+    <EmbeddedResource Include="icons\nuget-16~contrast~dark%402x.png" />
     <EmbeddedResource Include="icons\nuget-16~dark.png" />
     <EmbeddedResource Include="icons\nuget-16~dark%402x.png" />
     <EmbeddedResource Include="icons\nuget-16~dark~sel.png" />
     <EmbeddedResource Include="icons\nuget-16~dark~sel%402x.png" />
     <EmbeddedResource Include="icons\nuget-16~sel.png" />
     <EmbeddedResource Include="icons\nuget-16~sel%402x.png" />
+
     <EmbeddedResource Include="icons\nuget-warning-16.png" />
     <EmbeddedResource Include="icons\nuget-warning-16%402x.png" />
+    <EmbeddedResource Include="icons\nuget-warning-16~contrast.png" />
+    <EmbeddedResource Include="icons\nuget-warning-16~contrast%402x.png" />
+    <EmbeddedResource Include="icons\nuget-warning-16~contrast~dark.png" />
+    <EmbeddedResource Include="icons\nuget-warning-16~contrast~dark%402x.png" />
     <EmbeddedResource Include="icons\nuget-warning-16~dark.png" />
     <EmbeddedResource Include="icons\nuget-warning-16~dark%402x.png" />
     <EmbeddedResource Include="icons\nuget-warning-16~dark~sel.png" />
     <EmbeddedResource Include="icons\nuget-warning-16~dark~sel%402x.png" />
     <EmbeddedResource Include="icons\nuget-warning-16~sel.png" />
     <EmbeddedResource Include="icons\nuget-warning-16~sel%402x.png" />
+
     <EmbeddedResource Include="icons\package-48.png" />
     <EmbeddedResource Include="icons\package-48%402x.png" />
+    <EmbeddedResource Include="icons\package-48~contrast.png" />
+    <EmbeddedResource Include="icons\package-48~contrast%402x.png" />
+    <EmbeddedResource Include="icons\package-48~contrast~dark.png" />
+    <EmbeddedResource Include="icons\package-48~contrast~dark%402x.png" />
     <EmbeddedResource Include="icons\package-48~dark.png" />
     <EmbeddedResource Include="icons\package-48~dark%402x.png" />
-    <EmbeddedResource Include="icons\package-48~sel.png" />
-    <EmbeddedResource Include="icons\package-48~sel%402x.png" />
     <EmbeddedResource Include="icons\package-48~dark~sel.png" />
     <EmbeddedResource Include="icons\package-48~dark~sel%402x.png" />
+    <EmbeddedResource Include="icons\package-48~sel.png" />
+    <EmbeddedResource Include="icons\package-48~sel%402x.png" />
+
+    <EmbeddedResource Include="icons\package-source-32.png" />
+    <EmbeddedResource Include="icons\package-source-32%402x.png" />
+    <EmbeddedResource Include="icons\package-source-32~contrast.png" />
+    <EmbeddedResource Include="icons\package-source-32~contrast%402x.png" />
+    <EmbeddedResource Include="icons\package-source-32~contrast~dark.png" />
+    <EmbeddedResource Include="icons\package-source-32~contrast~dark%402x.png" />
+    <EmbeddedResource Include="icons\package-source-32~dark.png" />
+    <EmbeddedResource Include="icons\package-source-32~dark%402x.png" />
+    <EmbeddedResource Include="icons\package-source-32~dark~sel.png" />
+    <EmbeddedResource Include="icons\package-source-32~dark~sel%402x.png" />
+    <EmbeddedResource Include="icons\package-source-32~sel.png" />
+    <EmbeddedResource Include="icons\package-source-32~sel%402x.png" />
+
+    <EmbeddedResource Include="icons\package-update-16.png" />
+    <EmbeddedResource Include="icons\package-update-16%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast~dark.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast~dark%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast~dark~disabled.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast~dark~disabled%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast~disabled.png" />
+    <EmbeddedResource Include="icons\package-update-16~contrast~disabled%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~dark.png" />
+    <EmbeddedResource Include="icons\package-update-16~dark%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~dark~disabled.png" />
+    <EmbeddedResource Include="icons\package-update-16~dark~disabled%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~dark~sel.png" />
+    <EmbeddedResource Include="icons\package-update-16~dark~sel%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~disabled.png" />
+    <EmbeddedResource Include="icons\package-update-16~disabled%402x.png" />
+    <EmbeddedResource Include="icons\package-update-16~sel.png" />
+    <EmbeddedResource Include="icons\package-update-16~sel%402x.png" />
+
+    <EmbeddedResource Include="icons\prefs-package-16.png" />
+    <EmbeddedResource Include="icons\prefs-package-16%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~contrast.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~contrast%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~contrast~dark.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~contrast~dark%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~dark.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~dark%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~dark~sel.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~dark~sel%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~sel.png" />
+    <EmbeddedResource Include="icons\prefs-package-16~sel%402x.png" />
+
+    <EmbeddedResource Include="icons\prefs-package-source-16.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~contrast.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~contrast%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~contrast~dark.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~contrast~dark%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~dark.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~dark%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~dark~sel.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~dark~sel%402x.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~sel.png" />
+    <EmbeddedResource Include="icons\prefs-package-source-16~sel%402x.png" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\core\MonoDevelop.Core\MonoDevelop.Core.csproj">
@@ -464,11 +493,6 @@
       <Name>MonoDevelop.DesignerSupport</Name>
       <Private>False</Private>
     </ProjectReference>
-    <ProjectReference Include="..\..\..\external\nrefactory\ICSharpCode.NRefactory\ICSharpCode.NRefactory.csproj">
-      <Project>{3B2A5653-EC97-4001-BB9B-D90F1AF2C371}</Project>
-      <Name>ICSharpCode.NRefactory</Name>
-      <Private>False</Private>
-    </ProjectReference>
     <ProjectReference Include="..\..\core\MonoDevelop.Ide\MonoDevelop.Ide.csproj">
       <Project>{27096E7F-C91C-4AC6-B289-6897A701DF21}</Project>
       <Name>MonoDevelop.Ide</Name>
@@ -487,7 +511,6 @@
       <Link>NuGet-LICENSE.txt</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MonoDevelop.DotNetCore" />

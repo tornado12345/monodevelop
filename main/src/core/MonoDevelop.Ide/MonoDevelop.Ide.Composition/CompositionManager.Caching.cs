@@ -23,6 +23,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -47,6 +48,15 @@ namespace MonoDevelop.Ide.Composition
 		internal interface ICachingFaultInjector
 		{
 			void FaultAssemblyInfo (MefControlCacheAssemblyInfo info);
+			void FaultWritingComposition ();
+		}
+
+		internal class RuntimeCompositionExceptionHandler
+		{
+			public virtual void HandleException (string message, Exception e)
+			{
+				LoggingService.LogInternalError (message, e);
+			}
 		}
 
 		/// <summary>
@@ -54,14 +64,16 @@ namespace MonoDevelop.Ide.Composition
 		/// </summary>
 		internal class Caching
 		{
-			readonly ICachingFaultInjector cachingFaultInjector;
-			Task saveTask;
+			readonly ICachingFaultInjector? cachingFaultInjector;
+			readonly RuntimeCompositionExceptionHandler exceptionHandler;
+
+			Task saveTask = Task.CompletedTask;
 			readonly HashSet<Assembly> loadedAssemblies;
 			public HashSet<Assembly> MefAssemblies { get; }
 			internal string MefCacheFile { get; }
 			internal string MefCacheControlFile { get; }
 
-			public Caching (HashSet<Assembly> mefAssemblies, Func<string, string> getCacheFilePath = null, ICachingFaultInjector cachingFaultInjector = null)
+			public Caching (HashSet<Assembly> mefAssemblies, RuntimeCompositionExceptionHandler exceptionHandler, Func<string, string>? getCacheFilePath = null, ICachingFaultInjector? cachingFaultInjector = null)
 			{
 				getCacheFilePath = getCacheFilePath ?? (file => Path.Combine (AddinManager.CurrentAddin.PrivateDataPath, file));
 
@@ -78,6 +90,7 @@ namespace MonoDevelop.Ide.Composition
 				MefCacheFile = getCacheFilePath ("mef-cache");
 				MefCacheControlFile = getCacheFilePath ("mef-cache-control");
 				this.cachingFaultInjector = cachingFaultInjector;
+				this.exceptionHandler = exceptionHandler ?? new RuntimeCompositionExceptionHandler ();
 			}
 
 			void IdeApp_Exiting (object sender, ExitEventArgs args)
@@ -85,7 +98,7 @@ namespace MonoDevelop.Ide.Composition
 				// As of the time this code was written, serializing the cache takes 200ms.
 				// Maybe show a dialog and progress bar here that we're closing after save.
 				// We cannot cancel the save, vs-mef doesn't use the cancellation tokens in the API.
-				saveTask?.Wait ();
+				saveTask.Wait ();
 			}
 
 			internal Stream OpenCacheStream () => File.Open (MefCacheFile, FileMode.Open);
@@ -153,7 +166,7 @@ namespace MonoDevelop.Ide.Composition
 				return true;
 			}
 
-			static bool ValidateAssemblyCacheListIntegrity (HashSet<Assembly> assemblies, List<MefControlCacheAssemblyInfo> cachedAssemblyInfos, ICachingFaultInjector cachingFaultInjector)
+			static bool ValidateAssemblyCacheListIntegrity (HashSet<Assembly> assemblies, List<MefControlCacheAssemblyInfo> cachedAssemblyInfos, ICachingFaultInjector? cachingFaultInjector)
 			{
 				var currentAssemblies = new Dictionary<string, Guid> (assemblies.Count);
 				foreach (var asm in assemblies)
@@ -178,15 +191,20 @@ namespace MonoDevelop.Ide.Composition
 
 					saveTask = Task.Run (async () => {
 						try {
+							cachingFaultInjector?.FaultWritingComposition ();
 							await WriteMefCache (runtimeComposition, catalog, cacheManager);
 						} catch (Exception ex) {
-							LoggingService.LogInternalError ("Failed to write MEF cache", ex);
+							DeleteFiles ();
+
+							Runtime.RunInMainThread (() => {
+								exceptionHandler.HandleException ("Failed to write MEF cache", ex);
+							}).Ignore ();
 						}
 					});
 					await saveTask;
 
 					IdeApp.Exiting -= IdeApp_Exiting;
-					saveTask = null;
+					saveTask = Task.CompletedTask;
 				});
 			}
 
@@ -224,8 +242,9 @@ namespace MonoDevelop.Ide.Composition
 					if (mefAssemblyNames.Contains (assemblyName))
 						continue;
 
-					bool found = loadedMap.TryGetValue (assemblyName, out var assembly);
-					System.Diagnostics.Debug.Assert (found);
+					if (!loadedMap.TryGetValue (assemblyName, out var assembly)) {
+						throw new InvalidRuntimeCompositionException (assemblyName);
+					}
 
 					additionalInputAssemblies.Add (new MefControlCacheAssemblyInfo {
 						Location = assembly.Location,
@@ -246,6 +265,13 @@ namespace MonoDevelop.Ide.Composition
 					serializer.Serialize (sw, controlCache);
 				}
 				timer.Trace ("Composition control file written");
+			}
+		}
+
+		internal sealed class InvalidRuntimeCompositionException : Exception
+		{
+			public InvalidRuntimeCompositionException (string assemblyName) : base($"Input assemblies contained {assemblyName}, not found in the '/MonoDevelop/Ide/Composition' extension point")
+			{
 			}
 		}
 

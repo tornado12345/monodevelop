@@ -26,11 +26,13 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-using System.Linq;
-using System.IO;
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Mono.Addins;
-
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
 
@@ -53,9 +55,9 @@ namespace MonoDevelop.VersionControl
 		/// <returns>
 		/// A <see cref="System.Boolean"/>: Whether the patch creation succeeded.
 		/// </returns>
-		public static bool CreatePatch (VersionControlItemList items, bool test)
+		public static async Task<bool> CreatePatchAsync (VersionControlItemList items, bool test, CancellationToken cancellationToken = default)
 		{
-			bool can = CanCreatePatch (items);
+			bool can = await CanCreatePatchAsync (items, cancellationToken);
 			if (test || !can){ return can; }
 			
 			FilePath basePath = items.FindMostSpecificParent ();
@@ -64,43 +66,46 @@ namespace MonoDevelop.VersionControl
 			
 			ChangeSet cset = new ChangeSet (items[0].Repository, basePath);
 			foreach (VersionControlItem item in items) {
-				cset.AddFile (item.Path);
+				await cset.AddFileAsync (item.Path);
 			}
-			return CreatePatch (cset, test);
+			return await CreatePatchAsync (cset, test, cancellationToken);
 		}
 		
-		public static bool CreatePatch (ChangeSet items, bool test)
+		public static async Task<bool> CreatePatchAsync (ChangeSet items, bool test, CancellationToken cancellationToken = default)
 		{
-			bool can = CanCreatePatch (items);
+			bool can = await CanCreatePatchAsync (items, cancellationToken);
 			if (test || !can){ return can; }
 			
 			Repository repo = items.Repository;
 			items = items.Clone ();
 			
 			List<DiffInfo> diffs = new List<DiffInfo> ();
-			
-			object[] exts = AddinManager.GetExtensionObjects ("/MonoDevelop/VersionControl/CommitDialogExtensions", typeof(CommitDialogExtension), false);
-			List<CommitDialogExtension> activeExtensions = new List<CommitDialogExtension> ();
-			try {
-				foreach (CommitDialogExtension ext in exts) {
-					if (ext.Initialize (items)) {
-						activeExtensions.Add (ext);
-						if (!ext.OnBeginCommit (items))
-							break;
-					} else
+
+			await Runtime.RunInMainThread (async () => {
+				object [] exts = AddinManager.GetExtensionObjects ("/MonoDevelop/VersionControl/CommitDialogExtensions", typeof(CommitDialogExtension), false);
+				List<CommitDialogExtension> activeExtensions = new List<CommitDialogExtension> ();
+				try {
+					foreach (CommitDialogExtension ext in exts) {
+						if (ext.Initialize (items)) {
+							activeExtensions.Add (ext);
+							if (!ext.OnBeginCommit (items))
+								break;
+						} else
+							ext.Destroy ();
+					}
+					diffs.AddRange (await repo.PathDiffAsync (items, false, cancellationToken));
+				} finally {
+					foreach (CommitDialogExtension ext in activeExtensions) {
+						ext.OnEndCommit (items, false);
 						ext.Destroy ();
+					}
 				}
-				diffs.AddRange (repo.PathDiff (items, false));
-			} finally {
-				foreach (CommitDialogExtension ext in activeExtensions) {
-					ext.OnEndCommit (items, false);
-					ext.Destroy ();
-				}
-			}
-			
+			});
+
+
 			string patch = repo.CreatePatch (diffs);
 			string filename = string.Format ("{0}.diff", ((string)items.BaseLocalPath.FullPath).TrimEnd (Path.DirectorySeparatorChar));
-			IdeApp.Workbench.NewDocument (filename, "text/x-diff", patch);
+			await Runtime.RunInMainThread (() => IdeApp.Workbench.NewDocument (filename, "text/x-diff", patch));
 			return can;
 		}
 		
@@ -108,22 +113,36 @@ namespace MonoDevelop.VersionControl
 		/// Determines whether a patch can be created 
 		/// from a ChangeSet.
 		/// </summary>
-		static bool CanCreatePatch (ChangeSet items)
+		static async Task<bool> CanCreatePatchAsync (ChangeSet items, CancellationToken cancellationTokent)
 		{
 			if (null == items || 0 == items.Count){ return false; }
-			
-			var vinfos = items.Repository.GetVersionInfo (items.Items.Select (i => i.LocalPath));
-			return vinfos.All (i => i.CanRevert);
+			foreach (var item in items.Items.Select (i => i.LocalPath)) {
+				if (!items.Repository.TryGetVersionInfo (item, out var info) || !info.CanRevert)
+					return false;
+			}
+			return true;
 		}
 		
 		/// <summary>
 		/// Determines whether a patch can be created 
 		/// from a VersionControlItemList.
 		/// </summary>
-		static bool CanCreatePatch (VersionControlItemList items)
+		static async Task<bool> CanCreatePatchAsync (VersionControlItemList items, CancellationToken cancellationToken)
 		{
 			if (null == items || 0 == items.Count){ return false; }
-			return items.All (i => i.VersionInfo.CanRevert);
+
+			foreach (var item in items) {
+				var info = await item.GetVersionInfoAsync (cancellationToken);
+				if (!info.CanRevert)
+					return false;
+			}
+
+			return true;
+		}
+
+		internal static void CreatePatch (ChangeSet changeSet, bool v)
+		{
+			throw new NotImplementedException ();
 		}
 	}
 }

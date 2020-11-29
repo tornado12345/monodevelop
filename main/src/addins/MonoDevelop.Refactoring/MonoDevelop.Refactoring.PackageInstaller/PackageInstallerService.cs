@@ -96,10 +96,15 @@ namespace MonoDevelop.Refactoring.PackageInstaller
 		{
 			readonly ConcurrentDictionary<ProjectId, Dictionary<string, string>> _projectToInstalledPackageAndVersion = new ConcurrentDictionary<ProjectId, Dictionary<string, string>> ();
 
-			public ImmutableArray<PackageSource> PackageSources {
-				get {
-					return PackageServices.GetSources (false, false).Select (kv => new PackageSource (kv.Key, kv.Value)) .ToImmutableArray ();
-				}
+			/// <summary>
+			/// Get package sources.
+			///
+			/// NOTE: This method is known to be called from the threadpool, while the UI thread is blocking.
+			/// Therefore, it must be thread-safe and not defer to and then block other threads.
+			/// </summary>
+			public ImmutableArray<PackageSource> GetPackageSources ()
+			{
+				return PackageServices.GetSources (false, false).Select (kv => new PackageSource (kv.Key, kv.Value)) .ToImmutableArray ();
 			}
 
 			public event EventHandler PackageSourcesChanged {
@@ -114,7 +119,7 @@ namespace MonoDevelop.Refactoring.PackageInstaller
 
 			public IEnumerable<Project> GetProjectsWithInstalledPackage (Solution solution, string packageName, string version)
 			{
-				return PackageServices.GetProjectsWithInstalledPackage (IdeApp.ProjectOperations.CurrentSelectedSolution, packageName, version).Select (p => TypeSystemService.GetCodeAnalysisProject (p));
+				return PackageServices.GetProjectsWithInstalledPackage (IdeApp.ProjectOperations.CurrentSelectedSolution, packageName, version).Select (p => IdeApp.TypeSystemService.GetCodeAnalysisProject (p));
 			}
 
 			public bool IsInstalled (Workspace workspace, ProjectId projectId, string packageName)
@@ -122,6 +127,9 @@ namespace MonoDevelop.Refactoring.PackageInstaller
 				return _projectToInstalledPackageAndVersion.TryGetValue (projectId, out var installedPackages) &&
 					installedPackages.ContainsKey (packageName);
 			}
+
+			public bool CanShowManagePackagesDialog ()
+				=> true;
 
 			public void ShowManagePackagesDialog (string packageName)
 			{

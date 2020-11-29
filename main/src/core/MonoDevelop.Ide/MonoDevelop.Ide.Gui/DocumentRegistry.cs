@@ -26,14 +26,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-
-
-using MonoDevelop.Core;
-using Services = MonoDevelop.Projects.Services;
-using MonoDevelop.Ide;
-using MonoDevelop.Ide.TypeSystem;
-using MonoDevelop.Ide.Editor;
 using System.Linq;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Ide.Gui
 {
@@ -42,7 +36,6 @@ namespace MonoDevelop.Ide.Gui
 		void ShowFileChangedWarning (bool multiple);
 		void RemoveMessageBar ();
 	}
-
 
 	static class DocumentRegistry
 	{
@@ -86,7 +79,7 @@ namespace MonoDevelop.Ide.Gui
 
 		internal static bool SkipView (Document view)
 		{
-			return !view.IsFile || view.IsUntitled ;
+			return !view.IsFile || view.IsNewDocument ;
 		}
 
 		static void CommitViewChange (List<DocumentInfo> changedDocuments)
@@ -137,7 +130,7 @@ namespace MonoDevelop.Ide.Gui
 		public static void IgnoreAllChangedFiles ()
 		{
 			foreach (var view in GetAllChangedFiles ()) {
-				view.LastSaveTimeUtc = File.GetLastWriteTime (view.Document.FileName);
+				view.LastSaveTimeUtc = File.GetLastWriteTimeUtc (view.Document.FileName);
 				view.Document.GetContent<IDocumentReloadPresenter> ()?.RemoveMessageBar ();
 				view.Document.Window.ShowNotification = false;
 			}
@@ -177,17 +170,21 @@ namespace MonoDevelop.Ide.Gui
 			public DocumentInfo (Document doc)
 			{
 				this.Document = doc;
-				LastSaveTimeUtc = DateTime.UtcNow;
+				GetLastWriteTime ();
 				doc.Saved += Doc_Saved;
 				doc.Reloaded += Doc_Saved;
 				doc.FileNameChanged += Doc_Saved;
 			}
 
-
 			void Doc_Saved (object sender, EventArgs e)
 			{
+				GetLastWriteTime ();
+			}
+
+			void GetLastWriteTime ()
+			{
 				try {
-					LastSaveTimeUtc = File.GetLastWriteTimeUtc (Document.FileName);
+					LastSaveTimeUtc = (Document.IsFile && !Document.IsNewDocument) ? File.GetLastWriteTimeUtc (Document.FileName) : DateTime.MinValue;
 				} catch (Exception ex) {
 					LoggingService.LogError ("Error while getting last write time.", ex);
 					LastSaveTimeUtc = DateTime.UtcNow;

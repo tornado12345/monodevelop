@@ -4,6 +4,30 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 {
 	internal partial class GeneralOptionsPanel
 	{
+		/*
+
+vbox1
+  GtkLabel13 "Coding"
+  alignment2
+      vbox4
+          hbox3
+              fixed2
+          hbox1
+              label1 Line ending conversion
+              comboboxLineEndings
+  GtkLabel14 "Code Folding"
+  alignment3
+      vbox5
+          foldingCheckbutton
+          foldregionsCheckbutton
+          foldCommentsCheckbutton
+  GtkLabel15 "Appearance"
+  alignment4
+      vbox6
+          wordWrapCheckbutton
+          antiAliasingCheckbutton
+
+		*/
 		private global::Gtk.VBox vbox1;
 
 		private global::Gtk.Label GtkLabel13;
@@ -39,8 +63,6 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 		private global::Gtk.Alignment alignment4;
 
 		private global::Gtk.VBox vbox6;
-
-		private global::Gtk.CheckButton wordWrapCheckbutton;
 
 		private global::Gtk.CheckButton antiAliasingCheckbutton;
 
@@ -205,18 +227,6 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 			this.vbox6.Name = "vbox6";
 			this.vbox6.Spacing = 6;
 			// Container child vbox6.Gtk.Box+BoxChild
-			this.wordWrapCheckbutton = new global::Gtk.CheckButton();
-			this.wordWrapCheckbutton.CanFocus = true;
-			this.wordWrapCheckbutton.Name = "wordWrapCheckbutton";
-			this.wordWrapCheckbutton.Label = global::Mono.Unix.Catalog.GetString("_Word wrap");
-			this.wordWrapCheckbutton.DrawIndicator = true;
-			this.wordWrapCheckbutton.UseUnderline = true;
-			this.vbox6.Add(this.wordWrapCheckbutton);
-			global::Gtk.Box.BoxChild w16 = ((global::Gtk.Box.BoxChild)(this.vbox6[this.wordWrapCheckbutton]));
-			w16.Position = 0;
-			w16.Expand = false;
-			w16.Fill = false;
-			// Container child vbox6.Gtk.Box+BoxChild
 			this.antiAliasingCheckbutton = new global::Gtk.CheckButton();
 			this.antiAliasingCheckbutton.CanFocus = true;
 			this.antiAliasingCheckbutton.Name = "antiAliasingCheckbutton";
@@ -234,6 +244,7 @@ namespace MonoDevelop.SourceEditor.OptionPanels
 			w19.Position = 5;
 			w19.Expand = false;
 			w19.Fill = false;
+
 			this.Add(this.vbox1);
 			if ((this.Child != null))
 			{

@@ -1,4 +1,4 @@
-﻿//#define DEBUG_MESSAGES
+//#define DEBUG_MESSAGES
 
 using System;
 using System.Threading;
@@ -13,6 +13,9 @@ namespace MonoDevelop.Core.Execution
 {
 	public class RemoteProcessConnection: IDisposable
 	{
+		const string DisposedMessage = "{0}: Could not start process";
+		const string StreamNullMessage = "{0}: Connection stream unexpectedly null.";
+
 		bool initializationDone;
 		TaskCompletionSource<bool> processConnectedEvent = new TaskCompletionSource<bool> ();
 		ProcessAsyncOperation process;
@@ -54,6 +57,7 @@ namespace MonoDevelop.Core.Execution
 		SynchronizationContext syncContext;
 		IExecutionHandler executionHandler;
 		OperationConsole console;
+		readonly Dictionary<string, string> environmentVariables;
 
 		public event EventHandler<MessageEventArgs> MessageReceived;
 		public event EventHandler StatusChanged;
@@ -75,6 +79,12 @@ namespace MonoDevelop.Core.Execution
 			: this (exePath, executionHandler, console, syncContext)
 		{
 			this.workingDirectory = workingDirectory;
+		}
+
+		public RemoteProcessConnection (string exePath, string workingDirectory, Dictionary<string, string> environmentVariables, IExecutionHandler executionHandler = null, OperationConsole console = null, SynchronizationContext syncContext = null)
+			: this (exePath, workingDirectory, executionHandler, console, syncContext)
+		{
+			this.environmentVariables = environmentVariables;
 		}
 
 		public ConnectionStatus Status {
@@ -165,18 +175,19 @@ namespace MonoDevelop.Core.Execution
 			
 			try {
 				// Send a stop message to try a graceful stop. Don't wait more than 2s for a response
-				var timeout = Task.Delay (2000);
+				var timeout = Task.Delay (2000, mainCancelSource.Token);
 				if (await Task.WhenAny (SendMessage (new BinaryMessage ("Stop", "Process")), timeout) != timeout) {
 					// Wait for at most two seconds for the process to end
-					timeout = Task.Delay (4000);
+					timeout = Task.Delay (4000, mainCancelSource.Token);
 					if (await Task.WhenAny (process.Task, timeout) != timeout)
 						return; // All done!
 				}
 			} catch {
 			}
 
-			mainCancelSource.Cancel ();
-			mainCancelSource = new CancellationTokenSource ();
+			using (var source = Interlocked.Exchange (ref mainCancelSource, new CancellationTokenSource ())) {
+				source.Cancel ();
+			}
 
 			// The process did not gracefully stop. Kill the process.
 
@@ -230,6 +241,14 @@ namespace MonoDevelop.Core.Execution
 			}
 		}
 
+		string GetCleanExeName()
+		{
+			if (string.IsNullOrWhiteSpace (exePath))
+				return "(null)";
+
+			return Path.GetFileName (exePath);
+		}
+
 		async Task InitializeRemoteProcessAsync (CancellationToken token)
 		{
 			try {
@@ -238,8 +257,8 @@ namespace MonoDevelop.Core.Execution
 				token.ThrowIfCancellationRequested ();
 
 				if (disposed)
-					throw new Exception ("Could not start process");
-				
+					throw new ObjectDisposedException (string.Format (DisposedMessage, GetCleanExeName ()));
+
 				var timeout = Task.Delay (ProcessInitializationTimeout, token).ContinueWith (t => {
 					if (t.IsCanceled)
 						return;
@@ -248,16 +267,19 @@ namespace MonoDevelop.Core.Execution
 
 				await Task.WhenAny (timeout, processConnectedEvent.Task).ConfigureAwait (false);
 
-				if (connectionStream == null || disposed)
-					throw new Exception ("Process failed to start");
+				if (disposed)
+					throw new ObjectDisposedException (string.Format (DisposedMessage, GetCleanExeName ()));
 
-/*				var msg = new BinaryMessage ("Initialize", "Process").AddArgument ("MessageWaitTimeout", PingPeriod * 2);
-				msg.BypassConnection = true;
-				var cs = new TaskCompletionSource<BinaryMessage> ();
-				PostMessage (msg, cs, false);
-				token.ThrowIfCancellationRequested ();
-				await cs.Task;
-*/
+				if (connectionStream == null)
+					throw new InvalidOperationException (string.Format (StreamNullMessage, GetCleanExeName ()));
+
+				/*				var msg = new BinaryMessage ("Initialize", "Process").AddArgument ("MessageWaitTimeout", PingPeriod * 2);
+								msg.BypassConnection = true;
+								var cs = new TaskCompletionSource<BinaryMessage> ();
+								PostMessage (msg, cs, false);
+								token.ThrowIfCancellationRequested ();
+								await cs.Task;
+				*/
 				token.ThrowIfCancellationRequested ();
 
 				SetStatus (ConnectionStatus.Connected, "Connected");
@@ -286,12 +308,18 @@ namespace MonoDevelop.Core.Execution
 				if (!string.IsNullOrEmpty (workingDirectory))
 					cmd.WorkingDirectory = workingDirectory;
 
+				if (environmentVariables != null) {
+					foreach (var env in environmentVariables) {
+						cmd.EnvironmentVariables [env.Key] = env.Value;
+					}
+				}
+
 				// Explicitly propagate the PATH var to the process. It ensures that tools required
 				// to run XS are also in the PATH for remote processes.
 				cmd.EnvironmentVariables ["PATH"] = Environment.GetEnvironmentVariable ("PATH");
 				cmd.ProcessExecutionArchitecture = ProcessExecutionArchitecture;
 				process = executionHandler.Execute (cmd, console);
-				process.Task.ContinueWith (t => ProcessExited ());
+				process.Task.ContinueWith (t => ProcessExited (), mainCancelSource.Token);
 			});
 		}
 

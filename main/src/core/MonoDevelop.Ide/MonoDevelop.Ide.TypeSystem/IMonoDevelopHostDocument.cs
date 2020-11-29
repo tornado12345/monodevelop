@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Projection;
 
 namespace MonoDevelop.Ide.TypeSystem
 {
@@ -15,6 +16,8 @@ namespace MonoDevelop.Ide.TypeSystem
 		/// Updates the text of the document.
 		/// </summary>
 		void UpdateText (SourceText newText);
+
+		IProjectionBuffer TopBuffer { get; }
 	}
 
 	static class MonoDevelopHostDocumentRegistration
@@ -29,7 +32,12 @@ namespace MonoDevelop.Ide.TypeSystem
 			textBuffer?.Properties.RemoveProperty (typeof (IMonoDevelopHostDocument));
 		}
 
-		internal static IMonoDevelopHostDocument FromDocument(Document document)
+		internal static IMonoDevelopHostDocument FromDocument (Document document)
+		{
+			return FromDocument ((TextDocument)document);
+		}
+
+		internal static IMonoDevelopHostDocument FromDocument(TextDocument document)
 		{
 			IMonoDevelopHostDocument containedDocument = null;
 			if (document.TryGetText (out SourceText sourceText)) {

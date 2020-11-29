@@ -37,6 +37,7 @@ namespace MonoDevelop.Projects.MSBuild
 		MSBuildProject msproject;
 		List<IMSBuildItemEvaluated> evaluatedItems = new List<IMSBuildItemEvaluated> ();
 		List<IMSBuildItemEvaluated> evaluatedItemsIgnoringCondition = new List<IMSBuildItemEvaluated> ();
+		Dictionary<string, MSBuildPropertyGroupEvaluated> evaluatedItemDefinitions;
 		MSBuildEvaluatedPropertyCollection evaluatedProperties;
 		MSBuildTarget[] targets = new MSBuildTarget[0];
 		MSBuildTarget[] targetsIgnoringCondition = new MSBuildTarget[0];
@@ -108,10 +109,13 @@ namespace MonoDevelop.Projects.MSBuild
 				engine.Evaluate (projectInstance, OnlyEvaluateProperties);
 
 				SyncBuildProject (info.ItemMap, info.Engine, projectInstance);
+			} catch (UserException ex) {
+				LoggingService.LogError ("MSBuild project could not be evaluated", ex);
+				throw;
 			} catch (Exception ex) {
 				// If the project can't be evaluated don't crash
 				LoggingService.LogError ("MSBuild project could not be evaluated", ex);
-				throw new ProjectEvaluationException (msproject, ex.Message);
+				throw new ProjectEvaluationException (msproject, ex.Message, ex);
 			} finally {
 				if (oldProjectInstance != null)
 					engine.DisposeProjectInstance (oldProjectInstance);
@@ -124,16 +128,30 @@ namespace MonoDevelop.Projects.MSBuild
 		{
 			evaluatedItemsIgnoringCondition.Clear ();
 			evaluatedItems.Clear ();
+			evaluatedItemDefinitions?.Clear ();
 
 			if (!OnlyEvaluateProperties) {
-				
-				var evalItems = new Dictionary<string,MSBuildItemEvaluated> ();
+				foreach (var it in e.GetEvaluatedItemDefinitions (project)) {
+					var xit = it as MSBuildItemEvaluated;
+					if (xit != null) {
+						if (evaluatedItemDefinitions == null)
+							evaluatedItemDefinitions = new Dictionary<string, MSBuildPropertyGroupEvaluated> ();
+						MSBuildPropertyGroupEvaluated evalItemDefProps = null;
+						if (!evaluatedItemDefinitions.TryGetValue (xit.Name, out evalItemDefProps)) {
+							evalItemDefProps = new MSBuildPropertyGroupEvaluated (msproject);
+							evaluatedItemDefinitions [xit.Name] = evalItemDefProps;
+						}
+						evalItemDefProps.Sync (engine, xit, clearProperties: false);
+					}
+				}
+
+				var evalItems = new Dictionary<(string, string),MSBuildItemEvaluated> ();
 				foreach (var it in e.GetEvaluatedItems (project)) {
 					var xit = it as MSBuildItemEvaluated;
 					if (xit == null) {
 						xit = CreateEvaluatedItem (e, it);
 						var itemId = e.GetItemMetadata (it, NodeIdPropertyName);
-						var key = itemId + " " + xit.Include;
+						var key = (itemId, xit.Include);
 						if (evalItems.ContainsKey (key))
 							continue; // xbuild seems to return duplicate items when using wildcards. This is a workaround to avoid the duplicates.
 						MSBuildItem pit;
@@ -146,14 +164,14 @@ namespace MonoDevelop.Projects.MSBuild
 					evaluatedItems.Add (xit);
 				}
 
-				var evalItemsNoCond = new Dictionary<string,MSBuildItemEvaluated> ();
+				var evalItemsNoCond = new Dictionary<(string, string),MSBuildItemEvaluated> ();
 				foreach (var it in e.GetEvaluatedItemsIgnoringCondition (project)) {
 					var xit = it as MSBuildItemEvaluated;
 					if (xit == null) {
 						xit = CreateEvaluatedItem (e, it);
 						var itemId = e.GetItemMetadata (it, NodeIdPropertyName);
 						MSBuildItemEvaluated evItem;
-						var key = itemId + " " + xit.Include;
+						var key = (itemId, xit.Include);
 						if (evalItemsNoCond.ContainsKey (key))
 							continue; // xbuild seems to return duplicate items when using wildcards. This is a workaround to avoid the duplicates.
 						if (!string.IsNullOrEmpty (itemId) && evalItems.TryGetValue (key, out evItem)) {
@@ -168,6 +186,7 @@ namespace MonoDevelop.Projects.MSBuild
 							evalItemsNoCond [key] = xit;
 						}
 					}
+					UpdateMetadata (xit);
 					evaluatedItemsIgnoringCondition.Add (xit);
 				}
 
@@ -184,6 +203,21 @@ namespace MonoDevelop.Projects.MSBuild
 			props.SyncCollection (e, project);
 
 			conditionedProperties = engine.GetConditionedProperties (project);
+		}
+
+		void UpdateMetadata (MSBuildItemEvaluated it)
+		{
+			if (evaluatedItemDefinitions == null)
+				return;
+
+			if (!evaluatedItemDefinitions.TryGetValue (it.Name, out MSBuildPropertyGroupEvaluated itemDefProps))
+				return;
+
+			var props = (MSBuildPropertyGroupEvaluated)it.Metadata;
+			foreach (var evaluatedProp in itemDefProps.GetProperties ()) {
+				if (!props.HasProperty (evaluatedProp.Name))
+					props.SetProperty (evaluatedProp.Name, evaluatedProp);
+			}
 		}
 
 		MSBuildItemEvaluated CreateEvaluatedItem (MSBuildEngine e, object it)
@@ -257,6 +291,16 @@ namespace MonoDevelop.Projects.MSBuild
 		internal void SetPropertyValueStale (string name)
 		{
 			evaluatedProperties.SetPropertyValueStale (name);
+		}
+
+		internal IMSBuildPropertyGroupEvaluated GetEvaluatedItemDefinitionProperties (string itemName)
+		{
+			if (itemName == null || evaluatedItemDefinitions == null)
+				return null;
+
+			MSBuildPropertyGroupEvaluated evalItemDefProps = null;
+			evaluatedItemDefinitions.TryGetValue (itemName, out evalItemDefProps);
+			return evalItemDefProps;
 		}
 	}
 

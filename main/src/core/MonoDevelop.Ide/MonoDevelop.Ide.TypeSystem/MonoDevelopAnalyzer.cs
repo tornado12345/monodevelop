@@ -87,7 +87,7 @@ namespace MonoDevelop.Ide.TypeSystem
 
 		private void OnAnalyzerLoadError (object sender, AnalyzerLoadFailureEventArgs e)
 		{
-			var data = AnalyzerHelper.CreateAnalyzerLoadFailureDiagnostic (_workspace, _projectId, _language, FullPath, e);
+			var data = AnalyzerHelper.CreateAnalyzerLoadFailureDiagnostic (_projectId, _language, FullPath, e);
 
 			lock (_gate) {
 				_analyzerLoadErrors = _analyzerLoadErrors.Add (data);
@@ -100,7 +100,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		{
 			Reset ();
 
-			FileWatcherService.WatchDirectories (this, null);
+			FileWatcherService.WatchDirectories (this, null).Ignore ();
 			FileService.FileChanged -= OnUpdatedOnDisk;
 		}
 
@@ -155,7 +155,7 @@ namespace MonoDevelop.Ide.TypeSystem
 
 			public Assembly LoadFromPath (string fullPath)
 			{
-				FileWatcherService.WatchDirectories (_analyzer, new [] { _analyzer.FullPath.ParentDirectory });
+				FileWatcherService.WatchDirectories (_analyzer, new [] { _analyzer.FullPath.ParentDirectory }).Ignore ();
 				return _analyzer._loader.LoadFromPath (fullPath);
 			}
 		}
@@ -184,7 +184,7 @@ namespace MonoDevelop.Ide.TypeSystem
 
 			public override ImmutableArray<DiagnosticAnalyzer> GetAnalyzers (string language)
 			{
-				FileWatcherService.WatchDirectories (_visualStudioAnalyzer, new [] { _visualStudioAnalyzer.FullPath.ParentDirectory });
+				FileWatcherService.WatchDirectories (_visualStudioAnalyzer, new [] { _visualStudioAnalyzer.FullPath.ParentDirectory }).Ignore ();
 				return _underlying.GetAnalyzers (language);
 			}
 

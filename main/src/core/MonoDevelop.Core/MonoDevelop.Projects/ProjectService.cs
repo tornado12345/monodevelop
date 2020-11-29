@@ -53,12 +53,13 @@ namespace MonoDevelop.Projects
 
 		TargetFramework defaultTargetFramework;
 		
-		string defaultPlatformTarget = "x86";
-		static readonly TargetFrameworkMoniker DefaultTargetFrameworkId = TargetFrameworkMoniker.NET_4_7;
+		string defaultPlatformTarget = "anycpu";
+		static readonly TargetFrameworkMoniker DefaultTargetFrameworkId = TargetFrameworkMoniker.NET_4_7_2;
 		
 		public const string BuildTarget = "Build";
 		public const string CleanTarget = "Clean";
-		
+		public const string PackTarget = "Pack";
+
 		const string SerializableClassesExtensionPath = "/MonoDevelop/ProjectModel/SerializableClasses";
 		const string ProjectBindingsExtensionPath = "/MonoDevelop/ProjectModel/ProjectBindings";
 		const string WorkspaceObjectReadersPath = "/MonoDevelop/ProjectModel/WorkspaceObjectReaders";
@@ -123,7 +124,7 @@ namespace MonoDevelop.Projects
 					var r = GetObjectReaderForFile (file, typeof(SolutionItem));
 					if (r == null)
 						throw new UnknownSolutionItemTypeException ();
-					SolutionItem loadedItem = await r.LoadSolutionItem (monitor, ctx, file, format, typeGuid, itemGuid);
+					SolutionItem loadedItem = await Task.Run (() => r.LoadSolutionItem (monitor, ctx, file, format, typeGuid, itemGuid));
 					if (loadedItem != null) {
 						loadedItem.NeedsReload = false;
 						UpdateReadSolutionItemMetadata (metadata, loadedItem);
@@ -216,7 +217,7 @@ namespace MonoDevelop.Projects
 					var r = GetObjectReaderForFile (file, typeof(WorkspaceItem));
 					if (r == null)
 						throw new InvalidOperationException ("Invalid file format: " + file);
-					WorkspaceItem item = await r.LoadWorkspaceItem (monitor, fullpath);
+					WorkspaceItem item = await Task.Run (() => r.LoadWorkspaceItem (monitor, fullpath));
 					if (item != null)
 						item.NeedsReload = false;
 					else

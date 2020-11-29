@@ -25,6 +25,7 @@
 // THE SOFTWARE.
 
 using System;
+using System.Text;
 using System.Linq;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
@@ -38,8 +39,8 @@ namespace MonoDevelop.VersionControl.Git
 	public static class GitService
 	{
 		public static ConfigurationProperty<bool> UseRebaseOptionWhenPulling = ConfigurationProperty.Create ("MonoDevelop.VersionControl.Git.UseRebaseOptionWhenPulling", true);
-		public static ConfigurationProperty<bool> StashUnstashWhenUpdating = ConfigurationProperty.Create ("MonoDevelop.VersionControl.Git.StashUnstashWhenUpdating", true);
-		public static ConfigurationProperty<bool> StashUnstashWhenSwitchingBranches = ConfigurationProperty.Create ("MonoDevelop.VersionControl.Git.StashUnstashWhenSwitchingBranches", true);
+		public static ConfigurationProperty<bool> StashUnstashWhenUpdating = ConfigurationProperty.Create ("MonoDevelop.VersionControl.Git.StashUnstashWhenUpdating", false);
+		public static ConfigurationProperty<bool> StashUnstashWhenSwitchingBranches = ConfigurationProperty.Create ("MonoDevelop.VersionControl.Git.StashUnstashWhenSwitchingBranches", false);
 
 		public static void Push (GitRepository repo)
 		{
@@ -63,9 +64,9 @@ namespace MonoDevelop.VersionControl.Git
 				string branch = dlg.SelectedRemoteBranch ?? repo.GetCurrentBranch ();
 
 				ProgressMonitor monitor = VersionControlService.GetProgressMonitor (GettextCatalog.GetString ("Pushing changes..."), VersionControlOperationType.Push);
-				ThreadPool.QueueUserWorkItem (delegate {
+				Task.Run (async () => {
 					try {
-						repo.Push (monitor, remote, branch);
+						await repo.PushAsync (monitor, remote, branch);
 					} catch (Exception ex) {
 						monitor.ReportError (ex.Message, ex);
 					} finally {
@@ -78,9 +79,9 @@ namespace MonoDevelop.VersionControl.Git
 			}
 		}
 
-		public static void ShowConfigurationDialog (GitRepository repo)
+		public static void ShowConfigurationDialog (VersionControlSystem vcs, string repoPath, string repoUrl)
 		{
-			using (var dlg = new GitConfigurationDialog (repo))
+			using (var dlg = new GitConfigurationDialog (vcs, repoPath, repoUrl))
 				MessageService.ShowCustomDialog (dlg);
 		}
 
@@ -95,21 +96,25 @@ namespace MonoDevelop.VersionControl.Git
 					var stageChanges = dlg.StageChanges;
 					dlg.Hide ();
 
-					Task.Run (() => {
-						if (rebasing) {
-							using (ProgressMonitor monitor = VersionControlService.GetProgressMonitor (GettextCatalog.GetString ("Rebasing branch '{0}'...", selectedBranch))) {
-								if (isRemote)
-									repo.Fetch (monitor, remoteName);
-								repo.Rebase (selectedBranch, stageChanges ? GitUpdateOptions.SaveLocalChanges : GitUpdateOptions.None, monitor);
+					Task.Run ((Func<Task>)(async () => {
+						try {
+							if (rebasing) {
+								using (var monitor = VersionControlService.GetProgressMonitor (GettextCatalog.GetString ("Rebasing branch '{0}'...", selectedBranch))) {
+									if (isRemote)
+										await repo.FetchAsync ((ProgressMonitor)monitor, (string)remoteName);
+									await repo.RebaseAsync (selectedBranch, stageChanges ? GitUpdateOptions.SaveLocalChanges : GitUpdateOptions.None, monitor);
+								}
+							} else {
+								using (var monitor = VersionControlService.GetProgressMonitor (GettextCatalog.GetString ("Merging branch '{0}'...", selectedBranch))) {
+									if (isRemote)
+										await repo.FetchAsync ((ProgressMonitor)monitor, (string)remoteName);
+									await repo.MergeAsync (selectedBranch, stageChanges ? GitUpdateOptions.SaveLocalChanges : GitUpdateOptions.None, monitor, FastForwardStrategy.NoFastForward);
+								}
 							}
-						} else {
-							using (ProgressMonitor monitor = VersionControlService.GetProgressMonitor (GettextCatalog.GetString ("Merging branch '{0}'...", selectedBranch))) {
-								if (isRemote)
-									repo.Fetch (monitor, remoteName);
-								repo.Merge (selectedBranch, stageChanges ? GitUpdateOptions.SaveLocalChanges : GitUpdateOptions.None, monitor, FastForwardStrategy.NoFastForward);
-							}
+						} catch (Exception e) {
+							LoggingService.LogError ("Error while showing merge dialog.", e);
 						}
-					});
+					}));
 				}
 			} finally {
 				dlg.Destroy ();
@@ -123,23 +128,20 @@ namespace MonoDevelop.VersionControl.Git
 				MessageService.ShowCustomDialog (dlg);
 		}
 
-		public async static Task<bool> SwitchToBranch (GitRepository repo, string branch)
+		public static async Task<bool> SwitchToBranchAsync (GitRepository repo, string branch)
 		{
 			var monitor = new MessageDialogProgressMonitor (true, false, false, true);
 			try {
 				IdeApp.Workbench.AutoReloadDocuments = true;
 				IdeApp.Workbench.LockGui ();
-				var t = await Task.Run (delegate {
-					try {
-						return repo.SwitchToBranch (monitor, branch);
-					} catch (Exception ex) {
-						monitor.ReportError (GettextCatalog.GetString ("Branch switch failed"), ex);
-						return false;
-					} finally {
-						monitor.Dispose ();
-					}
-				});
-				return t;
+				try {
+					return await repo.SwitchToBranchAsync (monitor, branch);
+				} catch (Exception ex) {
+					monitor.ReportError (GettextCatalog.GetString ("Branch switch failed"), ex);
+					return false;
+				} finally {
+					monitor.Dispose ();
+				}
 			} finally {
 				IdeApp.Workbench.AutoReloadDocuments = false;
 				IdeApp.Workbench.UnlockGui ();
@@ -152,8 +154,8 @@ namespace MonoDevelop.VersionControl.Git
 			var t = Task.Run (delegate {
 				try {
 					var res = repo.ApplyStash (monitor, s);
-					ReportStashResult (res);
-					return true;
+					ReportStashResult (repo, res, null);
+					return res == StashApplyStatus.Applied;
 				} catch (Exception ex) {
 					string msg = GettextCatalog.GetString ("Stash operation failed.");
 					monitor.ReportError (msg, ex);
@@ -166,20 +168,72 @@ namespace MonoDevelop.VersionControl.Git
 			return t;
 		}
 
-		public static void ReportStashResult (StashApplyStatus status)
+		public static void ReportStashResult (Repository repo, StashApplyStatus status, int? stashCount)
 		{
-			if (status == StashApplyStatus.Conflicts) {
-				string msg = GettextCatalog.GetString ("Stash applied with conflicts");
-				Runtime.RunInMainThread (delegate {
-					IdeApp.Workbench.StatusBar.ShowWarning (msg);
-				});
+			string msg;
+			StashResultType stashResultType;
+
+			switch (status) {
+			case StashApplyStatus.Conflicts:
+				bool stashApplied = false;
+				StringBuilder info = new StringBuilder (GettextCatalog.GetString ("A conflicting change has been detected in the index. "));
+				// Include conflicts in the msg
+				if (stashCount != null && repo is GitRepository gitRepo) {
+					int actualStashCount = gitRepo.GetStashes ().Count ();
+					stashApplied = actualStashCount != stashCount;
+					if (stashApplied) {
+						info.AppendLine (GettextCatalog.GetString ("The following conflicts have been found:"));
+						foreach (var conflictFile in gitRepo.RootRepository.Index.Conflicts) {
+							info.AppendLine (conflictFile.Ancestor.Path);
+						}
+					} else
+						info.Append (GettextCatalog.GetString ("Stash not applied."));
+				}
+				msg = info.ToString ();
+				stashResultType = !stashApplied ? StashResultType.Error : StashResultType.Warning;
+				break;
+			case StashApplyStatus.UncommittedChanges:
+				msg = GettextCatalog.GetString ("The stash application was aborted due to uncommitted changes in the index.");
+				stashResultType = StashResultType.Warning;
+				break;
+			case StashApplyStatus.NotFound:
+				msg = GettextCatalog.GetString ("The stash index given was not found.");
+				stashResultType = StashResultType.Error;
+				break;
+			default:
+				msg = GettextCatalog.GetString ("Stash successfully applied.");
+				stashResultType = StashResultType.Message;
+				break;
 			}
-			else {
-				string msg = GettextCatalog.GetString ("Stash successfully applied");
-				Runtime.RunInMainThread (delegate {
-					IdeApp.Workbench.StatusBar.ShowMessage (msg);
-				});
-			}
+
+			ShowStashResult (msg, stashResultType);
+		}
+
+		enum StashResultType
+		{
+			Error,
+			Message,
+			Warning
+		}
+
+		static void ShowStashResult (string msg, StashResultType stashResultType)
+		{
+			Runtime.RunInMainThread (delegate {
+				switch (stashResultType)
+				{
+					case StashResultType.Error:
+						IdeApp.Workbench.StatusBar.ShowError (msg);
+						MessageService.ShowError (msg);
+						break;
+					case StashResultType.Message:
+						IdeApp.Workbench.StatusBar.ShowMessage (msg);
+						break;
+					case StashResultType.Warning:
+						IdeApp.Workbench.StatusBar.ShowWarning (msg);
+						MessageService.ShowWarning (msg);
+						break;
+				}
+			});
 		}
 	}
 }

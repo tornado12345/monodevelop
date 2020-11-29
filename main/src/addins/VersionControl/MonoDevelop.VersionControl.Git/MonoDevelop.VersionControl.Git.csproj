@@ -64,6 +64,7 @@
     <Compile Include="Gui\MonoDevelop.VersionControl.Git.StashManagerDialog.cs" />
     <Compile Include="Gui\MonoDevelop.VersionControl.Git.UserGitConfigDialog.cs" />
     <Compile Include="Gui\MonoDevelop.VersionControl.Git.UserInfoConflictDialog.cs" />
+    <Compile Include="MonoDevelop.VersionControl.Git\IGitCredentialsProvider.cs" />
     <Compile Include="MonoDevelop.VersionControl.Git\XwtCredentialsDialog.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -96,11 +97,6 @@
       <Project>{EE6ED99F-CB12-4683-B055-D28FC7357A34}</Project>
       <Name>LibGit2Sharp</Name>
     </ProjectReference>
-    <ProjectReference Include="..\..\..\..\external\nrefactory\ICSharpCode.NRefactory\ICSharpCode.NRefactory.csproj">
-      <Project>{3B2A5653-EC97-4001-BB9B-D90F1AF2C371}</Project>
-      <Name>ICSharpCode.NRefactory</Name>
-      <Private>False</Private>
-    </ProjectReference>
     <ProjectReference Include="..\..\MonoDevelop.SourceEditor2\MonoDevelop.SourceEditor.csproj">
       <Project>{F8F92AA4-A376-4679-A9D4-60E7B7FBF477}</Project>
       <Name>MonoDevelop.SourceEditor</Name>
@@ -126,6 +122,7 @@
       <Link>libssh2.license.txt</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <IncludeCopyLocal Include="LibGit2Sharp.dll" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MonoDevelop.VersionControl.Git.Tests" />

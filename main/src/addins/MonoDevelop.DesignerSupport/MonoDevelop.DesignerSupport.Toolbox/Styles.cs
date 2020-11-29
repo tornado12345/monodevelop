@@ -1,8 +1,10 @@
-﻿#if MAC
+#if MAC
 using AppKit;
+using MonoDevelop.Core.FeatureConfiguration;
 using MonoDevelop.Ide;
+using Xamarin.PropertyEditing.Mac;
 
-namespace MonoDevelop.DesignerSupport.Toolbox
+namespace MonoDevelop.DesignerSupport
 {
 	static class Styles
 	{
@@ -19,6 +21,19 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 
 		public static NSColor ToolbarBackgroundColor { get; private set; }
 
+		public static PropertyPadStyle PropertyPad { get; private set; }
+
+		// Used for the property panel in Xamarin.PropertyEditing
+		public class PropertyPadStyle
+		{
+			public NSColor Checkerboard0 { get; internal set; }
+			public NSColor Checkerboard1 { get; internal set; }
+			public NSColor ValueBlockBackgroundColor { get; internal set; }
+			public NSColor FrameBoxButtonBackgroundColor { get; internal set; }
+			public NSColor TabBorderColor { get; internal set; }
+			public NSColor PanelTabBackground { get; internal set; }
+		}
+
 		static Styles ()
 		{
 			LoadStyles ();
@@ -33,12 +48,31 @@ namespace MonoDevelop.DesignerSupport.Toolbox
 				LabelSelectedForegroundColor = NSColor.Highlight;
 				ToolbarBackgroundColor = NSColor.White;
 				CellBackgroundSelectedColor = NSColor.FromRgb (0.36f, 0.54f, 0.90f);
+
+
+				PropertyPad = new PropertyPadStyle {
+					Checkerboard0 = NSColor.FromRgb (255, 255, 255),
+					Checkerboard1 = NSColor.FromRgb (217, 217, 217),
+					PanelTabBackground = NSColor.FromRgb (248, 247, 248),
+					TabBorderColor = NSColor.FromRgba (0, 0, 0, 25),
+					ValueBlockBackgroundColor = NSColor.FromRgba (0, 0, 0, 20),
+					FrameBoxButtonBackgroundColor = NSColor.FromRgb (0.36f, 0.54f, 0.90f)
+			};
 			} else {
 				CellBackgroundSelectedColor = NSColor.FromRgb (0.38f, 0.55f, 0.91f);
 				HeaderBackgroundColor = NSColor.FromRgb (0.29f, 0.29f, 0.29f);
 				HeaderBorderBackgroundColor = NSColor.FromRgb (0.29f, 0.29f, 0.29f);
 				LabelSelectedForegroundColor = NSColor.SelectedText;
 				ToolbarBackgroundColor = NSColor.FromRgb (0.25f, 0.25f, 0.25f);
+
+				PropertyPad = new PropertyPadStyle {
+					Checkerboard0 = NSColor.FromRgb (38, 38, 38),
+					Checkerboard1 = NSColor.FromRgb (0, 0, 0),
+					PanelTabBackground = NSColor.FromRgb (85, 85, 85),
+					TabBorderColor = NSColor.FromRgba (255, 255, 255, 0),
+					ValueBlockBackgroundColor = NSColor.FromRgba (255, 255, 255, 25),
+					FrameBoxButtonBackgroundColor = NSColor.FromRgb (0.38f, 0.55f, 0.91f)
+			};
 			}
 		}
 	}

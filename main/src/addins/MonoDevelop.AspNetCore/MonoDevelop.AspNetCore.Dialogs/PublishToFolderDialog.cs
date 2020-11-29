@@ -35,7 +35,7 @@ namespace MonoDevelop.AspNetCore.Dialogs
 				Configuration = project.GetActiveConfiguration ();
 
 			var defaultDirectory = Path.Combine (BinBaseUri.ToString (), Configuration,
-								project.TargetFramework.Id.GetShortFrameworkName (),
+								project.TargetFramework.Id.ShortName,
 								"publish");
 
 			if (uriKind == UriKind.Relative)
@@ -106,6 +106,7 @@ namespace MonoDevelop.AspNetCore.Dialogs
 				Name = "pathEntry",
 				Text = defaultDirectory
 			};
+			pathEntry.Accessible.LabelWidget = chooseLabel;
 			pathEntry.Changed += pathEntry_Changed;
 			pathEntry.LostFocus += PathEntry_LostFocus;
 			browseEntryHBox.PackStart (pathEntry, expand: true);
@@ -161,7 +162,7 @@ namespace MonoDevelop.AspNetCore.Dialogs
 			if (cmd == Command.Ok) {
 				publishCommandItem.Profile = new ProjectPublishProfile {
 					PublishUrl = pathEntry.Text,
-					TargetFramework = publishCommandItem.Project.TargetFramework.Id.GetShortFrameworkName (),
+					TargetFramework = publishCommandItem.Project.TargetFramework.Id.ShortName,
 					LastUsedBuildConfiguration = defaultDirectoryResolver.Configuration,
 					LastUsedPlatform = publishCommandItem.Project.GetActivePlatform ()
 				};

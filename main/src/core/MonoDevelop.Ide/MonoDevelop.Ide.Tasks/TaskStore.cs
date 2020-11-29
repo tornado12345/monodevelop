@@ -1,4 +1,4 @@
-// 
+﻿// 
 // TaskStore.cs
 //  
 // Author:
@@ -44,12 +44,18 @@ using MonoDevelop.Ide.Navigation;
 using MonoDevelop.Ide.TextEditing;
 using MonoDevelop.Ide.Desktop;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace MonoDevelop.Ide.Tasks
 {
-	public class TaskStore: IEnumerable<TaskListEntry>, ILocationList
+	public class TaskStore: IEnumerable<TaskListEntry>, ILocationList, IDisposable
 	{
 		int taskUpdateCount;
+		RootWorkspace workspace;
+		IDisposable workspaceReg;
+		TextEditorService textEditorService;
+		IDisposable textEditorServiceReg;
+
 		List<TaskListEntry> tasks = new List<TaskListEntry> ();
 		Dictionary<FilePath,TaskListEntry[]> taskIndex = new Dictionary<FilePath, TaskListEntry[]> ();
 		
@@ -59,47 +65,73 @@ namespace MonoDevelop.Ide.Tasks
 		
 		List<TaskListEntry> tasksAdded;
 		List<TaskListEntry> tasksRemoved;
-		
+
 		public TaskStore ()
 		{
-			if (IdeApp.Workspace != null) {
-				IdeApp.Workspace.FileRenamedInProject += ProjectFileRenamed;
-				IdeApp.Workspace.FileRemovedFromProject += ProjectFileRemoved;
-			}
+			workspaceReg = Runtime.ServiceProvider.WhenServiceInitialized<RootWorkspace> (s => {
+				workspace = s;
+				workspace.FileRenamedInProject += ProjectFileRenamed;
+				workspace.FileRemovedFromProject += ProjectFileRemoved;
+			});
 
-			TextEditorService.LineCountChangesCommitted += delegate (object sender, TextFileEventArgs args) {
-				foreach (TaskListEntry task in GetFileTasks (args.TextFile.Name.FullPath))
-					task.SavedLine = -1;
-			};
-			
-			TextEditorService.LineCountChangesReset += delegate (object sender, TextFileEventArgs args) {
-				Runtime.AssertMainThread ();
-				TaskListEntry[] ctasks = GetFileTasks (args.TextFile.Name.FullPath);
-				foreach (TaskListEntry task in ctasks) {
-					if (task.SavedLine != -1) {
-						task.Line = task.SavedLine;
-						task.SavedLine = -1;
-					}
-				}
-				NotifyTasksChanged (ctasks);
-			};
-			
-			TextEditorService.LineCountChanged += delegate (object sender, LineCountEventArgs args) {
-				Runtime.AssertMainThread ();
-				if (args.TextFile == null || args.TextFile.Name.IsNullOrEmpty)
-					return;
-				TaskListEntry[] ctasks = GetFileTasks (args.TextFile.Name.FullPath);
-				foreach (TaskListEntry task in ctasks) {
-					if (task.Line > args.LineNumber || (task.Line == args.LineNumber && task.Column >= args.Column)) {
-						if (task.SavedLine == -1)
-							task.SavedLine = task.Line;
-						task.Line += args.LineCount;
-					}
-				}
-				NotifyTasksChanged (ctasks);
-			};
+			textEditorServiceReg = Runtime.ServiceProvider.WhenServiceInitialized<TextEditorService> (s => {
+				textEditorService = s;
+				textEditorService.LineCountChangesCommitted += TextEditorService_LineCountChangesCommitted;
+				textEditorService.LineCountChangesReset += TextEditorService_LineCountChangesReset;
+				textEditorService.LineCountChanged += TextEditorService_LineCountChanged;
+			});
 		}
-		
+
+		public void Dispose ()
+		{
+			workspaceReg.Dispose ();
+			textEditorServiceReg.Dispose ();
+			if (workspace != null) {
+				workspace.FileRenamedInProject -= ProjectFileRenamed;
+				workspace.FileRemovedFromProject -= ProjectFileRemoved;
+			}
+			if (textEditorService != null) {
+				textEditorService.LineCountChangesCommitted -= TextEditorService_LineCountChangesCommitted;
+				textEditorService.LineCountChangesReset -= TextEditorService_LineCountChangesReset;
+				textEditorService.LineCountChanged -= TextEditorService_LineCountChanged;
+			}
+		}
+
+		void TextEditorService_LineCountChangesCommitted (object sender, TextFileEventArgs args)
+		{
+			foreach (TaskListEntry task in GetFileTasks (args.TextFile.Name.FullPath))
+				task.SavedLine = -1;
+		}
+
+		void TextEditorService_LineCountChangesReset (object sender, TextFileEventArgs args)
+		{
+			Runtime.AssertMainThread ();
+			TaskListEntry [] ctasks = GetFileTasks (args.TextFile.Name.FullPath);
+			foreach (TaskListEntry task in ctasks) {
+				if (task.SavedLine != -1) {
+					task.Line = task.SavedLine;
+					task.SavedLine = -1;
+				}
+			}
+			NotifyTasksChanged (ctasks);
+		}
+
+		void TextEditorService_LineCountChanged (object sender, LineCountEventArgs args)
+		{
+			Runtime.AssertMainThread ();
+			if (args.TextFile == null || args.TextFile.Name.IsNullOrEmpty)
+				return;
+			TaskListEntry [] ctasks = GetFileTasks (args.TextFile.Name.FullPath);
+			foreach (TaskListEntry task in ctasks) {
+				if (task.Line > args.LineNumber || (task.Line == args.LineNumber && task.Column >= args.Column)) {
+					if (task.SavedLine == -1)
+						task.SavedLine = task.Line;
+					task.Line += args.LineCount;
+				}
+			}
+			NotifyTasksChanged (ctasks);
+		}
+
 		public void Add (TaskListEntry task)
 		{
 			Runtime.AssertMainThread ();
@@ -387,8 +419,11 @@ namespace MonoDevelop.Ide.Tasks
 		class TaskNavigationPoint : TextFileNavigationPoint
 		{
 			TaskListEntry task;
-			
-			public TaskNavigationPoint (TaskListEntry task) : base (task.FileName, task.Line, task.Column)
+
+			// Due to changes in the editor, the offsets of how we count lines seem to be different
+			// so it makes sense that we try to do translation at this point, where it doesn't change
+			// the logic in either <see cref="TextFileNavigationPoint"/> or in the TaskStore.
+			public TaskNavigationPoint (TaskListEntry task) : base (task.FileName, task.Line - 1, task.Column - 1)
 			{
 				this.task = task;
 			}
@@ -396,7 +431,7 @@ namespace MonoDevelop.Ide.Tasks
 			protected override async Task<Document> DoShow ()
 			{
 				Document result = await base.DoShow ();
-				TaskService.InformJumpToTask (task);
+				IdeServices.TaskService.InformJumpToTask (task);
 				return result;
 			}
 		}
@@ -417,7 +452,7 @@ namespace MonoDevelop.Ide.Tasks
 			
 			// Jump over tasks with different severity or with no file name
 			while (n != -1 && n < tasks.Count && 
-				(iteratingSeverity != tasks [n].Severity || !IsProjectTaskFile (tasks [n])))
+				(iteratingSeverity != tasks [n].Severity || !IsProjectTaskFileInternal (tasks [n])))
 				n++;
 			
 			TaskListEntry ct = n != -1 && n < tasks.Count ? tasks [n] : null;
@@ -434,7 +469,7 @@ namespace MonoDevelop.Ide.Tasks
 				CurrentLocationTaskChanged (this, EventArgs.Empty);
 			
 			if (currentLocationTask != null) {
-				TaskService.ShowStatus (currentLocationTask);
+				IdeServices.TaskService.ShowStatus (currentLocationTask);
 				return new TaskNavigationPoint (currentLocationTask);
 			}
 			else {
@@ -446,7 +481,13 @@ namespace MonoDevelop.Ide.Tasks
 		/// <summary>
 		/// Determines whether the task's file should be opened automatically when jumping to the next error.
 		/// </summary>
+		[Obsolete("This will be removed in a future release", error: true)]
 		public static bool IsProjectTaskFile (TaskListEntry t)
+		{
+			return IsProjectTaskFileInternal (t);
+		}
+
+		internal static bool IsProjectTaskFileInternal (TaskListEntry t)
 		{
 			if (t.FileName.IsNullOrEmpty)
 				return false;
@@ -459,16 +500,16 @@ namespace MonoDevelop.Ide.Tasks
 				return false;
 
 			//only text files
-			var mimeType = DesktopService.GetMimeTypeForUri (t.FileName);
-			if (!DesktopService.GetMimeTypeIsText (mimeType))
+			var mimeType = IdeServices.DesktopService.GetMimeTypeForUri (t.FileName);
+			if (!IdeServices.DesktopService.GetMimeTypeIsText (mimeType))
 				return false;
 
-			//only files for which we have a default internal display binding
-			var binding = DisplayBindingService.GetDefaultBinding (t.FileName, mimeType, p);
-			if (binding == null || !binding.CanUseAsDefault || binding is IExternalDisplayBinding)
-				return false;
+			// only valid files are those that have a way to view them
+			// .Result here is currently safe because none of the actual calls to OnGetSupportedControllers(Async)
+			// is actually requesting the UI thread scheduler.
+			var fileViewers = IdeServices.DisplayBindingService.GetFileViewers (t.FileName, p).Result;
 
-			return true;
+			return fileViewers.Any (viewer => viewer.CanUseAsDefault && !viewer.IsExternal);
 		}
 		
 		
@@ -508,7 +549,7 @@ namespace MonoDevelop.Ide.Tasks
 				CurrentLocationTaskChanged (this, EventArgs.Empty);
 			
 			if (currentLocationTask != null) {
-				TaskService.ShowStatus (currentLocationTask);
+				IdeServices.TaskService.ShowStatus (currentLocationTask);
 				return new TaskNavigationPoint (currentLocationTask);
 			}
 			else {
@@ -525,7 +566,7 @@ namespace MonoDevelop.Ide.Tasks
 			}
 			return -1;
 		}
-		
+
 		public string ItemName {
 			get; set;
 		}

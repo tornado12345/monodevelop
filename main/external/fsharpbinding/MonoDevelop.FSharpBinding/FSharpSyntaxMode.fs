@@ -1,16 +1,13 @@
 ﻿namespace MonoDevelop.FSharp
 
-open System
 open System.Collections.Generic
-open System.Collections.Immutable
 open MonoDevelop.FSharp.Shared
-open MonoDevelop.Ide
 open MonoDevelop.Ide.Editor
 open MonoDevelop.Ide.Editor.Highlighting
+open MonoDevelop.Ide.Gui
 open MonoDevelop.Core
-open Mono.TextEditor.Highlighting
-open Microsoft.FSharp.Compiler
-open Microsoft.FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler
+open FSharp.Compiler.SourceCodeServices
 open ExtCore.Control
 open MonoDevelop
 open Gtk
@@ -351,24 +348,18 @@ module Patterns =
             | Some (tokens:_ list, symbols, colours, _formatters) when tokens.Length >= lineNumber ->
                 let tokens, _lineText = tokens.[lineNumber-1]
                 tokens
-                |> Lexer.fixTokens txt
-                |> List.choose (fun draft -> makeChunk symbols lineNumber lineOffset colours {draft.Token with RightColumn = draft.RightColumn} )
+                |> MonoDevelop.FSharp.Shared.Lexer.fixTokens txt
+                |> List.choose (fun (draft:MonoDevelop.FSharp.Shared.DraftToken) -> makeChunk symbols lineNumber lineOffset colours {draft.Token with RightColumn = draft.RightColumn} )
                 |> List.toSeq
             | _ -> Seq.empty
 
 
-type FSharpSyntaxMode(editor, context) =
+type FSharpSyntaxMode(editor, context: DocumentContext) =
     inherit SemanticHighlighting(editor, context)
     let tokenssymbolscolours = ref None
-    //let style = ref (getColourScheme())
-    //let colourSchemChanged =
-    //    IdeApp.Preferences.ColorScheme.Changed.Subscribe
-    //        (fun _ (eventArgs:EventArgs) ->
-    //                          let colourStyles = SyntaxModeService.GetColorStyle(IdeApp.Preferences.ColorScheme.Value)
-    //                          (*style := colourStyles*) )
-                                  
+
     override x.DocumentParsed() =
-        if MonoDevelop.isDocumentVisible context.Name then
+        if MonoDevelop.isDocumentVisible editor.FileName then
             SyntaxMode.tryGetTokensSymbolsAndColours context
             |> Option.iter (fun tsc -> tokenssymbolscolours := Some tsc
                                        Application.Invoke(fun _ _ -> x.NotifySemanticHighlightingUpdate()))
@@ -378,6 +369,4 @@ type FSharpSyntaxMode(editor, context) =
         let lineNumber = line.LineNumber
         let txt = editor.GetLineText line
 
-        SyntaxMode.getColouredSegment !tokenssymbolscolours lineNumber line.Offset txt// !style
-        
-    //interface IDisposable with member x.Dispose() = colourSchemChanged.Dispose()
+        SyntaxMode.getColouredSegment !tokenssymbolscolours lineNumber line.Offset txt

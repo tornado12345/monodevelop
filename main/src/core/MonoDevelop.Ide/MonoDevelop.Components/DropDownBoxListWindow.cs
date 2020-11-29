@@ -1,4 +1,4 @@
-// 
+﻿// 
 // DropDownBoxListWindow.cs
 //  
 // Author:
@@ -30,6 +30,7 @@ using Gtk;
 using System.Text;
 using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Ide.Fonts;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Components
 {
@@ -91,7 +92,14 @@ namespace MonoDevelop.Components
 			list.SelectItem += delegate {
 				var sel = list.Selection;
 				if (sel >= 0 && sel < DataProvider.IconCount) {
-					DataProvider.ActivateItem (sel);
+					try {
+						DataProvider.ActivateItem (sel);
+						// This is so parent window of dropdown regains focus
+						TransientFor?.Present ();
+					} catch (Exception ex) {
+						LoggingService.LogInternalError ("Offset seems to be out of sync with the snapshot.", ex);
+					}
+
 					Destroy ();
 				}
 			};
@@ -296,8 +304,12 @@ namespace MonoDevelop.Components
 
 			void PerformPress (object sender, EventArgs args)
 			{
-				var element = (TextElement)sender;
-				win.DataProvider.ActivateItem (element.RowIndex);
+				try {
+					var element = (TextElement)sender;
+					win.DataProvider.ActivateItem (element.RowIndex);
+				} catch (Exception ex) {
+					LoggingService.LogInternalError ("Offset seems to be out of sync with the snapshot.", ex);
+				}
 			}
 
 			internal void CalcRowHeight ()
@@ -601,7 +613,7 @@ namespace MonoDevelop.Components
 					layout.Dispose ();
 				layout = new Pango.Layout (PangoContext);
 				layout.Wrap = Pango.WrapMode.Char;
-				layout.FontDescription = FontService.SansFont.CopyModified (Ide.Gui.Styles.FontScale11);
+				layout.FontDescription = IdeServices.FontService.SansFont.CopyModified (Ide.Gui.Styles.FontScale11);
 				CalcRowHeight ();
 				CalcVisibleRows ();
 			}

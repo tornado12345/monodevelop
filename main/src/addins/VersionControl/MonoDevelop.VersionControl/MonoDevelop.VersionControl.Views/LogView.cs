@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using Gtk;
 using MonoDevelop.Core;
@@ -6,92 +6,78 @@ using MonoDevelop.Components;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using MonoDevelop.Ide.Gui.Documents;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.VersionControl.Views
 {
 	public interface ILogView
 	{
 	}
-	
+
 	class LogView : BaseView, ILogView
 	{
 		LogWidget widget;
 		VersionInfo vinfo;
-		
+		VersionControlDocumentInfo info;
+
 		public LogWidget LogWidget {
 			get {
+				if (widget == null)
+					CreateControlFromInfo ();
 				return widget;
 			}
 		}
 
-		public static bool CanShow (VersionControlItemList items, Revision since)
+		public static async Task<bool> CanShow (VersionControlItemList items, Revision since)
 		{
-			return items.All (i => i.VersionInfo.CanLog);
+			foreach (var item in items) {
+				var info = await item.GetVersionInfoAsync ();
+				if (!info.CanLog)
+					return false;
+			}
+			return true;
 		}
-		
-		VersionControlDocumentInfo info;
+
 		public LogView (VersionControlDocumentInfo info) : base (GettextCatalog.GetString ("Log"), GettextCatalog.GetString ("Shows the source control log for the current file"))
 		{
 			this.info = info;
 		}
-		
-		void CreateControlFromInfo ()
+
+		async void CreateControlFromInfo ()
 		{
 			var lw = new LogWidget (info);
-			
-			widget = lw;
-			info.Updated += OnInfoUpdated;
-			lw.History = this.info.History;
-			vinfo   = this.info.Item.VersionInfo;
-		
-			if (WorkbenchWindow != null)
-				widget.SetToolbar (WorkbenchWindow.GetToolbar (this));
+
+			try {
+				widget = lw;
+				info.Updated += OnInfoUpdated;
+				lw.History = this.info.History;
+				vinfo = await this.info.Item.GetVersionInfoAsync ();
+				Init ();
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+			}
 		}
 
-		void OnInfoUpdated (object sender, EventArgs e)
-		{
-			widget.History = this.info.History;
-			vinfo   = this.info.Item.VersionInfo;
-		}
-
-		[Obsolete]
-		public LogView (string filepath, bool isDirectory, Revision [] history, Repository vc) 
-			: base (Path.GetFileName (filepath) + " Log")
+		async void OnInfoUpdated (object sender, EventArgs e)
 		{
 			try {
-				this.vinfo = vc.GetVersionInfo (filepath, VersionInfoQueryFlags.IgnoreCache);
-			}
-			catch (Exception ex) {
-				MessageService.ShowError (GettextCatalog.GetString ("Version control command failed."), ex);
-			}
-			
-			// Widget setup
-			VersionControlDocumentInfo info  =new VersionControlDocumentInfo (null, null, vc);
-			info.History = history;
-			info.Item.VersionInfo = vinfo;
-			var lw = new LogWidget (info);
-			
-			widget = lw;
-			lw.History = history;
-		}
-
-		
-		public override Control Control { 
-			get {
-				if (widget == null)
-					CreateControlFromInfo ();
-				return widget; 
+				widget.History = this.info.History;
+				vinfo = await info.Item.GetVersionInfoAsync ();
+			} catch (Exception ex) {
+				LoggingService.LogInternalError (ex);
 			}
 		}
 
-		protected override void OnWorkbenchWindowChanged ()
+		protected override Task<Control> OnGetViewControlAsync (CancellationToken token, DocumentViewContent view)
 		{
-			base.OnWorkbenchWindowChanged ();
-			if (WorkbenchWindow != null && widget != null)
-				widget.SetToolbar (WorkbenchWindow.GetToolbar (this));
+			LogWidget.SetToolbar (view.GetToolbar ());
+			return Task.FromResult<Control> (LogWidget);
 		}
-		
-		public override void Dispose ()
+
+		protected override void OnDispose ()
 		{
 			if (widget != null) {
 				widget.Destroy ();
@@ -101,20 +87,15 @@ namespace MonoDevelop.VersionControl.Views
 				info.Updated -= OnInfoUpdated;
 				info = null;
 			}
-			base.Dispose ();
+			base.OnDispose ();
 		}
 
 		public void Init ()
 		{
 			if (info != null && !info.Started) {
-				widget.ShowLoading ();
+				LogWidget.ShowLoading ();
 				info.Start ();
 			}
-		}
-
-		protected override void OnSelected ()
-		{
-			Init ();
 		}
 
 		[CommandHandler (MonoDevelop.Ide.Commands.EditCommands.Copy)]

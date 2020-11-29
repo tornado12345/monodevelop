@@ -3,6 +3,9 @@ using MonoDevelop.Core;
 using MonoDevelop.VersionControl.Dialogs;
 using MonoDevelop.Ide;
 using System.Linq;
+using System.Threading.Tasks;
+using System.Threading;
+using System;
 
 namespace MonoDevelop.VersionControl
 {
@@ -20,7 +23,7 @@ namespace MonoDevelop.VersionControl
 			try {
 				if (MessageService.RunCustomDialog (del) == (int) Gtk.ResponseType.Ok && del.Repository != null) {
 					CheckoutWorker w = new CheckoutWorker (del.Repository, del.TargetPath);
-					w.Start ();
+					w.StartAsync ();
 				}
 			} finally {
 				del.Destroy ();
@@ -45,27 +48,35 @@ namespace MonoDevelop.VersionControl
 				return GettextCatalog.GetString ("Checking out {0}...", path);
 			}
 
+			Ide.ProgressMonitoring.MessageDialogProgressMonitor messageDialogProgressMonitor;
+
 			protected override ProgressMonitor CreateProgressMonitor ()
 			{
 				return new MonoDevelop.Core.ProgressMonitoring.AggregatedProgressMonitor (
 					base.CreateProgressMonitor (),
-					new MonoDevelop.Ide.ProgressMonitoring.MessageDialogProgressMonitor (true, true, true, true)
+					messageDialogProgressMonitor = new MonoDevelop.Ide.ProgressMonitoring.MessageDialogProgressMonitor (true, true, true, true)
 				);
+			}
+
+			protected override void ReportError (string primaryText, string message, Exception exception)
+			{
+				MessageService.ShowError (messageDialogProgressMonitor.ProgressDialog, primaryText, message, exception);
 			}
 
 			AlertButton AskForCheckoutPath ()
 			{
 				return MessageService.AskQuestion (
+					messageDialogProgressMonitor.ProgressDialog,
 					GettextCatalog.GetString ("Checkout path is not empty. Do you want to delete its contents?"),
 					path,
 					AlertButton.Cancel,
 					AlertButton.Ok);
 			}
 
-			protected override void Run ()
+			protected override async Task RunAsync ()
 			{
 				if (System.IO.Directory.Exists (path) && System.IO.Directory.EnumerateFileSystemEntries (path).Any ()) {
-					var result = Runtime.RunInMainThread (() => AskForCheckoutPath ()).Result;
+					var result = await Runtime.RunInMainThread (() => AskForCheckoutPath ());
 					if (result == AlertButton.Cancel)
 						return;
 
@@ -73,7 +84,7 @@ namespace MonoDevelop.VersionControl
 					FileService.CreateDirectory (path);
 				}
 
-				vc.Checkout (path, null, true, Monitor);
+				await vc.CheckoutAsync (path, null, true, Monitor);
 
 				if (Monitor.CancellationToken.IsCancellationRequested) {
 					Monitor.ReportSuccess (GettextCatalog.GetString ("Checkout operation cancelled"));
@@ -87,7 +98,7 @@ namespace MonoDevelop.VersionControl
 
 				foreach (string str in System.IO.Directory.EnumerateFiles (path, "*", System.IO.SearchOption.AllDirectories)) {
 					if (MonoDevelop.Projects.Services.ProjectService.IsWorkspaceItemFile (str)) {
-						Runtime.RunInMainThread (delegate {
+						await Runtime.RunInMainThread (delegate {
 							IdeApp.Workspace.OpenWorkspaceItem (str);
 						});
 						break;

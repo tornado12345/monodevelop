@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using YamlDotNet.RepresentationModel;
@@ -11,6 +11,7 @@ using System.Globalization;
 
 namespace MonoDevelop.Ide.Editor.Highlighting
 {
+	[Obsolete ("Old editor")]
 	static class Sublime3Format
 	{
 		public static SyntaxHighlightingDefinition ReadHighlighting (TextReader input)
@@ -339,7 +340,7 @@ namespace MonoDevelop.Ide.Editor.Highlighting
 							break;
 						case 'S': // A non-whitespace character: /[^ \t\r\n\f]/
 							for (int i = 0; i < table.Length; i++) {
-								if (" \\t\\r\\n\\f".Contains ((char)i))
+								if (" \\t\\r\\n\\f".IndexOf ((char)i) != -1)
 									continue;
 								table [i] = negativeGroup ? -1 : 1;
 							}
@@ -431,7 +432,7 @@ namespace MonoDevelop.Ide.Editor.Highlighting
 			{
 				for (int i = 0; i < table.Length; i++) {
 					var cat = char.GetUnicodeCategory ((char)i);
-					if (categories.Contains (cat)) {
+					if (categories.IndexOf (cat) != -1) {
 						table [i] = negativeGroup ? -1 : 1;
 					}
 				}
@@ -561,7 +562,7 @@ namespace MonoDevelop.Ide.Editor.Highlighting
 
 			void AddChar (StringBuilder result, char ch)
 			{
-				if ("[]\\".Contains (ch)) {
+				if ("[]\\".IndexOf (ch) != -1) {
 					result.Append ('\\');
 					result.Append (ch);
 					return;
